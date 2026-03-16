@@ -37,3 +37,11 @@ pub fn write(creds: &Credentials) -> Result<()> {
     fs::rename(&tmp_path, &path)?;
     Ok(())
 }
+
+pub fn console_base_url() -> String {
+    std::env::var("EDGEE_CONSOLE_URL").unwrap_or_else(|_| "https://www.edgee.ai".to_string())
+}
+
+pub fn api_base_url() -> String {
+    std::env::var("EDGEE_API_URL").unwrap_or_else(|_| "https://api.edgee.ai".to_string())
+}

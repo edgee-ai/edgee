@@ -29,7 +29,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let mode = creds.claude_connection.as_deref().unwrap_or("plan");
 
     let mut cmd = std::process::Command::new("claude");
-    cmd.env("ANTHROPIC_BASE_URL", "https://api.edgee.ai");
+    cmd.env("ANTHROPIC_BASE_URL", crate::config::api_base_url());
 
     match mode {
         "api" => {

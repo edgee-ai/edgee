@@ -10,7 +10,8 @@ pub async fn run(_opts: Options) -> Result<()> {
 
     let callback = format!("http://127.0.0.1:{port}");
     let url = format!(
-        "https://edgee.ai/authorize/apikey?callback={}&name=Edgee+CLI&compression=claude",
+        "{}/authorize/apikey?callback={}&name=Edgee+CLI&compression=claude",
+        crate::config::console_base_url(),
         percent_encode(&callback)
     );
 
@@ -64,11 +65,12 @@ fn percent_encode(s: &str) -> String {
 fn extract_api_key(request: &str) -> Option<String> {
     let first_line = request.lines().next()?;
     let path = first_line.split_whitespace().nth(1)?;
-    let query = path.splitn(2, '?').nth(1)?;
+    let (_, query) = path.split_once('?')?;
     for param in query.split('&') {
-        let mut kv = param.splitn(2, '=');
-        if kv.next()? == "api_key" {
-            return Some(kv.next()?.to_string());
+        if let Some((key, value)) = param.split_once('=') {
+            if key == "api_key" {
+                return Some(value.to_string());
+            }
         }
     }
     None
