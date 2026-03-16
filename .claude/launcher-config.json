@@ -1,0 +1,7 @@
+{
+  "account": "work",
+  "mode": "gateway",
+  "gateway": "prod",
+  "model": "default",
+  "always": "false"
+}
