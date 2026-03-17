@@ -6,40 +6,46 @@ GITHUB_REPO='edgee'
 
 _normal=$(printf '\033[0m')
 _bold=$(printf '\033[0;1m')
+_dim=$(printf '\033[2m')
 _underline=$(printf '\033[0;4m')
 _purple=$(printf '\033[0;35m')
 _blue=$(printf '\033[1;34m')
+_cyan=$(printf '\033[0;36m')
 _green=$(printf '\033[0;32m')
+_yellow=$(printf '\033[0;33m')
 _red=$(printf '\033[1;31m')
 _gray=$(printf '\033[0;37m')
 
-_divider='--------------------------------------------------------------------------------'
-_prompt='>>>'
-_indent='    '
+_tick="${_green}✓${_normal}"
+_cross="${_red}✗${_normal}"
+_arrow="${_cyan}→${_normal}"
 
 _header() {
     cat 1>&2 <<EOF
-                                    ${_bold}${_blue}E D G E E${_normal}
-                                    ${_purple}Installer${_normal}
 
-$_divider
-${_bold}Website${_normal}:        https://www.edgee.ai
-${_bold}Documentation${_normal}:  https://www.edgee.ai/docs/introduction
-$_divider
+  ${_bold}     ◢████◤${_normal}
+  ${_bold} ${_normal}
+  ${_bold}◢██████◤${_normal}
+  ${_bold} ${_normal}
+  ${_bold}◢████████◤${_normal}
+  ${_bold} ${_normal}
+
+  ${_dim}Token compression gateway for Claude Code, Codex & Opencode${_normal}
+  ${_dim}https://www.edgee.ai${_normal}
 
 EOF
 }
 
 _usage() {
     cat 1>&2 <<EOF
-edgee-installer
+${_bold}edgee-installer${_normal}
 The installer for Edgee (https://www.edgee.ai)
 
 ${_bold}USAGE${_normal}:
     edgee-installer [-h/--help]
 
 ${_bold}FLAGS${_normal}:
-    -h, --help      Print help informations
+    -h, --help      Print help information
 
 ${_bold}ENVIRONMENT${_normal}:
     INSTALL_DIR     Override the install directory (default: /usr/local/bin or ~/.local/bin)
@@ -47,8 +53,16 @@ EOF
 }
 
 err() {
-    echo "$_bold$_red$_prompt Error: $*$_normal" >&2
+    printf "\n  %s ${_bold}Error:${_normal} %s\n\n" "$_cross" "$*" >&2
     exit 1
+}
+
+step() {
+    printf "  %s %s\n" "$_arrow" "$*" >&2
+}
+
+ok() {
+    printf "  %s %s\n" "$_tick" "$*" >&2
 }
 
 has_command() {
@@ -57,7 +71,7 @@ has_command() {
 
 check_command() {
     if ! has_command "$1"; then
-        err "This install script requires \`$1\` and was not found."
+        err "Required command \`$1\` was not found."
     fi
 }
 
@@ -126,41 +140,74 @@ get_install_dir() {
 }
 
 download() {
-    echo "$_indent Downloading: $1" >&2
     curl --proto '=https' --tlsv1.2 --silent --show-error --fail --location "$1" --output "$2"
 }
 
+_tmp_dir=""
+
 download_and_install() {
-    local _arch _install_dir _tmp_dir _edgee_version _expected _actual
+    local _arch _install_dir _edgee_version _expected _actual _os_label _cpu_label
     _arch="$(get_arch)"
     _install_dir="$(get_install_dir)"
     _tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$_tmp_dir"' EXIT
 
-    local _base_url="https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/latest/download"
-    download "$_base_url/edgee.$_arch"        "$_tmp_dir/edgee"
-    download "$_base_url/edgee.$_arch.sha256" "$_tmp_dir/edgee.sha256"
+    # Human-readable platform label
+    case "$_arch" in
+        *apple-darwin*)  _os_label="macOS" ;;
+        *linux*)         _os_label="Linux" ;;
+        *)               _os_label="$_arch" ;;
+    esac
+    case "$_arch" in
+        aarch64*) _cpu_label="arm64" ;;
+        x86_64*)  _cpu_label="x86_64" ;;
+        *)        _cpu_label="$_arch" ;;
+    esac
 
-    echo "$_indent Verifying checksum..." >&2
+    printf "\n  ${_bold}Platform${_normal}  %s (%s)\n" "$_os_label" "$_cpu_label" >&2
+    printf "  ${_bold}Directory${_normal} %s\n\n" "$_install_dir" >&2
+
+    local _base_url="https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/latest/download"
+
+    step "Downloading binary..."
+    download "$_base_url/edgee.$_arch" "$_tmp_dir/edgee"
+    ok "Binary downloaded"
+
+    step "Downloading checksum..."
+    download "$_base_url/edgee.$_arch.sha256" "$_tmp_dir/edgee.sha256"
+    ok "Checksum downloaded"
+
+    step "Verifying integrity..."
     _expected="$(cat "$_tmp_dir/edgee.sha256")"
     _actual="$(_checksum "$_tmp_dir/edgee")"
     if [ "$_expected" != "$_actual" ]; then
         err "Checksum mismatch!\n  Expected: $_expected\n  Got:      $_actual"
     fi
+    ok "Checksum verified"
 
+    step "Installing to ${_bold}$_install_dir${_normal}..."
     chmod +x "$_tmp_dir/edgee"
     mkdir -p "$_install_dir"
     mv "$_tmp_dir/edgee" "$_install_dir/edgee"
 
     _edgee_version=$("$_install_dir/edgee" --version | cut -d' ' -f2)
+    ok "Installed ${_bold}edgee v$_edgee_version${_normal}"
 
-    cat <<EOF
+    _box_width=47
+    _success_text="  Edgee v${_edgee_version} installed successfully!"
+    _success_pad=$((_box_width - ${#_success_text}))
+    printf '  ╔═══════════════════════════════════════════════╗\n' 1>&2
+    printf '  ║  %s%*s║\n' "${_bold}${_green}Edgee v${_edgee_version} installed successfully!${_normal}" "$_success_pad" "" 1>&2
+    printf '  ╚═══════════════════════════════════════════════╝\n' 1>&2
 
-${_bold}${_blue}Edgee${_normal} ${_green}$_edgee_version${_normal} installed to ${_bold}$_install_dir/edgee${_normal}.
+    cat 1>&2 <<EOF
 
-${_underline}Run it:${_normal}
+  ${_bold}Get started:${_normal}
 
-${_gray}\$ edgee --help${_normal}
+    ${_cyan}edgee auth login${_normal}   ${_dim}# authenticate with your Edgee account${_normal}
+    ${_cyan}edgee launch claude${_normal} ${_dim}# launch Claude Code with token compression${_normal}
+    ${_cyan}edgee --help${_normal}        ${_dim}# show all available commands${_normal}
+
 EOF
 
     # Warn if the install directory is not in PATH
@@ -168,10 +215,10 @@ EOF
         *":$_install_dir:"*) ;;
         *)
             cat 1>&2 <<EOF
-${_bold}${_red}Warning:${_normal} $_install_dir is not in your PATH.
-Add this to your shell profile:
+  ${_bold}${_yellow}⚠ Warning:${_normal} $_install_dir is not in your PATH.
+  Add this line to your shell profile (${_dim}~/.zshrc${_normal}, ${_dim}~/.bashrc${_normal}, etc.):
 
-${_gray}  export PATH="\$PATH:$_install_dir"${_normal}
+    ${_gray}export PATH="\$PATH:$_install_dir"${_normal}
 
 EOF
             ;;
@@ -187,7 +234,6 @@ main() {
     esac
 
     _header
-
     check_dependencies
     download_and_install
 }
