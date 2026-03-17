@@ -57,3 +57,51 @@ jobs:
         with:
           file: edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}
           tags: true
+
+  update-homebrew-tap:
+    needs: build-release-binaries
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: edgee-ai/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Download release binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for platform in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
+            gh release download "${GITHUB_REF_NAME}" \
+              --repo "${{ github.repository }}" \
+              --pattern "edgee.${platform}" \
+              --output "edgee.${platform}"
+          done
+
+      - name: Update formula
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA_AARCH64_DARWIN=$(sha256sum edgee.aarch64-apple-darwin | cut -d' ' -f1)
+          SHA_X86_64_DARWIN=$(sha256sum edgee.x86_64-apple-darwin | cut -d' ' -f1)
+          SHA_AARCH64_LINUX=$(sha256sum edgee.aarch64-unknown-linux-gnu | cut -d' ' -f1)
+          SHA_X86_64_LINUX=$(sha256sum edgee.x86_64-unknown-linux-gnu | cut -d' ' -f1)
+
+          FORMULA="homebrew-tap/Formula/edgee.rb"
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
+          sed -i "s/\"aarch64-apple-darwin\" => \".*\"/\"aarch64-apple-darwin\" => \"${SHA_AARCH64_DARWIN}\"/" "$FORMULA"
+          sed -i "s/\"x86_64-apple-darwin\" => \".*\"/\"x86_64-apple-darwin\" => \"${SHA_X86_64_DARWIN}\"/" "$FORMULA"
+          sed -i "s/\"aarch64-unknown-linux-gnu\" => \".*\"/\"aarch64-unknown-linux-gnu\" => \"${SHA_AARCH64_LINUX}\"/" "$FORMULA"
+          sed -i "s/\"x86_64-unknown-linux-gnu\" => \".*\"/\"x86_64-unknown-linux-gnu\" => \"${SHA_X86_64_LINUX}\"/" "$FORMULA"
+
+      - name: Commit and push
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/edgee.rb
+          git commit -m "Update edgee formula to v${VERSION}"
+          git push
