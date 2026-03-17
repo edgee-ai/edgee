@@ -52,6 +52,7 @@ pub async fn run(opts: Options) -> Result<()> {
         }
     }
 
+    cmd.args(["--settings", r#"{"statusLine":{"type":"command","command":"printf 'Using \u001b[1;38;2;139;92;246mEdgee\u001b[0m to compress your tools'"}}"#]);
     cmd.args(&opts.args);
 
     let status = cmd.status()?;
@@ -88,16 +89,8 @@ fn prompt_connection_mode() -> Result<String> {
     println!();
 
     let items = [
-        format!(
-            "{}  {}",
-            style("Claude Pro/Max").green().bold(),
-            style("· uses ANTHROPIC_CUSTOM_HEADERS").dim()
-        ),
-        format!(
-            "{}      {}",
-            style("API Billing").green().bold(),
-            style("· uses ANTHROPIC_AUTH_TOKEN").dim()
-        ),
+        style("Claude Pro/Max").green().bold().to_string(),
+        style("API Billing").green().bold().to_string(),
     ];
 
     let selection = Select::with_theme(&ColorfulTheme::default())
