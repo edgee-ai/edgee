@@ -10,7 +10,6 @@
 </p>
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Edgee](https://img.shields.io/badge/edgee-blueviolet.svg)](https://www.edgee.ai)
 [![Edgee](https://img.shields.io/badge/discord-edgee-blueviolet.svg?logo=discord)](https://www.edgee.ai/discord)
 [![Docs](https://img.shields.io/badge/docs-published-blue)](https://www.edgee.ai/docs/introduction)
 [![Twitter](https://img.shields.io/twitter/follow/edgee_ai)](https://twitter.com/edgee_ai)
@@ -18,9 +17,9 @@
 
 ---
 
-AI coding tools are incredible. They're also expensive. Every prompt you send to Claude Code or Codex carries context, your files, your history, your instructions, and you pay for every token, every time.
+AI coding assistants are incredible. They're also expensive. Every prompt you send to Claude Code or Codex carries context, your files, your history, your instructions, and your token consumption is crazy.
 
-Edgee sits between your tools and the LLM APIs and compresses that context before it leaves your machine. Same output. Fewer tokens. Lower bill.
+Edgee sits between your coding agent and the LLM APIs and compresses that context before it reaches the model. Same output. Fewer tokens. Lower bill.
 
 ```
 Claude Code ──► edgee ──► Anthropic API
@@ -42,14 +41,8 @@ curl -fsSL https://install.edgee.ai | bash
 **Homebrew**
 
 ```bash
-brew tap edgee-ai/edgee
+brew tap edgee-ai/tap
 brew install edgee
-```
-
-Verify your install:
-
-```bash
-edgee --version
 ```
 
 ---
@@ -62,7 +55,7 @@ edgee --version
 edgee launch claude
 ```
 
-That's it. Edgee configures itself as a proxy and Claude Code routes through it automatically.
+That's it. Edgee configures itself as a gateway and Claude Code routes through it automatically.
 
 ### With Codex
 
@@ -78,25 +71,6 @@ edgee launch codex
 
 **Usage tracking** — See how many tokens you're sending, how many you're saving, and what it costs — in real time.
 
-```bash
-edgee stats
-```
-
-Or simply goes to your Edgee organization to see everything.
-
-
----
-
-## Commands
-
-| Command | Description |
-|---|---|
-| `edgee start` | Start the local gateway |
-| `edgee setup <tool>` | Auto-configure a supported tool |
-| `edgee stats` | Show token usage and savings |
-| `edgee config` | Open config in your editor |
-| `edgee stop` | Stop the gateway |
-| `edgee --help` | Full command reference |
 
 ---
 
