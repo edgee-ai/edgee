@@ -1,18 +1,8 @@
-#!/bin/bash
-set -u
-
-# A shell script intended to use for installing Edgee for quick usage
-# It does platform detection, fetch latest release informations and
-# download the corresponding executable binary if available.
-#
-# Mostly inspired by the Quickwit installer script
-
-# Package metadata
+#!/bin/sh
+set -eu
 
 GITHUB_OWNER='edgee-ai'
 GITHUB_REPO='edgee'
-
-# Helper utilities
 
 _normal=$(printf '\033[0m')
 _bold=$(printf '\033[0;1m')
@@ -50,6 +40,9 @@ ${_bold}USAGE${_normal}:
 
 ${_bold}FLAGS${_normal}:
     -h, --help      Print help informations
+
+${_bold}ENVIRONMENT${_normal}:
+    INSTALL_DIR     Override the install directory (default: /usr/local/bin or ~/.local/bin)
 EOF
 }
 
@@ -59,7 +52,7 @@ err() {
 }
 
 has_command() {
-    command -v "$1" &>/dev/null
+    command -v "$1" >/dev/null 2>&1
 }
 
 check_command() {
@@ -74,8 +67,6 @@ check_commands() {
     done
 }
 
-# Main utilities
-
 check_dependencies() {
     check_commands curl chmod
 }
@@ -89,11 +80,9 @@ get_arch() {
         x86_64 | x86-64 | x64 | amd64)
             _cputype=x86_64
             ;;
-
         aarch64 | arm64)
             _cputype=aarch64
             ;;
-
         *)
             err "Unrecognized CPU type: $_cputype"
             ;;
@@ -101,13 +90,12 @@ get_arch() {
 
     case "$_ostype" in
         Linux)
+            # musl build: statically linked, no glibc version dependency
             _ostype="unknown-linux-musl"
             ;;
-
         Darwin)
             _ostype="apple-darwin"
             ;;
-
         *)
             err "Unrecognized OS type: $_ostype"
             ;;
@@ -116,31 +104,78 @@ get_arch() {
     echo "$_cputype-$_ostype"
 }
 
+_checksum() {
+    # sha256sum on Linux, shasum on macOS
+    if has_command sha256sum; then
+        sha256sum "$1" | cut -d' ' -f1
+    elif has_command shasum; then
+        shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        err "sha256sum or shasum not found — cannot verify download integrity"
+    fi
+}
+
+get_install_dir() {
+    if [ -n "${INSTALL_DIR:-}" ]; then
+        echo "$INSTALL_DIR"
+    elif [ -w "/usr/local/bin" ]; then
+        echo "/usr/local/bin"
+    else
+        echo "$HOME/.local/bin"
+    fi
+}
+
 download() {
-    echo "Downloading: $1"
+    echo "$_indent Downloading: $1" >&2
     curl --proto '=https' --tlsv1.2 --silent --show-error --fail --location "$1" --output "$2"
 }
 
-download_latest() {
-    local _arch _edgee_version
+download_and_install() {
+    local _arch _install_dir _tmp_dir _edgee_version _expected _actual
     _arch="$(get_arch)"
+    _install_dir="$(get_install_dir)"
+    _tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$_tmp_dir"' EXIT
 
-    download "https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/latest/download/edgee.$_arch" edgee
-    chmod +x edgee
-    _edgee_version=$(./edgee --version | cut -d' ' -f2)
+    local _base_url="https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/latest/download"
+    download "$_base_url/edgee.$_arch"        "$_tmp_dir/edgee"
+    download "$_base_url/edgee.$_arch.sha256" "$_tmp_dir/edgee.sha256"
+
+    echo "$_indent Verifying checksum..." >&2
+    _expected="$(cat "$_tmp_dir/edgee.sha256")"
+    _actual="$(_checksum "$_tmp_dir/edgee")"
+    if [ "$_expected" != "$_actual" ]; then
+        err "Checksum mismatch!\n  Expected: $_expected\n  Got:      $_actual"
+    fi
+
+    chmod +x "$_tmp_dir/edgee"
+    mkdir -p "$_install_dir"
+    mv "$_tmp_dir/edgee" "$_install_dir/edgee"
+
+    _edgee_version=$("$_install_dir/edgee" --version | cut -d' ' -f2)
 
     cat <<EOF
 
-${_bold}${_blue}Edgee${_normal} ${_green}$_edgee_version${_normal} binary successfully downloaded as 'edgee' file.
+${_bold}${_blue}Edgee${_normal} ${_green}$_edgee_version${_normal} installed to ${_bold}$_install_dir/edgee${_normal}.
 
 ${_underline}Run it:${_normal}
 
-${_gray}$ ./edgee${_normal}
-
-${_underline}Usage:${_normal}
-
-${_gray}$ ./edgee --help${_normal}
+${_gray}\$ edgee --help${_normal}
 EOF
+
+    # Warn if the install directory is not in PATH
+    case ":${PATH}:" in
+        *":$_install_dir:"*) ;;
+        *)
+            cat 1>&2 <<EOF
+${_bold}${_red}Warning:${_normal} $_install_dir is not in your PATH.
+Add this to your shell profile:
+
+${_gray}  export PATH="\$PATH:$_install_dir"${_normal}
+
+EOF
+            ;;
+    esac
 }
 
 main() {
@@ -154,8 +189,7 @@ main() {
     _header
 
     check_dependencies
-    download_latest
+    download_and_install
 }
 
-# Entrypoint
-main "$@" || exit 1
+main "$@"

@@ -49,13 +49,23 @@ jobs:
           path: target/${{ matrix.platform.target }}/release/edgee${{ matrix.platform.bin_suffix || '' }}
           retention-days: 3
 
-      - run: cp target/${{ matrix.platform.target }}/release/edgee${{ matrix.platform.bin_suffix || '' }} edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}
+      - name: Prepare release files
+        shell: bash
+        run: |
+          BIN="edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}"
+          cp "target/${{ matrix.platform.target }}/release/edgee${{ matrix.platform.bin_suffix || '' }}" "$BIN"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$BIN" | awk '{print $1}' > "$BIN.sha256"
+          else
+            shasum -a 256 "$BIN" | awk '{print $1}' > "$BIN.sha256"
+          fi
+
       - name: Publish artifacts and release
         uses: xresloader/upload-to-github-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          file: edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}
+          file: "edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }};edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}.sha256"
           tags: true
 
   update-homebrew-tap:
@@ -70,24 +80,24 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
-      - name: Download release binaries
+      - name: Download checksums
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for platform in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
             gh release download "${GITHUB_REF_NAME}" \
               --repo "${{ github.repository }}" \
-              --pattern "edgee.${platform}" \
-              --output "edgee.${platform}"
+              --pattern "edgee.${platform}.sha256" \
+              --output "edgee.${platform}.sha256"
           done
 
       - name: Update formula
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          SHA_AARCH64_DARWIN=$(sha256sum edgee.aarch64-apple-darwin | cut -d' ' -f1)
-          SHA_X86_64_DARWIN=$(sha256sum edgee.x86_64-apple-darwin | cut -d' ' -f1)
-          SHA_AARCH64_LINUX=$(sha256sum edgee.aarch64-unknown-linux-gnu | cut -d' ' -f1)
-          SHA_X86_64_LINUX=$(sha256sum edgee.x86_64-unknown-linux-gnu | cut -d' ' -f1)
+          SHA_AARCH64_DARWIN=$(cat edgee.aarch64-apple-darwin.sha256)
+          SHA_X86_64_DARWIN=$(cat edgee.x86_64-apple-darwin.sha256)
+          SHA_AARCH64_LINUX=$(cat edgee.aarch64-unknown-linux-gnu.sha256)
+          SHA_X86_64_LINUX=$(cat edgee.x86_64-unknown-linux-gnu.sha256)
 
           FORMULA="homebrew-tap/Formula/edgee.rb"
           sed -i "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
