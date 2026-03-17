@@ -21,4 +21,4 @@ open = "5"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "io-util"] }
-self_update = { version = "0.43.1", optional = true }
+self_update = { version = "0.43.1", optional = true, default-features = false, features = ["reqwest", "rustls"] }
