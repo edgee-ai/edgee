@@ -10,12 +10,17 @@
 ///
 /// Expands to a `Command` enum and a `run()` async function.
 macro_rules! setup_commands {
-    ($($(#[$attr:meta])* $variant:ident($module:ident),)*) => {
-        $(pub mod $module;)*
+    ($(
+        $([cfg($($cfg_tt:tt)*)])?
+        $(#[$attr:meta])*
+        $variant:ident($module:ident),
+    )*) => {
+        $($(#[cfg($($cfg_tt)*)])? pub mod $module;)*
 
         #[derive(Debug, clap::Subcommand)]
         pub enum Command {
             $(
+                $(#[cfg($($cfg_tt)*)])?
                 $(#[$attr])*
                 $variant($module::Options),
             )*
@@ -23,7 +28,7 @@ macro_rules! setup_commands {
 
         pub async fn run(command: Command) -> anyhow::Result<()> {
             match command {
-                $(Command::$variant(opts) => $module::run(opts).await,)*
+                $($(#[cfg($($cfg_tt)*)])? Command::$variant(opts) => $module::run(opts).await,)*
             }
         }
     };

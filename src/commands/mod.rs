@@ -8,4 +8,7 @@ setup_commands! {
     Auth(auth),
     /// Launch an AI tool routed through Edgee
     Launch(launch),
+    [cfg(feature = "self-update")]
+    /// Update Edgee
+    SelfUpdate(update),
 }

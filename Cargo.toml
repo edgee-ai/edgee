@@ -3,6 +3,10 @@ name = "edgee-cli"
 version = "0.1.2"
 edition = "2021"
 
+[features]
+default = ["self-update"]
+self-update = ["dep:self_update"]
+
 [[bin]]
 name = "edgee"
 path = "src/main.rs"
@@ -10,9 +14,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
+colored = "2"
 console = "0.15"
 dialoguer = "0.11"
 open = "5"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "io-util"] }
+self_update = { version = "0.43.1", optional = true }
