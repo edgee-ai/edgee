@@ -5,7 +5,7 @@ mod commands;
 mod config;
 
 #[derive(Debug, Parser)]
-#[command(name = "edgee", about = "Edgee CLI")]
+#[command(name = "edgee", about = "Edgee CLI", version)]
 struct Options {
     #[command(subcommand)]
     command: commands::Command,
