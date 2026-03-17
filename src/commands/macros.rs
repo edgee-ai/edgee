@@ -49,4 +49,3 @@ macro_rules! setup_command {
         }
     };
 }
-
