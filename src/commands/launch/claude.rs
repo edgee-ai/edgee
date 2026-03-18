@@ -54,7 +54,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let status = cmd.status()?;
 
     {
-        let logs_url = format!("{}/me/session/{}", crate::config::console_base_url(), session_id);
+        let logs_url = format!("{}/~/me/session/{}", crate::config::console_base_url(), session_id);
         println!();
         println!(
             "  {} {}",
