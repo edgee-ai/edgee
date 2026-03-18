@@ -32,7 +32,16 @@ pub async fn perform_login() -> Result<String> {
     );
     println!(
         "  {}",
-        style("Once you approve, your API key will be automatically sent back to the CLI.").dim()
+        style("Once you sign in or create an account, you'll get access to usage analytics,").dim()
+    );
+    println!(
+        "  {}",
+        style("token consumption insights, and session history for your Claude Code usage.").dim()
+    );
+    println!();
+    println!(
+        "  {}",
+        style("Your Edgee API key will be automatically created and saved in the CLI.").dim()
     );
     println!();
 
