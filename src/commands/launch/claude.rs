@@ -28,8 +28,6 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 3: launch claude with the correct env vars
     let mode = creds.claude_connection.as_deref().unwrap_or("plan");
     let session_id = uuid::Uuid::new_v4().to_string();
-    let mut has_session = false;
-
     let mut cmd = std::process::Command::new("claude");
     cmd.env("ANTHROPIC_BASE_URL", crate::config::api_base_url());
 
@@ -41,14 +39,12 @@ pub async fn run(opts: Options) -> Result<()> {
                 "ANTHROPIC_CUSTOM_HEADERS",
                 format!("x-edgee-session-id: {}", session_id),
             );
-            has_session = true;
         }
         _ => {
             cmd.env(
                 "ANTHROPIC_CUSTOM_HEADERS",
                 format!("x-edgee-api-key: {}\nx-edgee-session-id: {}", creds.api_key, session_id),
             );
-            has_session = true;
         }
     }
 
@@ -57,7 +53,7 @@ pub async fn run(opts: Options) -> Result<()> {
 
     let status = cmd.status()?;
 
-    if has_session {
+    {
         let logs_url = format!("{}/~/me/logs?session-id={}", crate::config::console_base_url(), session_id);
         println!();
         println!(
