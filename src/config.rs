@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub struct Credentials {
     pub api_key: String,
     pub claude_connection: Option<String>, // "plan" | "api"
+    pub org_slug: Option<String>,
 }
 
 pub fn credentials_path() -> PathBuf {

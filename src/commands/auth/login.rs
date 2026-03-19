@@ -70,8 +70,9 @@ pub async fn perform_login() -> Result<String> {
     let n = stream.read(&mut buf).await?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
-    let api_key = extract_api_key(&request)
+    let api_key = extract_param(&request, "api_key")
         .ok_or_else(|| anyhow::anyhow!("No api_key found in callback URL"))?;
+    let org_slug = extract_param(&request, "org_slug");
 
     let html = r##"<!DOCTYPE html>
 <html lang="en">
@@ -118,6 +119,7 @@ p{color:hsl(209,15%,60%);font-size:1rem;line-height:1.6;margin-top:4px}
 
     let mut creds = crate::config::read()?;
     creds.api_key = api_key.clone();
+    creds.org_slug = org_slug;
     crate::config::write(&creds)?;
 
     Ok(api_key)
@@ -133,13 +135,13 @@ fn percent_encode(s: &str) -> String {
         .collect()
 }
 
-fn extract_api_key(request: &str) -> Option<String> {
+fn extract_param(request: &str, name: &str) -> Option<String> {
     let first_line = request.lines().next()?;
     let path = first_line.split_whitespace().nth(1)?;
     let (_, query) = path.split_once('?')?;
     for param in query.split('&') {
         if let Some((key, value)) = param.split_once('=') {
-            if key == "api_key" {
+            if key == name {
                 return Some(value.to_string());
             }
         }

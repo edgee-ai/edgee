@@ -1,4 +1,4 @@
-mod claude;
+pub mod claude;
 
 #[derive(Debug, clap::Subcommand)]
 enum Command {
