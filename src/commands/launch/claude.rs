@@ -5,7 +5,7 @@ use dialoguer::{theme::ColorfulTheme, Select};
 #[derive(Debug, clap::Parser)]
 pub struct Options {
     /// Extra args passed through to the claude CLI
-    #[arg(trailing_var_arg = true)]
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
 
