@@ -4,7 +4,7 @@ use dialoguer::{theme::ColorfulTheme, Select};
 
 #[derive(Debug, clap::Parser)]
 pub struct Options {
-    /// Extra args passed through to the claude CLI
+    /// Extra args passed through to the codex CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
@@ -13,51 +13,39 @@ pub async fn run(opts: Options) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we have an api_key
-    if creds.claude.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
-        crate::commands::auth::login::perform_login("claude").await?;
+    if creds.codex.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
+        crate::commands::auth::login::perform_login("codex").await?;
         creds = crate::config::read()?;
     }
 
     // Step 2: ensure we have a connection choice
-    if creds.claude.as_ref().and_then(|c| c.connection.as_deref()).is_none() {
+    if creds.codex.as_ref().and_then(|c| c.connection.as_deref()).is_none() {
         let choice = prompt_connection_mode()?;
-        let provider = creds.claude.get_or_insert_with(Default::default);
+        let provider = creds.codex.get_or_insert_with(Default::default);
         provider.connection = Some(choice);
         crate::config::write(&creds)?;
     }
 
-    // Step 3: launch claude with the correct env vars
-    let claude = creds.claude.as_ref().unwrap();
-    let api_key = &claude.api_key;
-    let mode = claude.connection.as_deref().unwrap_or("plan");
+    // Step 3: launch codex with the correct env vars
+    let codex = creds.codex.as_ref().unwrap();
+    let api_key = &codex.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
-    let mut cmd = std::process::Command::new("claude");
-    cmd.env("ANTHROPIC_BASE_URL", crate::config::api_base_url());
-
-    match mode {
-        "api" => {
-            cmd.env("ANTHROPIC_AUTH_TOKEN", api_key);
-            cmd.env("ANTHROPIC_API_KEY", "");
-            cmd.env(
-                "ANTHROPIC_CUSTOM_HEADERS",
-                format!("x-edgee-session-id: {}", session_id),
-            );
-        }
-        _ => {
-            cmd.env(
-                "ANTHROPIC_CUSTOM_HEADERS",
-                format!("x-edgee-api-key: {}\nx-edgee-session-id: {}", api_key, session_id),
-            );
-        }
-    }
-
-    cmd.args(["--settings", r#"{"statusLine":{"type":"command","command":"printf 'Using \u001b[1;38;2;139;92;246mEdgee\u001b[0m to compress your tools'"}}"#]);
+    let base_url = format!("{}/v1", crate::config::api_base_url());
+    let mut cmd = std::process::Command::new("codex");
+    cmd.env("EDGEE_SESSION_ID", &session_id);
+    cmd.args([
+        "-c", "model_provider=\"edgee-cli\"",
+        "-c", "model_providers.edgee-cli.name=\"EDGEE\"",
+        "-c", &format!("model_providers.edgee-cli.base_url=\"{base_url}\""),
+        "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"}}"),
+        "-c", "model_providers.edgee-cli.wire_api=\"responses\"",
+    ]);
     cmd.args(&opts.args);
 
     let status = cmd.status()?;
 
     {
-        let logs_url = match creds.claude.as_ref().and_then(|c| c.org_slug.as_deref()) {
+        let logs_url = match creds.codex.as_ref().and_then(|c| c.org_slug.as_deref()) {
             Some(slug) if !slug.is_empty() => format!(
                 "{}/~/{}/session/{}",
                 crate::config::console_base_url(),
@@ -74,11 +62,11 @@ pub async fn run(opts: Options) -> Result<()> {
         println!(
             "  {} {}",
             style("Session ended.").bold(),
-            style("Thanks for using Edgee + Claude!").dim()
+            style("Thanks for using Edgee + Codex!").dim()
         );
         println!(
             "  {} {}",
-            style("View your Claude usage & compression stats at").dim(),
+            style("View your Codex usage & compression stats at").dim(),
             style(&logs_url).cyan().underlined()
         );
         println!();
@@ -94,13 +82,13 @@ pub async fn run(opts: Options) -> Result<()> {
 pub fn prompt_connection_mode() -> Result<String> {
     println!();
     println!(
-        "  {} How would you like to connect Claude Code to Edgee?",
+        "  {} How would you like to connect Codex to Edgee?",
         style("?").cyan().bold()
     );
     println!();
 
     let items = [
-        style("Claude Pro/Max").green().bold().to_string(),
+        style("ChatGPT Plus/Pro").green().bold().to_string(),
         style("API Billing").green().bold().to_string(),
     ];
 

@@ -12,17 +12,28 @@ pub async fn run(_opts: Options) -> Result<()> {
     );
     println!();
 
-    // Clear existing credentials (keep org_slug if present — it will be refreshed by login)
-    let empty = crate::config::Credentials::default();
-    crate::config::write(&empty)?;
+    let provider = crate::commands::auth::login::prompt_provider()?;
 
-    // Re-run login to get a new API key (also refreshes org_slug from callback)
-    crate::commands::auth::login::perform_login().await?;
+    // Re-run login to get a new API key for the selected provider
+    crate::commands::auth::login::perform_login(&provider).await?;
 
-    // Re-prompt for connection mode
-    let choice = crate::commands::launch::claude::prompt_connection_mode()?;
+    // Re-prompt for connection mode and write back to the selected provider only
+    let choice = match provider.as_str() {
+        "codex" => crate::commands::launch::codex::prompt_connection_mode()?,
+        _ => crate::commands::launch::claude::prompt_connection_mode()?,
+    };
+
     let mut creds = crate::config::read()?;
-    creds.claude_connection = Some(choice);
+    match provider.as_str() {
+        "codex" => {
+            let p = creds.codex.get_or_insert_with(Default::default);
+            p.connection = Some(choice);
+        }
+        _ => {
+            let p = creds.claude.get_or_insert_with(Default::default);
+            p.connection = Some(choice);
+        }
+    }
     crate::config::write(&creds)?;
 
     println!(
