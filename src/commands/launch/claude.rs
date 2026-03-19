@@ -54,7 +54,19 @@ pub async fn run(opts: Options) -> Result<()> {
     let status = cmd.status()?;
 
     {
-        let logs_url = format!("{}/~/me/session/{}", crate::config::console_base_url(), session_id);
+        let logs_url = match creds.org_slug.as_deref() {
+            Some(slug) if !slug.is_empty() => format!(
+                "{}/~/{}/session/{}",
+                crate::config::console_base_url(),
+                slug,
+                session_id
+            ),
+            _ => format!(
+                "{}/~/me/session/{}",
+                crate::config::console_base_url(),
+                session_id
+            ),
+        };
         println!();
         println!(
             "  {} {}",
@@ -76,7 +88,7 @@ pub async fn run(opts: Options) -> Result<()> {
     Ok(())
 }
 
-fn prompt_connection_mode() -> Result<String> {
+pub fn prompt_connection_mode() -> Result<String> {
     println!();
     println!(
         "  {} How would you like to connect Claude Code to Edgee?",
