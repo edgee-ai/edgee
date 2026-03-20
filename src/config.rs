@@ -6,6 +6,8 @@ use std::path::PathBuf;
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Credentials {
     pub api_key: String,
+    pub email: Option<String>,
+    pub user_id: Option<String>,
     pub claude_connection: Option<String>, // "plan" | "api"
     pub org_slug: Option<String>,
 }

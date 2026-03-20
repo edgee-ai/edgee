@@ -8,8 +8,14 @@ use tokio::net::TcpListener;
 pub struct Options {}
 
 pub async fn run(_opts: Options) -> Result<()> {
-    let api_key = perform_login().await?;
-    println!("Logged in. API key: {}", mask_key(&api_key));
+    let email = perform_login().await?;
+
+    println!();
+    println!(
+        "  {}",
+        style(format!("Logged in as {email}")).bold()
+    );
+    println!();
     Ok(())
 }
 
@@ -73,6 +79,8 @@ pub async fn perform_login() -> Result<String> {
     let api_key = extract_param(&request, "api_key")
         .ok_or_else(|| anyhow::anyhow!("No api_key found in callback URL"))?;
     let org_slug = extract_param(&request, "org_slug");
+    let email = extract_param(&request, "email");
+    let user_id = extract_param(&request, "user_id");
 
     let html = r##"<!DOCTYPE html>
 <html lang="en">
@@ -120,9 +128,15 @@ p{color:hsl(209,15%,60%);font-size:1rem;line-height:1.6;margin-top:4px}
     let mut creds = crate::config::read()?;
     creds.api_key = api_key.clone();
     creds.org_slug = org_slug;
+    creds.email = email;
+    creds.user_id = user_id;
     crate::config::write(&creds)?;
 
-    Ok(api_key)
+    Ok(creds
+        .email
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "(unknown)".to_string()))
 }
 
 fn percent_encode(s: &str) -> String {
@@ -142,16 +156,28 @@ fn extract_param(request: &str, name: &str) -> Option<String> {
     for param in query.split('&') {
         if let Some((key, value)) = param.split_once('=') {
             if key == name {
-                return Some(value.to_string());
+                return Some(percent_decode(value));
             }
         }
     }
     None
 }
 
-fn mask_key(key: &str) -> String {
-    if key.len() <= 12 {
-        return "***".to_string();
+fn percent_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(h1), Some(h2)) = (h1, h2) {
+                if let Ok(byte) = u8::from_str_radix(&format!("{h1}{h2}"), 16) {
+                    out.push(byte as char);
+                    continue;
+                }
+            }
+        }
+        out.push(if c == '+' { ' ' } else { c });
     }
-    format!("{}…{}", &key[..8], &key[key.len() - 4..])
+    out
 }
