@@ -54,7 +54,15 @@ pub async fn run(opts: Options) -> Result<()> {
     cmd.args(["--settings", r#"{"statusLine":{"type":"command","command":"printf 'Using \u001b[1;38;2;139;92;246mEdgee\u001b[0m to compress your tools'"}}"#]);
     cmd.args(&opts.args);
 
-    let status = cmd.status()?;
+    let status = cmd.status().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!(
+                "Claude Code is not installed. Install it from https://code.claude.com/docs/en/quickstart"
+            )
+        } else {
+            anyhow::anyhow!(e)
+        }
+    })?;
 
     {
         let logs_url = match creds.claude.as_ref().and_then(|c| c.org_slug.as_deref()) {

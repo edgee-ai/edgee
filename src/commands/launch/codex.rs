@@ -42,7 +42,15 @@ pub async fn run(opts: Options) -> Result<()> {
     ]);
     cmd.args(&opts.args);
 
-    let status = cmd.status()?;
+    let status = cmd.status().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!(
+                "Codex CLI is not installed. Install it from https://developers.openai.com/codex/cli"
+            )
+        } else {
+            anyhow::anyhow!(e)
+        }
+    })?;
 
     {
         let logs_url = match creds.codex.as_ref().and_then(|c| c.org_slug.as_deref()) {
