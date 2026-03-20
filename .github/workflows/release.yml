@@ -1,7 +1,6 @@
 name: Build release
 permissions:
   contents: write
-  pull-requests: write
 on:
   workflow_dispatch:
   push:
@@ -24,24 +23,18 @@ jobs:
           sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" Cargo.toml
           cargo update -p edgee-cli
 
-      - name: Open PR with version bump
+      - name: Bump version directly on main
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BYPASS_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          BRANCH="chore/bump-version-to-${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
           git add Cargo.toml Cargo.lock
-          git diff --staged --quiet && echo "Version already up to date, skipping PR." && exit 0
+          git diff --staged --quiet && echo "Version already up to date, skipping." && exit 0
           git commit -m "Bump version to ${VERSION}"
-          git push origin "$BRANCH"
-          gh pr create \
-            --title "Bump version to ${VERSION}" \
-            --body "Automated version bump triggered by release tag \`${GITHUB_REF_NAME}\`." \
-            --base main \
-            --head "$BRANCH"
+          git push origin HEAD:main
 
   build-release-binaries:
     needs: bump-version
