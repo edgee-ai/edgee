@@ -302,7 +302,6 @@ dependencies = [
  "console 0.15.11",
  "dialoguer",
  "open",
- "reqwest",
  "self_update",
  "serde",
  "tokio",
