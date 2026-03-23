@@ -47,13 +47,16 @@ fn migrate(content: &str) -> Result<(Credentials, bool)> {
             let v1: CredentialsV1 = toml::from_str(content).unwrap_or_default();
             let creds = Credentials {
                 version: Some(CURRENT_VERSION),
-                claude: v1.api_key.filter(|k| !k.is_empty()).map(|key| ProviderConfig {
-                    api_key: key,
-                    email: None,
-                    user_id: None,
-                    connection: v1.claude_connection,
-                    org_slug: v1.org_slug,
-                }),
+                claude: v1
+                    .api_key
+                    .filter(|k| !k.is_empty())
+                    .map(|key| ProviderConfig {
+                        api_key: key,
+                        email: None,
+                        user_id: None,
+                        connection: v1.claude_connection,
+                        org_slug: v1.org_slug,
+                    }),
                 codex: None,
             };
             Ok((creds, true))

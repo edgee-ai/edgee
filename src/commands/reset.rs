@@ -25,9 +25,8 @@ pub async fn run(_opts: Options) -> Result<()> {
             p.connection = Some("plan".to_string());
         }
         _ => {
-            let choice = crate::commands::launch::claude::prompt_connection_mode()?;
             let p = creds.claude.get_or_insert_with(Default::default);
-            p.connection = Some(choice);
+            p.connection = Some("plan".to_string());
         }
     }
     crate::config::write(&creds)?;
