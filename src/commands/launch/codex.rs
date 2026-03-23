@@ -1,6 +1,5 @@
 use anyhow::Result;
 use console::style;
-use dialoguer::{theme::ColorfulTheme, Select};
 
 #[derive(Debug, clap::Parser)]
 pub struct Options {
@@ -18,11 +17,10 @@ pub async fn run(opts: Options) -> Result<()> {
         creds = crate::config::read()?;
     }
 
-    // Step 2: ensure we have a connection choice
+    // Step 2: ensure we have a connection choice (default to "plan" for codex)
     if creds.codex.as_ref().and_then(|c| c.connection.as_deref()).is_none() {
-        let choice = prompt_connection_mode()?;
         let provider = creds.codex.get_or_insert_with(Default::default);
-        provider.connection = Some(choice);
+        provider.connection = Some("plan".to_string());
         crate::config::write(&creds)?;
     }
 
@@ -87,28 +85,3 @@ pub async fn run(opts: Options) -> Result<()> {
     Ok(())
 }
 
-pub fn prompt_connection_mode() -> Result<String> {
-    println!();
-    println!(
-        "  {} How would you like to connect Codex to Edgee?",
-        style("?").cyan().bold()
-    );
-    println!();
-
-    let items = [
-        style("ChatGPT Plus/Pro").green().bold().to_string(),
-        style("API Billing").green().bold().to_string(),
-    ];
-
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .items(&items)
-        .default(0)
-        .interact()?;
-
-    println!();
-
-    match selection {
-        1 => Ok("api".to_string()),
-        _ => Ok("plan".to_string()),
-    }
-}

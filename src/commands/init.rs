@@ -8,18 +8,14 @@ pub async fn run(_opts: Options) -> Result<()> {
 
     crate::commands::auth::login::perform_login(&provider).await?;
 
-    let choice = match provider.as_str() {
-        "codex" => crate::commands::launch::codex::prompt_connection_mode()?,
-        _ => crate::commands::launch::claude::prompt_connection_mode()?,
-    };
-
     let mut creds = crate::config::read()?;
     match provider.as_str() {
         "codex" => {
             let p = creds.codex.get_or_insert_with(Default::default);
-            p.connection = Some(choice);
+            p.connection = Some("plan".to_string());
         }
         _ => {
+            let choice = crate::commands::launch::claude::prompt_connection_mode()?;
             let p = creds.claude.get_or_insert_with(Default::default);
             p.connection = Some(choice);
         }
