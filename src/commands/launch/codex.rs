@@ -91,4 +91,3 @@ pub async fn run(opts: Options) -> Result<()> {
 
     Ok(())
 }
-
