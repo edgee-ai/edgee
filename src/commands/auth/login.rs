@@ -8,7 +8,8 @@ use tokio::net::TcpListener;
 pub struct Options {}
 
 pub async fn run(_opts: Options) -> Result<()> {
-    let email = perform_login().await?;
+    let provider = prompt_provider()?;
+    let email = perform_login(&provider).await?;
 
     println!();
     println!(
@@ -19,15 +20,30 @@ pub async fn run(_opts: Options) -> Result<()> {
     Ok(())
 }
 
-pub async fn perform_login() -> Result<String> {
+pub fn prompt_provider() -> Result<String> {
+    use dialoguer::{theme::ColorfulTheme, Select};
+    let items = ["Claude Code", "Codex"];
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Which AI assistant do you want to set up?")
+        .items(&items)
+        .default(0)
+        .interact()?;
+    match selection {
+        1 => Ok("codex".to_string()),
+        _ => Ok("claude".to_string()),
+    }
+}
+
+pub async fn perform_login(provider: &str) -> Result<String> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
 
     let callback = format!("http://127.0.0.1:{port}");
     let url = format!(
-        "{}/authorize/apikey?callback={}&name=Edgee+CLI&compression=claude",
+        "{}/authorize/apikey?callback={}&name=Edgee+CLI&compression={}",
         crate::config::console_base_url(),
-        percent_encode(&callback)
+        percent_encode(&callback),
+        provider
     );
 
     println!();
@@ -126,15 +142,20 @@ p{color:hsl(209,15%,60%);font-size:1rem;line-height:1.6;margin-top:4px}
     stream.write_all(response.as_bytes()).await?;
 
     let mut creds = crate::config::read()?;
-    creds.api_key = api_key.clone();
-    creds.org_slug = org_slug;
-    creds.email = email;
-    creds.user_id = user_id;
+    let provider_config = crate::config::ProviderConfig {
+        api_key: api_key.clone(),
+        email: email.clone(),
+        user_id,
+        connection: None,
+        org_slug,
+    };
+    match provider {
+        "codex" => creds.codex = Some(provider_config),
+        _ => creds.claude = Some(provider_config),
+    }
     crate::config::write(&creds)?;
 
-    Ok(creds
-        .email
-        .clone()
+    Ok(email
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(unknown)".to_string()))
 }
