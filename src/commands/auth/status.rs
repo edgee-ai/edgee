@@ -6,7 +6,8 @@ setup_command! {}
 pub async fn run(_opts: Options) -> Result<()> {
     let creds = crate::config::read()?;
 
-    let has_any = creds.claude.as_ref().map(|c| !c.api_key.is_empty()).unwrap_or(false)
+    let has_any = creds.user_token.as_deref().filter(|t| !t.is_empty()).is_some()
+        || creds.claude.as_ref().map(|c| !c.api_key.is_empty()).unwrap_or(false)
         || creds.codex.as_ref().map(|c| !c.api_key.is_empty()).unwrap_or(false);
 
     if !has_any {
@@ -25,13 +26,26 @@ pub async fn run(_opts: Options) -> Result<()> {
         style(crate::config::credentials_path().display()).dim()
     );
 
+    match &creds.email {
+        Some(e) if !e.is_empty() => println!(
+            "\n  {} {}",
+            style("✓").green().bold(),
+            style(format!("Logged in as {e}")).bold()
+        ),
+        _ => println!(
+            "\n  {} {}",
+            style("✓").green().bold(),
+            style("Logged in").bold()
+        ),
+    }
+
     for (name, provider) in [("Claude", &creds.claude), ("Codex", &creds.codex)] {
         if let Some(p) = provider.as_ref().filter(|p| !p.api_key.is_empty()) {
-            println!();
-            match &p.email {
-                Some(e) if !e.is_empty() => println!("  {} {}", style("✓").green().bold(), style(format!("{name}: logged in as {e}")).bold()),
-                _ => println!("  {} {}", style("✓").green().bold(), style(format!("{name}: logged in")).bold()),
-            }
+            println!(
+                "   {}  {}",
+                style(format!("{name}:")).dim(),
+                style("configured").green()
+            );
             if let Some(mode) = &p.connection {
                 println!(
                     "   {}  {}",

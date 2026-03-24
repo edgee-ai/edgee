@@ -16,7 +16,7 @@ pub async fn run(opts: Options) -> Result<()> {
     if creds.claude.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
         crate::commands::auth::login::perform_login("claude").await?;
         creds = crate::config::read()?;
-    } else if creds.claude.as_ref().and_then(|c| c.user_token.as_deref()).unwrap_or("").is_empty() {
+    } else if creds.user_token.as_deref().unwrap_or("").is_empty() {
         println!();
         println!(
             "  {} {}",
@@ -72,7 +72,7 @@ pub async fn run(opts: Options) -> Result<()> {
     })?;
 
     {
-        let logs_url = match creds.claude.as_ref().and_then(|c| c.org_slug.as_deref()) {
+        let logs_url = match creds.org_slug.as_deref() {
             Some(slug) if !slug.is_empty() => format!(
                 "{}/~/{}/session/{}",
                 crate::config::console_base_url(),

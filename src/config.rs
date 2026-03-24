@@ -5,14 +5,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct ProviderConfig {
-    pub user_token: Option<String>,
     pub api_key: String,
     pub api_key_id: Option<String>,
-    pub email: Option<String>,
-    pub user_id: Option<String>,
     pub connection: Option<String>, // "plan" | "api"
-    pub org_slug: Option<String>,
-    pub org_id: Option<String>,
 }
 
 const CURRENT_VERSION: u32 = 3;
@@ -20,6 +15,11 @@ const CURRENT_VERSION: u32 = 3;
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Credentials {
     pub version: Option<u32>,
+    pub user_token: Option<String>,
+    pub email: Option<String>,
+    pub user_id: Option<String>,
+    pub org_slug: Option<String>,
+    pub org_id: Option<String>,
     pub claude: Option<ProviderConfig>,
     pub codex: Option<ProviderConfig>,
 }
@@ -50,13 +50,13 @@ fn migrate(content: &str) -> Result<(Credentials, bool)> {
             let v1: CredentialsV1 = toml::from_str(content).unwrap_or_default();
             let creds = Credentials {
                 version: Some(CURRENT_VERSION),
+                org_slug: v1.org_slug,
                 claude: v1.api_key.filter(|k| !k.is_empty()).map(|key| ProviderConfig {
                     api_key: key,
                     connection: v1.claude_connection,
-                    org_slug: v1.org_slug,
                     ..Default::default()
                 }),
-                codex: None,
+                ..Default::default()
             };
             Ok((creds, true))
         }
