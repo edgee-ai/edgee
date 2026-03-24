@@ -16,6 +16,13 @@ pub async fn run(opts: Options) -> Result<()> {
     if creds.claude.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
         crate::commands::auth::login::perform_login("claude").await?;
         creds = crate::config::read()?;
+    } else if creds.claude.as_ref().and_then(|c| c.user_token.as_deref()).unwrap_or("").is_empty() {
+        println!();
+        println!(
+            "  {} {}",
+            style("Tip:").cyan().bold(),
+            style("Run `edgee auth login` to unlock the latest features.").dim()
+        );
     }
 
     // Step 2: ensure we have a connection choice
@@ -32,7 +39,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let mode = claude.connection.as_deref().unwrap_or("plan");
     let session_id = uuid::Uuid::new_v4().to_string();
     let mut cmd = std::process::Command::new("claude");
-    cmd.env("ANTHROPIC_BASE_URL", crate::config::api_base_url());
+    cmd.env("ANTHROPIC_BASE_URL", crate::config::gateway_base_url());
 
     match mode {
         "api" => {

@@ -5,14 +5,17 @@ use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct ProviderConfig {
+    pub user_token: Option<String>,
     pub api_key: String,
+    pub api_key_id: Option<String>,
     pub email: Option<String>,
     pub user_id: Option<String>,
     pub connection: Option<String>, // "plan" | "api"
     pub org_slug: Option<String>,
+    pub org_id: Option<String>,
 }
 
-const CURRENT_VERSION: u32 = 2;
+const CURRENT_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Credentials {
@@ -49,13 +52,16 @@ fn migrate(content: &str) -> Result<(Credentials, bool)> {
                 version: Some(CURRENT_VERSION),
                 claude: v1.api_key.filter(|k| !k.is_empty()).map(|key| ProviderConfig {
                     api_key: key,
-                    email: None,
-                    user_id: None,
                     connection: v1.claude_connection,
                     org_slug: v1.org_slug,
+                    ..Default::default()
                 }),
                 codex: None,
             };
+            Ok((creds, true))
+        }
+        Some(2) => {
+            let creds: Credentials = toml::from_str(content)?;
             Ok((creds, true))
         }
         Some(v) if v == CURRENT_VERSION => {
@@ -102,6 +108,10 @@ pub fn console_base_url() -> String {
     std::env::var("EDGEE_CONSOLE_URL").unwrap_or_else(|_| "https://www.edgee.ai".to_string())
 }
 
-pub fn api_base_url() -> String {
+pub fn console_api_base_url() -> String {
+    std::env::var("EDGEE_CONSOLE_API_URL").unwrap_or_else(|_| "https://api.edgee.app".to_string())
+}
+
+pub fn gateway_base_url() -> String {
     std::env::var("EDGEE_API_URL").unwrap_or_else(|_| "https://api.edgee.ai".to_string())
 }
