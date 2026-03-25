@@ -4,22 +4,7 @@ use console::style;
 setup_command! {}
 
 pub async fn run(_opts: Options) -> Result<()> {
-    let provider = crate::commands::auth::login::prompt_provider()?;
-
-    crate::commands::auth::login::perform_login(&provider).await?;
-
-    let mut creds = crate::config::read()?;
-    match provider.as_str() {
-        "codex" => {
-            let p = creds.codex.get_or_insert_with(Default::default);
-            p.connection = Some("plan".to_string());
-        }
-        _ => {
-            let p = creds.claude.get_or_insert_with(Default::default);
-            p.connection = Some("plan".to_string());
-        }
-    }
-    crate::config::write(&creds)?;
+    crate::commands::auth::login::perform_login().await?;
 
     println!();
     println!(

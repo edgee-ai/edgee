@@ -8,8 +8,7 @@ use tokio::net::TcpListener;
 pub struct Options {}
 
 pub async fn run(_opts: Options) -> Result<()> {
-    let provider = prompt_provider()?;
-    let email = perform_login(&provider).await?;
+    let email = perform_login().await?;
 
     println!();
     println!(
@@ -20,21 +19,7 @@ pub async fn run(_opts: Options) -> Result<()> {
     Ok(())
 }
 
-pub fn prompt_provider() -> Result<String> {
-    use dialoguer::{theme::ColorfulTheme, Select};
-    let items = ["Claude Code", "Codex"];
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Which AI assistant do you want to set up?")
-        .items(&items)
-        .default(0)
-        .interact()?;
-    match selection {
-        1 => Ok("codex".to_string()),
-        _ => Ok("claude".to_string()),
-    }
-}
-
-pub async fn perform_login(provider: &str) -> Result<String> {
+pub async fn perform_login() -> Result<String> {
     let mut creds = crate::config::read()?;
 
     // Reuse existing user token if available, otherwise do browser auth
@@ -44,10 +29,7 @@ pub async fn perform_login(provider: &str) -> Result<String> {
             println!(
                 "  {} {}",
                 style("Already authenticated.").green().bold(),
-                style(format!(
-                    "Setting up {} with your existing account.",
-                    match provider { "codex" => "Codex", _ => "Claude Code" }
-                )).dim()
+                style("Setting up with your existing account.").dim()
             );
             (token.to_string(), creds.email.clone(), creds.user_id.clone())
         }
@@ -67,14 +49,14 @@ pub async fn perform_login(provider: &str) -> Result<String> {
         anyhow::bail!("No organizations found. Please create one at {} first.", crate::config::console_base_url());
     }
 
-    let (org_id, org_slug, org_name) = if orgs.len() == 1 {
+    let (org_id, org_slug) = if orgs.len() == 1 {
         let org = &orgs[0];
         println!(
             "  {} {}",
             style("Organization:").dim(),
             style(&org.name).bold()
         );
-        (org.id.clone(), org.slug.clone(), org.name.clone())
+        (org.id.clone(), org.slug.clone())
     } else {
         use dialoguer::Select;
         let items: Vec<String> = orgs.iter().map(|o| o.name.clone()).collect();
@@ -84,22 +66,8 @@ pub async fn perform_login(provider: &str) -> Result<String> {
             .default(0)
             .interact()?;
         let org = &orgs[selection];
-        (org.id.clone(), org.slug.clone(), org.name.clone())
+        (org.id.clone(), org.slug.clone())
     };
-
-    // --- Get or create AI Gateway API key (with compression) ---
-    let assistant_name = match provider {
-        "codex" => "codex",
-        _ => "claude_code",
-    };
-    println!(
-        "  {}",
-        style(format!("Setting up API key for {}…", org_name)).dim()
-    );
-    let key_item = client.get_or_create_key(&org_id, assistant_name).await
-        .context("Failed to get or create API key")?;
-    let api_key = key_item.key
-        .ok_or_else(|| anyhow::anyhow!("API key response did not include a key value"))?;
 
     // --- Store credentials ---
     creds.user_token = Some(user_token);
@@ -107,6 +75,33 @@ pub async fn perform_login(provider: &str) -> Result<String> {
     creds.user_id = user_id;
     creds.org_slug = Some(org_slug);
     creds.org_id = Some(org_id);
+    crate::config::write(&creds)?;
+
+    Ok(email
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "(unknown)".to_string()))
+}
+
+/// Creates a gateway API key for the given provider if one doesn't exist yet.
+/// Requires that the user is already authenticated (user_token + org_id set).
+pub async fn ensure_provider_key(provider: &str) -> Result<()> {
+    let mut creds = crate::config::read()?;
+
+    let user_token = creds.user_token.as_deref().filter(|t| !t.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run `edgee auth login` first."))?;
+    let org_id = creds.org_id.as_deref().filter(|t| !t.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("No organization selected. Run `edgee auth login` first."))?;
+
+    let assistant_name = match provider {
+        "codex" => "codex",
+        _ => "claude_code",
+    };
+
+    let client = crate::api::ApiClient::new(user_token)?;
+    let key_item = client.get_or_create_key(org_id, assistant_name).await
+        .context(format!("Failed to get or create {} API key", assistant_name))?;
+    let api_key = key_item.key
+        .ok_or_else(|| anyhow::anyhow!("API key response did not include a key value"))?;
 
     let provider_config = crate::config::ProviderConfig {
         api_key,
@@ -119,9 +114,7 @@ pub async fn perform_login(provider: &str) -> Result<String> {
     }
     crate::config::write(&creds)?;
 
-    Ok(email
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "(unknown)".to_string()))
+    Ok(())
 }
 
 async fn browser_auth() -> Result<(String, Option<String>, Option<String>)> {
@@ -130,7 +123,7 @@ async fn browser_auth() -> Result<(String, Option<String>, Option<String>)> {
 
     let callback = format!("http://127.0.0.1:{port}");
     let url = format!(
-        "{}/authorize/apikey?callback={}&name=Edgee+CLI",
+        "{}/oauth/authorize/apikey?callback={}&name=Edgee+CLI",
         crate::config::console_base_url(),
         percent_encode(&callback),
     );
