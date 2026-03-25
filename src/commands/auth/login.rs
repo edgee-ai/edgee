@@ -20,25 +20,16 @@ pub async fn run(_opts: Options) -> Result<()> {
 }
 
 pub async fn perform_login() -> Result<String> {
-    let mut creds = crate::config::read()?;
+    // Clear existing configuration to start fresh
+    let mut creds = crate::config::Credentials::default();
+    crate::config::write(&creds)?;
 
-    // Reuse existing user token if available, otherwise do browser auth
-    let (user_token, email, user_id) = match creds.user_token.as_deref().filter(|t| !t.is_empty()) {
-        Some(token) => {
-            println!();
-            println!(
-                "  {} {}",
-                style("Already authenticated.").green().bold(),
-                style("Setting up with your existing account.").dim()
-            );
-            (token.to_string(), creds.email.clone(), creds.user_id.clone())
-        }
-        None => {
-            let (token, email, user_id) = browser_auth().await?;
-            println!();
-            println!("  {}", style("Authenticated!").green().bold());
-            (token, email, user_id)
-        }
+    // Authenticate via browser
+    let (user_token, email, user_id) = {
+        let (token, email, user_id) = browser_auth().await?;
+        println!();
+        println!("  {}", style("Authenticated!").green().bold());
+        (token, email, user_id)
     };
 
     // --- Select organization ---
@@ -123,7 +114,7 @@ async fn browser_auth() -> Result<(String, Option<String>, Option<String>)> {
 
     let callback = format!("http://127.0.0.1:{port}");
     let url = format!(
-        "{}/oauth/authorize/apikey?callback={}&name=Edgee+CLI",
+        "{}/authorize/oauth/apikey?callback={}&name=Edgee+CLI",
         crate::config::console_base_url(),
         percent_encode(&callback),
     );
