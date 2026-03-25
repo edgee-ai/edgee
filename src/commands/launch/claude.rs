@@ -11,20 +11,19 @@ pub struct Options {
 pub async fn run(opts: Options) -> Result<()> {
     let mut creds = crate::config::read()?;
 
-    // Step 1: ensure we have an api_key
-    if creds.claude.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
-        crate::commands::auth::login::perform_login("claude").await?;
+    // Step 1: ensure we are authenticated
+    if creds.user_token.as_deref().unwrap_or("").is_empty() {
+        crate::commands::auth::login::perform_login().await?;
         creds = crate::config::read()?;
-    } else if creds.user_token.as_deref().unwrap_or("").is_empty() {
-        println!();
-        println!(
-            "  {} {}",
-            style("Tip:").cyan().bold(),
-            style("Run `edgee auth login` to unlock the latest features.").dim()
-        );
     }
 
-    // Step 2: ensure we have a connection choice (default to "plan")
+    // Step 2: ensure we have an api_key for Claude
+    if creds.claude.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
+        crate::commands::auth::login::ensure_provider_key("claude").await?;
+        creds = crate::config::read()?;
+    }
+
+    // Step 3: ensure we have a connection choice (default to "plan")
     if creds.claude.as_ref().and_then(|c| c.connection.as_deref()).is_none() {
         let provider = creds.claude.get_or_insert_with(Default::default);
         provider.connection = Some("plan".to_string());

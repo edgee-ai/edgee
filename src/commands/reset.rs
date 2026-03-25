@@ -12,24 +12,8 @@ pub async fn run(_opts: Options) -> Result<()> {
     );
     println!();
 
-    let provider = crate::commands::auth::login::prompt_provider()?;
-
-    // Re-run login to get a new API key for the selected provider
-    crate::commands::auth::login::perform_login(&provider).await?;
-
-    // Re-prompt for connection mode and write back to the selected provider only
-    let mut creds = crate::config::read()?;
-    match provider.as_str() {
-        "codex" => {
-            let p = creds.codex.get_or_insert_with(Default::default);
-            p.connection = Some("plan".to_string());
-        }
-        _ => {
-            let p = creds.claude.get_or_insert_with(Default::default);
-            p.connection = Some("plan".to_string());
-        }
-    }
-    crate::config::write(&creds)?;
+    // Re-run login to get a new account token
+    crate::commands::auth::login::perform_login().await?;
 
     println!(
         "  {} {}",
