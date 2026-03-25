@@ -48,16 +48,35 @@ impl ApiClient {
 
     pub async fn list_organizations(&self) -> Result<Vec<Organization>> {
         let url = format!("{}/v1/organizations", self.base_url);
-        let resp = self.http.get(&url).send().await.context("Failed to list organizations")?;
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to list organizations")?;
         check_status(&resp, "list organizations")?;
-        let body: ListResponse<Organization> = resp.json().await.context("Invalid organization response")?;
+        let body: ListResponse<Organization> =
+            resp.json().await.context("Invalid organization response")?;
         Ok(body.data)
     }
 
-    pub async fn get_or_create_key(&self, org_id: &str, coding_assistant: &str) -> Result<ApiKeyItem> {
-        let url = format!("{}/v1/organizations/{}/api_keys/get-or-create", self.base_url, org_id);
+    pub async fn get_or_create_key(
+        &self,
+        org_id: &str,
+        coding_assistant: &str,
+    ) -> Result<ApiKeyItem> {
+        let url = format!(
+            "{}/v1/organizations/{}/api_keys/get-or-create",
+            self.base_url, org_id
+        );
         let body = serde_json::json!({ "coding_assistant": coding_assistant, "compression": true });
-        let resp = self.http.post(&url).json(&body).send().await.context("Failed to get or create API key")?;
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to get or create API key")?;
         check_status(&resp, "get or create API key")?;
         resp.json().await.context("Invalid API key response")
     }
@@ -70,8 +89,12 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
     }
     match status.as_u16() {
         401 => anyhow::bail!("Authentication expired. Please run `edgee auth login` again."),
-        403 => anyhow::bail!("Permission denied: you don't have access to {action} on this organization."),
-        404 => anyhow::bail!("Not found while trying to {action}. The resource may have been deleted."),
+        403 => anyhow::bail!(
+            "Permission denied: you don't have access to {action} on this organization."
+        ),
+        404 => {
+            anyhow::bail!("Not found while trying to {action}. The resource may have been deleted.")
+        }
         _ => anyhow::bail!("Failed to {action}: HTTP {status}"),
     }
 }
