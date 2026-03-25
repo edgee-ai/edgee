@@ -177,7 +177,9 @@ org_slug = "my-org"
         assert_eq!(creds.version, Some(CURRENT_VERSION));
         assert_eq!(creds.org_slug.as_deref(), Some("my-org"));
 
-        let claude = creds.claude.expect("claude config should exist from v1 api_key");
+        let claude = creds
+            .claude
+            .expect("claude config should exist from v1 api_key");
         assert_eq!(claude.api_key, "sk-edgee-obfuscated-v1-key-xxxxx");
         assert_eq!(claude.connection.as_deref(), Some("plan"));
 
