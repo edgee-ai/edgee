@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use console::style;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -35,15 +35,104 @@ pub fn prompt_provider() -> Result<String> {
 }
 
 pub async fn perform_login(provider: &str) -> Result<String> {
+    let mut creds = crate::config::read()?;
+
+    // Reuse existing user token if available, otherwise do browser auth
+    let (user_token, email, user_id) = match creds.user_token.as_deref().filter(|t| !t.is_empty()) {
+        Some(token) => {
+            println!();
+            println!(
+                "  {} {}",
+                style("Already authenticated.").green().bold(),
+                style(format!(
+                    "Setting up {} with your existing account.",
+                    match provider { "codex" => "Codex", _ => "Claude Code" }
+                )).dim()
+            );
+            (token.to_string(), creds.email.clone(), creds.user_id.clone())
+        }
+        None => {
+            let (token, email, user_id) = browser_auth().await?;
+            println!();
+            println!("  {}", style("Authenticated!").green().bold());
+            (token, email, user_id)
+        }
+    };
+
+    // --- Select organization ---
+    let client = crate::api::ApiClient::new(&user_token)?;
+    let orgs = client.list_organizations().await?;
+
+    if orgs.is_empty() {
+        anyhow::bail!("No organizations found. Please create one at {} first.", crate::config::console_base_url());
+    }
+
+    let (org_id, org_slug, org_name) = if orgs.len() == 1 {
+        let org = &orgs[0];
+        println!(
+            "  {} {}",
+            style("Organization:").dim(),
+            style(&org.name).bold()
+        );
+        (org.id.clone(), org.slug.clone(), org.name.clone())
+    } else {
+        use dialoguer::Select;
+        let items: Vec<String> = orgs.iter().map(|o| o.name.clone()).collect();
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select organization")
+            .items(&items)
+            .default(0)
+            .interact()?;
+        let org = &orgs[selection];
+        (org.id.clone(), org.slug.clone(), org.name.clone())
+    };
+
+    // --- Get or create AI Gateway API key (with compression) ---
+    let assistant_name = match provider {
+        "codex" => "codex",
+        _ => "claude_code",
+    };
+    println!(
+        "  {}",
+        style(format!("Setting up API key for {}…", org_name)).dim()
+    );
+    let key_item = client.get_or_create_key(&org_id, assistant_name).await
+        .context("Failed to get or create API key")?;
+    let api_key = key_item.key
+        .ok_or_else(|| anyhow::anyhow!("API key response did not include a key value"))?;
+
+    // --- Store credentials ---
+    creds.user_token = Some(user_token);
+    creds.email = email.clone();
+    creds.user_id = user_id;
+    creds.org_slug = Some(org_slug);
+    creds.org_id = Some(org_id);
+
+    let provider_config = crate::config::ProviderConfig {
+        api_key,
+        api_key_id: Some(key_item.id),
+        connection: None,
+    };
+    match provider {
+        "codex" => creds.codex = Some(provider_config),
+        _ => creds.claude = Some(provider_config),
+    }
+    crate::config::write(&creds)?;
+
+    Ok(email
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "(unknown)".to_string()))
+}
+
+async fn browser_auth() -> Result<(String, Option<String>, Option<String>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
 
     let callback = format!("http://127.0.0.1:{port}");
     let url = format!(
-        "{}/authorize/apikey?callback={}&name=Edgee+CLI&compression={}",
+        "{}/authorize/apikey?callback={}&name=Edgee+CLI",
         crate::config::console_base_url(),
         percent_encode(&callback),
-        provider
     );
 
     println!();
@@ -92,9 +181,8 @@ pub async fn perform_login(provider: &str) -> Result<String> {
     let n = stream.read(&mut buf).await?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
-    let api_key = extract_param(&request, "api_key")
+    let user_token = extract_param(&request, "api_key")
         .ok_or_else(|| anyhow::anyhow!("No api_key found in callback URL"))?;
-    let org_slug = extract_param(&request, "org_slug");
     let email = extract_param(&request, "email");
     let user_id = extract_param(&request, "user_id");
 
@@ -141,23 +229,7 @@ p{color:hsl(209,15%,60%);font-size:1rem;line-height:1.6;margin-top:4px}
     );
     stream.write_all(response.as_bytes()).await?;
 
-    let mut creds = crate::config::read()?;
-    let provider_config = crate::config::ProviderConfig {
-        api_key: api_key.clone(),
-        email: email.clone(),
-        user_id,
-        connection: None,
-        org_slug,
-    };
-    match provider {
-        "codex" => creds.codex = Some(provider_config),
-        _ => creds.claude = Some(provider_config),
-    }
-    crate::config::write(&creds)?;
-
-    Ok(email
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "(unknown)".to_string()))
+    Ok((user_token, email, user_id))
 }
 
 fn percent_encode(s: &str) -> String {

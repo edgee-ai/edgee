@@ -15,6 +15,20 @@ pub async fn run(opts: Options) -> Result<()> {
     if creds.claude.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
         crate::commands::auth::login::perform_login("claude").await?;
         creds = crate::config::read()?;
+    } else if creds.user_token.as_deref().unwrap_or("").is_empty() {
+        println!();
+        println!(
+            "  {} {}",
+            style("Tip:").cyan().bold(),
+            style("Run `edgee auth login` to unlock the latest features.").dim()
+        );
+    }
+
+    // Step 2: ensure we have a connection choice (default to "plan")
+    if creds.claude.as_ref().and_then(|c| c.connection.as_deref()).is_none() {
+        let provider = creds.claude.get_or_insert_with(Default::default);
+        provider.connection = Some("plan".to_string());
+        crate::config::write(&creds)?;
     }
 
     // Step 3: launch claude with the correct env vars
@@ -22,7 +36,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let api_key = &claude.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
     let mut cmd = std::process::Command::new("claude");
-    cmd.env("ANTHROPIC_BASE_URL", crate::config::api_base_url());
+    cmd.env("ANTHROPIC_BASE_URL", crate::config::gateway_base_url());
     cmd.env(
         "ANTHROPIC_CUSTOM_HEADERS",
         format!("x-edgee-api-key: {}\nx-edgee-session-id: {}", api_key, session_id),
@@ -42,7 +56,7 @@ pub async fn run(opts: Options) -> Result<()> {
     })?;
 
     {
-        let logs_url = match creds.claude.as_ref().and_then(|c| c.org_slug.as_deref()) {
+        let logs_url = match creds.org_slug.as_deref() {
             Some(slug) if !slug.is_empty() => format!(
                 "{}/~/{}/session/{}",
                 crate::config::console_base_url(),
@@ -75,4 +89,3 @@ pub async fn run(opts: Options) -> Result<()> {
 
     Ok(())
 }
-

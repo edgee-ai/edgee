@@ -15,6 +15,13 @@ pub async fn run(opts: Options) -> Result<()> {
     if creds.codex.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
         crate::commands::auth::login::perform_login("codex").await?;
         creds = crate::config::read()?;
+    } else if creds.user_token.as_deref().unwrap_or("").is_empty() {
+        println!();
+        println!(
+            "  {} {}",
+            style("Tip:").cyan().bold(),
+            style("Run `edgee auth login` to unlock the latest features.").dim()
+        );
     }
 
     // Step 2: ensure we have a connection choice (default to "plan" for codex)
@@ -28,7 +35,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let codex = creds.codex.as_ref().unwrap();
     let api_key = &codex.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
-    let base_url = format!("{}/v1", crate::config::api_base_url());
+    let base_url = format!("{}/v1", crate::config::gateway_base_url());
     let mut cmd = std::process::Command::new("codex");
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.args([
@@ -51,7 +58,7 @@ pub async fn run(opts: Options) -> Result<()> {
     })?;
 
     {
-        let logs_url = match creds.codex.as_ref().and_then(|c| c.org_slug.as_deref()) {
+        let logs_url = match creds.org_slug.as_deref() {
             Some(slug) if !slug.is_empty() => format!(
                 "{}/~/{}/session/{}",
                 crate::config::console_base_url(),
@@ -84,4 +91,3 @@ pub async fn run(opts: Options) -> Result<()> {
 
     Ok(())
 }
-
