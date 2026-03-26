@@ -44,7 +44,6 @@ pub async fn run(opts: Options) -> Result<()> {
         format!("x-edgee-api-key: {}\nx-edgee-session-id: {}", api_key, session_id),
     );
 
-    cmd.args(["--settings", r#"{"statusLine":{"type":"command","command":"printf 'Using \u001b[1;38;2;139;92;246mEdgee\u001b[0m to compress your tools'"}}"#]);
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {
