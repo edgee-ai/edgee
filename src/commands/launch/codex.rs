@@ -14,8 +14,11 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 1: ensure we are authenticated
     if creds.user_token.as_deref().unwrap_or("").is_empty() {
         crate::commands::auth::login::perform_login().await?;
-        creds = crate::config::read()?;
     }
+
+    // Step 1b: ensure an org is selected (handles partial state after aborted login)
+    crate::commands::auth::login::ensure_org_selected().await?;
+    creds = crate::config::read()?;
 
     // Step 2: ensure we have an api_key for Codex
     if creds.codex.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
