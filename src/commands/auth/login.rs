@@ -20,17 +20,22 @@ pub async fn run(_opts: Options) -> Result<()> {
 }
 
 pub async fn perform_login() -> Result<String> {
-    // Clear existing configuration to start fresh
+    // Authenticate via browser — do NOT clear credentials before we have a new token,
+    // so an aborted re-login doesn't wipe an existing valid token.
     let mut creds = crate::config::Credentials::default();
-    crate::config::write(&creds)?;
 
-    // Authenticate via browser
     let (user_token, email, user_id) = {
         let (token, email, user_id) = browser_auth().await?;
         println!();
         println!("  {}", style("Authenticated!").green().bold());
         (token, email, user_id)
     };
+
+    // Store new credentials immediately so the token is not lost if the user aborts org selection
+    creds.user_token = Some(user_token.clone());
+    creds.email = email.clone();
+    creds.user_id = user_id.clone();
+    crate::config::write(&creds)?;
 
     // --- Select organization ---
     let client = crate::api::ApiClient::new(&user_token)?;
@@ -71,6 +76,53 @@ pub async fn perform_login() -> Result<String> {
     Ok(email
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(unknown)".to_string()))
+}
+
+/// Ensures an organization is selected. If the user already has a token but no org,
+/// prompts for selection without re-doing browser auth.
+pub async fn ensure_org_selected() -> Result<()> {
+    let mut creds = crate::config::read()?;
+
+    if creds.org_id.as_deref().filter(|s| !s.is_empty()).is_some() {
+        return Ok(());
+    }
+
+    let user_token = creds.user_token.as_deref().filter(|t| !t.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run `edgee auth login` first."))?
+        .to_string();
+
+    let client = crate::api::ApiClient::new(&user_token)?;
+    let orgs = client.list_organizations().await?;
+
+    if orgs.is_empty() {
+        anyhow::bail!("No organizations found. Please create one at {} first.", crate::config::console_base_url());
+    }
+
+    let (org_id, org_slug) = if orgs.len() == 1 {
+        let org = &orgs[0];
+        println!(
+            "  {} {}",
+            style("Organization:").dim(),
+            style(&org.name).bold()
+        );
+        (org.id.clone(), org.slug.clone())
+    } else {
+        use dialoguer::Select;
+        let items: Vec<String> = orgs.iter().map(|o| o.name.clone()).collect();
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select organization")
+            .items(&items)
+            .default(0)
+            .interact()?;
+        let org = &orgs[selection];
+        (org.id.clone(), org.slug.clone())
+    };
+
+    creds.org_slug = Some(org_slug);
+    creds.org_id = Some(org_id);
+    crate::config::write(&creds)?;
+
+    Ok(())
 }
 
 /// Creates a gateway API key for the given provider if one doesn't exist yet.
