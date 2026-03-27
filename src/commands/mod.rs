@@ -10,6 +10,8 @@ setup_commands! {
     Launch(launch),
     /// Reset Edgee credentials and connection mode
     Reset(reset),
+    /// Detect prompt efficiency issues in Claude Code sessions
+    Suggest(suggest),
     [cfg(feature = "self-update")]
     /// Update Edgee
     SelfUpdate(update),
