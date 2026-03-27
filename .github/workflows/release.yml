@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - 'v*'
+      - "v*"
 jobs:
   bump-version:
     runs-on: ubuntu-latest
@@ -21,7 +21,7 @@ jobs:
       - name: Bump version in Cargo.toml and Cargo.lock
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" Cargo.toml
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" crates/cli/Cargo.toml
           cargo update -p edgee-cli
 
       - name: Open PR with version bump
@@ -33,7 +33,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add Cargo.toml Cargo.lock
+          git add crates/cli/Cargo.toml Cargo.lock
           git diff --staged --quiet && echo "Version already up to date, skipping PR." && exit 0
           git commit -m "Bump version to ${VERSION}"
           git push origin "$BRANCH"
@@ -77,7 +77,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i.bak "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" Cargo.toml
+          sed -i.bak "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" crates/cli/Cargo.toml
           rm -f Cargo.toml.bak
 
       - name: Build binary
@@ -85,7 +85,7 @@ jobs:
         with:
           command: build
           target: ${{ matrix.platform.target }}
-          args: '-p edgee-cli --bin edgee --release'
+          args: "-p edgee-cli --bin edgee --release"
 
       - name: Save binary
         uses: actions/upload-artifact@v4
