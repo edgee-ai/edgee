@@ -21,14 +21,9 @@ AI coding assistants are incredible. They're also expensive. Every prompt you se
 
 Edgee sits between your coding agent and the LLM APIs and compresses that context before it reaches the model. Same output. Fewer tokens. Lower bill.
 
-```
-Claude Code ──► edgee ──► Anthropic API
-                 ↑
-          token compression
-          happens here
-```
 
----
+<img width="1997" height="807" alt="ai-gateway-horizontal-light" src="https://github.com/user-attachments/assets/09829f8f-cbf3-4afe-8947-bd4cd421667f" />
+
 
 ## Install
 
@@ -41,8 +36,7 @@ curl -fsSL https://install.edgee.ai | bash
 **Homebrew**
 
 ```bash
-brew tap edgee-ai/tap
-brew install edgee
+brew install edgee-ai/tap/edgee
 ```
 
 ---
@@ -57,7 +51,7 @@ edgee launch claude
 
 That's it. Edgee configures itself as a gateway and Claude Code routes through it automatically.
 
-### With Codex
+### Launch Codex with token compression
 
 ```bash
 edgee launch codex
