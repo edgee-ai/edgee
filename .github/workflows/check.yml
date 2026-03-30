@@ -16,6 +16,16 @@ jobs:
           components: rustfmt
       - run: cargo check
 
+  check-windows:
+    name: cargo check (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - run: cargo check --target x86_64-pc-windows-msvc
+
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest

@@ -30,14 +30,22 @@ Edgee sits between your coding agent and the LLM APIs and compresses that contex
 **macOS / Linux (curl)**
 
 ```bash
-curl -fsSL https://install.edgee.ai | bash
+curl -fsSL https://edgee.ai/install.sh | bash
 ```
 
-**Homebrew**
+**Homebrew (macOS)**
 
 ```bash
 brew install edgee-ai/tap/edgee
 ```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://edgee.ai/install.ps1 | iex
+```
+
+Installs to `%LOCALAPPDATA%\Programs\edgee\`. You can override the directory with `$env:INSTALL_DIR` before running.
 
 ---
 
