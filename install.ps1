@@ -150,21 +150,24 @@ function Install-Edgee {
     Write-Host "         # show all available commands" -ForegroundColor DarkGray
     Write-Host ""
 
-    # Warn if install dir is not in PATH
-    $pathDirs = $env:PATH -split ';'
-    if ($pathDirs -notcontains $targetInstallDir) {
+    # Add install dir to PATH permanently (User scope, no admin required)
+    $registryPath = [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+    $registryDirs = if ($registryPath) { $registryPath -split ';' } else { @() }
+    if ($registryDirs -notcontains $targetInstallDir) {
+        $newPath = ($registryDirs + $targetInstallDir | Where-Object { $_ -ne '' }) -join ';'
+        [System.Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')
+        # Also update current session so edgee is usable immediately
+        $env:PATH = "$env:PATH;$targetInstallDir"
+        Write-Ok "Added to PATH"
+        Write-Host ""
         Write-Host "  " -NoNewline
-        Write-Host "⚠ Warning:" -ForegroundColor Yellow -NoNewline
-        Write-Host " $targetInstallDir is not in your PATH."
-        Write-Host "  Add it permanently by running:" -ForegroundColor DarkGray
+        Write-Host "Open a new terminal" -ForegroundColor Yellow -NoNewline
+        Write-Host " to use " -NoNewline
+        Write-Host "edgee" -ForegroundColor Cyan -NoNewline
+        Write-Host " globally."
         Write-Host ""
-        Write-Host "    [System.Environment]::SetEnvironmentVariable(" -ForegroundColor DarkGray
-        Write-Host "        'PATH'," -ForegroundColor DarkGray
-        Write-Host "        \$env:PATH + ';$targetInstallDir'," -ForegroundColor DarkGray
-        Write-Host "        'User'" -ForegroundColor DarkGray
-        Write-Host "    )" -ForegroundColor DarkGray
-        Write-Host ""
-        Write-Host "  Then restart your terminal." -ForegroundColor DarkGray
+    } else {
+        Write-Ok "Already in PATH"
         Write-Host ""
     }
 }
