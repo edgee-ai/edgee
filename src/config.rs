@@ -28,12 +28,11 @@ pub fn credentials_path() -> PathBuf {
     #[cfg(windows)]
     {
         let appdata = std::env::var("APPDATA")
-            .or_else(|_| {
-                std::env::var("USERPROFILE")
-                    .map(|p| format!("{p}\\AppData\\Roaming"))
-            })
+            .or_else(|_| std::env::var("USERPROFILE").map(|p| format!("{p}\\AppData\\Roaming")))
             .expect("APPDATA or USERPROFILE not set");
-        PathBuf::from(appdata).join("edgee").join("credentials.toml")
+        PathBuf::from(appdata)
+            .join("edgee")
+            .join("credentials.toml")
     }
     #[cfg(not(windows))]
     {
