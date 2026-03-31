@@ -62,13 +62,13 @@ pub async fn run(opts: Options) -> Result<()> {
     {
         let logs_url = match creds.org_slug.as_deref() {
             Some(slug) if !slug.is_empty() => format!(
-                "{}/~/{}/session/{}",
+                "{}/~/{}/sessions/{}",
                 crate::config::console_base_url(),
                 slug,
                 session_id
             ),
             _ => format!(
-                "{}/~/me/session/{}",
+                "{}/~/me/sessions/{}",
                 crate::config::console_base_url(),
                 session_id
             ),
