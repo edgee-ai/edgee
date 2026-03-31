@@ -1,0 +1,27 @@
+[package]
+name = "edgee-cli"
+version = "0.1.10"
+edition = "2021"
+
+[[bin]]
+name = "edgee"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+colored.workspace = true
+console.workspace = true
+dialoguer.workspace = true
+open.workspace = true
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "io-util"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+serde_json.workspace = true
+self_update = { workspace = true, optional = true, features = ["reqwest", "rustls"] }
+
+[features]
+default = ["self-update"]
+self-update = ["dep:self_update"]
