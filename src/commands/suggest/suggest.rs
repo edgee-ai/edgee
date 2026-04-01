@@ -12,12 +12,31 @@ const READ_EDIT_WINDOW: usize = 2;
 pub struct Suggestion {
     pub severity: String,
     pub title: String,
-    pub body: String,
-    pub example_before: Option<String>,
     pub example_after: Option<String>,
 }
 
-// ── P2: fingerprint ───────────────────────────────────────────────────────────
+pub struct ProjectFile {
+    pub fname: String,
+    pub session_count: usize,
+}
+
+pub struct SessionResult {
+    pub suggestions: Vec<Suggestion>,
+    pub start_date: String,  // "YYYY-MM-DD" from first turn timestamp
+    pub max_severity: u8,    // 2=high, 1=medium, 0=low
+}
+
+#[allow(dead_code)]
+pub struct SuggestResult {
+    pub sessions: HashMap<String, SessionResult>,
+    pub project_files: HashMap<String, Vec<ProjectFile>>,  // CLAUDE.md candidates per project
+    pub total_sessions: usize,
+    pub opening_burst_count: usize,
+    pub read_then_edit_count: usize,
+    pub redundant_read_count: usize,
+}
+
+// ── Cross-session repeat detection ───────────────────────────────────────────
 
 pub fn fingerprint_sessions(sessions: &mut Vec<Session>) {
     let mut all_refs: Vec<(usize, usize, String)> = sessions
@@ -68,7 +87,7 @@ pub fn fingerprint_sessions(sessions: &mut Vec<Session>) {
     }
 }
 
-// ── P8 helpers ────────────────────────────────────────────────────────────────
+// ── Detection helpers ─────────────────────────────────────────────────────────
 
 fn read_file_paths(turns: &[Turn]) -> Vec<String> {
     let mut paths = Vec::new();
@@ -192,7 +211,7 @@ fn read_then_edit_pairs(turns: &[Turn]) -> Vec<String> {
 
 /// Returns (file_path, total_read_count) for files read 2+ times with
 /// identical content and no intervening Edit between the repeated reads.
-fn redundant_reads(turns: &[Turn]) -> Vec<(String, usize)> {
+pub fn redundant_reads(turns: &[Turn]) -> Vec<(String, usize)> {
     // Pre-build: tool_use_id → file_path for every Read call
     let mut read_id_to_path: HashMap<String, String> = HashMap::new();
     for turn in turns {
@@ -272,13 +291,14 @@ fn redundant_reads(turns: &[Turn]) -> Vec<(String, usize)> {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-pub fn generate_suggestions(sessions: &[Session]) -> HashMap<String, Vec<Suggestion>> {
+pub fn generate_suggestions(sessions: &[Session]) -> SuggestResult {
     // Total sessions per project (for relative threshold)
     let mut project_session_count: HashMap<String, usize> = HashMap::new();
     for session in sessions {
         *project_session_count.entry(session.project.clone()).or_default() += 1;
     }
 
+    // Collect per-project file → session set (for CLAUDE.md candidates)
     let mut project_file_sessions: HashMap<String, HashMap<String, HashSet<String>>> =
         HashMap::new();
     for session in sessions {
@@ -292,13 +312,42 @@ pub fn generate_suggestions(sessions: &[Session]) -> HashMap<String, Vec<Suggest
         }
     }
 
-    let mut result: HashMap<String, Vec<Suggestion>> = HashMap::new();
+    // Build project_files: CLAUDE.md candidates per project
+    let mut project_files: HashMap<String, Vec<ProjectFile>> = HashMap::new();
+    for (project, freq_map) in &project_file_sessions {
+        let total_project_sessions = *project_session_count.get(project).unwrap_or(&1);
+        let mut candidates: Vec<ProjectFile> = freq_map
+            .iter()
+            .filter_map(|(fp, session_set)| {
+                let count = session_set.len();
+                let ratio = count as f64 / total_project_sessions as f64;
+                if count < FREQ_MIN_COUNT || ratio < FREQ_MIN_RATIO {
+                    return None;
+                }
+                let fname = fp.split('/').next_back().unwrap_or(fp).to_string();
+                Some(ProjectFile {
+                    fname,
+                    session_count: count,
+                })
+            })
+            .collect();
+        candidates.sort_by(|a, b| b.session_count.cmp(&a.session_count).then(a.fname.cmp(&b.fname)));
+        if !candidates.is_empty() {
+            project_files.insert(project.clone(), candidates);
+        }
+    }
+
+    let mut session_results: HashMap<String, SessionResult> = HashMap::new();
+    let mut opening_burst_count = 0usize;
+    let mut read_then_edit_count = 0usize;
+    let mut redundant_read_count = 0usize;
 
     for session in sessions {
         let mut suggestions: Vec<Suggestion> = Vec::new();
 
         let burst = opening_burst(&session.turns);
         if burst >= BURST_THRESHOLD {
+            opening_burst_count += 1;
             let read_paths = read_file_paths(&session.turns);
             let examples: Vec<String> = read_paths
                 .iter()
@@ -308,12 +357,6 @@ pub fn generate_suggestions(sessions: &[Session]) -> HashMap<String, Vec<Suggest
             suggestions.push(Suggestion {
                 severity: if burst >= 5 { "high" } else { "medium" }.to_string(),
                 title: format!("{} consecutive reads at session open", burst),
-                body: "Claude was orientating itself — the prompt didn't include context. \
-                       Pre-load with @file to eliminate these round-trips."
-                    .to_string(),
-                example_before: Some(
-                    "\"Look at the loader and explain how data flows.\"".to_string(),
-                ),
                 example_after: Some(format!(
                     "\"@loader.py — explain how data flows.\"  ({})",
                     examples.join("  ")
@@ -321,32 +364,24 @@ pub fn generate_suggestions(sessions: &[Session]) -> HashMap<String, Vec<Suggest
             });
         }
 
-        for fp in read_then_edit_pairs(&session.turns) {
+        let rte_pairs = read_then_edit_pairs(&session.turns);
+        read_then_edit_count += rte_pairs.len();
+        for fp in rte_pairs {
             let fname = fp.split('/').next_back().unwrap_or(&fp).to_string();
             suggestions.push(Suggestion {
                 severity: "medium".to_string(),
                 title: format!("Read → Edit on {}", fname),
-                body: format!(
-                    "{} was only Read to extract content for the Edit that followed. \
-                     @mention it upfront and Claude can skip the Read.",
-                    fname
-                ),
-                example_before: Some(format!("\"Fix the bug in {}.\"", fname)),
                 example_after: Some(format!("\"@{} — fix the bug.\"", fname)),
             });
         }
 
-        for (fp, total_reads) in redundant_reads(&session.turns) {
+        let rr_pairs = redundant_reads(&session.turns);
+        redundant_read_count += rr_pairs.len();
+        for (fp, total_reads) in rr_pairs {
             let fname = fp.split('/').next_back().unwrap_or(&fp).to_string();
             suggestions.push(Suggestion {
                 severity: "medium".to_string(),
                 title: format!("{} read {}× with unchanged content", fname, total_reads),
-                body: format!(
-                    "The file content was identical across all {} reads — no Edit happened \
-                     between them. Claude already had the result and didn't need to re-fetch it.",
-                    total_reads
-                ),
-                example_before: None,
                 example_after: Some(format!(
                     "@{} — pass the content once instead of re-reading",
                     fname
@@ -354,43 +389,66 @@ pub fn generate_suggestions(sessions: &[Session]) -> HashMap<String, Vec<Suggest
             });
         }
 
-        let session_read_paths: HashSet<String> =
-            read_file_paths(&session.turns).into_iter().collect();
-        if let Some(freq_map) = project_file_sessions.get(&session.project) {
-            let total_project_sessions = *project_session_count
-                .get(&session.project)
-                .unwrap_or(&1);
-            let mut freq_entries: Vec<_> = freq_map.iter().collect();
-            freq_entries.sort_by_key(|(fp, _)| fp.as_str());
-            for (fp, session_set) in freq_entries {
-                let count = session_set.len();
-                let ratio = count as f64 / total_project_sessions as f64;
-                if count < FREQ_MIN_COUNT || ratio < FREQ_MIN_RATIO {
-                    continue;
-                }
-                if !session_read_paths.contains(fp) {
-                    continue;
-                }
+        // frequent_read: flag files in this session that qualify as CLAUDE.md candidates
+        if let Some(candidates) = project_files.get(&session.project) {
+            let candidate_fnames: HashSet<&str> =
+                candidates.iter().map(|pf| pf.fname.as_str()).collect();
+            let session_reads = read_file_paths(&session.turns);
+            let mut flagged: HashSet<String> = HashSet::new();
+            for fp in &session_reads {
                 let fname = fp.split('/').next_back().unwrap_or(fp);
-                let pct = (ratio * 100.0).round() as usize;
-                suggestions.push(Suggestion {
-                    severity: "low".to_string(),
-                    title: format!("{} read in {} sessions ({}%)", fname, count, pct),
-                    body: "Consistently needed — a persistent @mention in CLAUDE.md \
-                           means it's always in context without a tool call."
-                        .to_string(),
-                    example_before: None,
-                    example_after: Some(format!("Add to CLAUDE.md:  @{}", fname)),
-                });
+                if candidate_fnames.contains(fname) && flagged.insert(fname.to_string()) {
+                    let count = candidates
+                        .iter()
+                        .find(|pf| pf.fname == fname)
+                        .map(|pf| pf.session_count)
+                        .unwrap_or(0);
+                    suggestions.push(Suggestion {
+                        severity: "low".to_string(),
+                        title: format!("{} read in {} sessions — add to CLAUDE.md", fname, count),
+                        example_after: Some(format!(
+                            "Add @{} to CLAUDE.md so Claude loads it automatically",
+                            fname
+                        )),
+                    });
+                }
             }
         }
 
         if !suggestions.is_empty() {
-            result.insert(session.session_id.clone(), suggestions);
+            let start_date = session
+                .turns
+                .first()
+                .map(|t| t.timestamp.get(..10).unwrap_or("unknown").to_string())
+                .unwrap_or_default();
+            let max_severity = suggestions
+                .iter()
+                .map(|s| match s.severity.as_str() {
+                    "high" => 2u8,
+                    "medium" => 1,
+                    _ => 0,
+                })
+                .max()
+                .unwrap_or(0);
+            session_results.insert(
+                session.session_id.clone(),
+                SessionResult {
+                    suggestions,
+                    start_date,
+                    max_severity,
+                },
+            );
         }
     }
 
-    result
+    SuggestResult {
+        total_sessions: sessions.len(),
+        sessions: session_results,
+        project_files,
+        opening_burst_count,
+        read_then_edit_count,
+        redundant_read_count,
+    }
 }
 
 #[cfg(test)]

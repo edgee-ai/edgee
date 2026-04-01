@@ -41,70 +41,71 @@ fn short_session_id(session_id: &str) -> &str {
     &uuid_part[..uuid_part.len().min(8)]
 }
 
-fn word_wrap(text: &str, width: usize) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.is_empty() {
-            current.push_str(word);
-        } else if current.len() + 1 + word.len() <= width {
-            current.push(' ');
-            current.push_str(word);
-        } else {
-            lines.push(current.clone());
-            current = word.to_string();
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
-
-fn build_lines(
-    suggestions_map: &HashMap<String, Vec<suggest::Suggestion>>,
-    width: u16,
-) -> Vec<Line<'static>> {
-    let wrap_width = (width as usize).saturating_sub(16).max(40);
-
+fn build_lines(result: &suggest::SuggestResult, width: u16) -> Vec<Line<'static>> {
+    // Group session IDs by project
     let mut by_project: HashMap<String, Vec<String>> = HashMap::new();
-    for session_id in suggestions_map.keys() {
+    for session_id in result.sessions.keys() {
         let project = session_id.split('/').next().unwrap_or("").to_string();
         by_project
             .entry(project)
             .or_default()
             .push(session_id.clone());
     }
+    for project in result.project_files.keys() {
+        by_project.entry(project.clone()).or_default();
+    }
+
     let mut projects: Vec<String> = by_project.keys().cloned().collect();
     projects.sort();
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::default());
 
+    // ── Per-project sections ──────────────────────────────────────────────────
     for project in &projects {
+        let project_color = Color::Green;
         let label = short_project_name(project).to_string();
         let rule_len = (width as usize).saturating_sub(label.len() + 5);
         let rule = "─".repeat(rule_len);
 
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled("─ ", Style::new().dark_gray()),
-            Span::styled(label, Style::new().bold()),
-            Span::styled(format!(" {}", rule), Style::new().dark_gray()),
+            Span::styled("─ ", Style::new().fg(project_color).dim()),
+            Span::styled(label, Style::new().fg(project_color).bold()),
+            Span::styled(format!(" {}", rule), Style::new().fg(project_color).dim()),
         ]));
         lines.push(Line::default());
 
+        // Sort sessions by max_severity descending, then date descending
         let mut session_ids = by_project[project].clone();
-        session_ids.sort();
+        session_ids.sort_by(|a, b| {
+            let sa = result.sessions.get(a);
+            let sb = result.sessions.get(b);
+            let sev_a = sa.map(|s| s.max_severity).unwrap_or(0);
+            let sev_b = sb.map(|s| s.max_severity).unwrap_or(0);
+            sev_b.cmp(&sev_a).then_with(|| {
+                let date_a = sa.map(|s| s.start_date.as_str()).unwrap_or("");
+                let date_b = sb.map(|s| s.start_date.as_str()).unwrap_or("");
+                date_b.cmp(date_a)
+            })
+        });
 
         for session_id in &session_ids {
-            let suggestions = &suggestions_map[session_id];
+            let session_result = match result.sessions.get(session_id) {
+                Some(sr) => sr,
+                None => continue,
+            };
+
+            let suggestions = &session_result.suggestions;
             let n = suggestions.len();
             let short_id = short_session_id(session_id).to_string();
+            let start_date = session_result.start_date.clone();
 
             lines.push(Line::from(vec![
                 Span::raw("    "),
-                Span::styled(short_id, Style::new().cyan()),
+                Span::styled(start_date, Style::new().fg(Color::White)),
+                Span::raw("  "),
+                Span::styled(short_id, Style::new().dark_gray()),
                 Span::raw("  "),
                 Span::styled(
                     format!("{} suggestion{}", n, if n == 1 { "" } else { "s" }),
@@ -128,24 +129,10 @@ fn build_lines(
                     Span::styled(s.title.clone(), Style::new().bold()),
                 ]));
 
-                for wrapped in word_wrap(&s.body, wrap_width) {
-                    lines.push(Line::from(vec![
-                        Span::raw("            "),
-                        Span::styled(wrapped, Style::new().dark_gray()),
-                    ]));
-                }
-
-                if let Some(before) = &s.example_before {
-                    lines.push(Line::from(vec![
-                        Span::raw("            "),
-                        Span::styled("before  ", Style::new().dark_gray()),
-                        Span::styled(before.clone(), Style::new().dark_gray()),
-                    ]));
-                }
                 if let Some(after) = &s.example_after {
                     lines.push(Line::from(vec![
                         Span::raw("            "),
-                        Span::styled("after   ", Style::new().dark_gray()),
+                        Span::styled("→ ", Style::new().fg(Color::Cyan)),
                         Span::styled(after.clone(), Style::new().fg(Color::Cyan)),
                     ]));
                 }
@@ -257,19 +244,19 @@ pub async fn run(opts: Options) -> Result<()> {
         return Ok(());
     }
 
-    let total = sessions.len();
     suggest::fingerprint_sessions(&mut sessions);
-    let suggestions_map = suggest::generate_suggestions(&sessions);
+    let result = suggest::generate_suggestions(&sessions);
 
-    let total_count: usize = suggestions_map.values().map(|v| v.len()).sum();
-    let with_suggestions = suggestions_map.len();
-
-    if suggestions_map.is_empty() {
+    if result.sessions.is_empty() && result.project_files.is_empty() {
         println!();
         println!("  ✓  No suggestions — all sessions look clean.");
         println!();
         return Ok(());
     }
+
+    let total_count: usize = result.sessions.values().map(|sr| sr.suggestions.len()).sum();
+    let with_suggestions = result.sessions.len();
+    let total = result.total_sessions;
 
     // Set up terminal
     enable_raw_mode()?;
@@ -278,7 +265,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
 
     let width = terminal.size()?.width;
-    let lines = build_lines(&suggestions_map, width);
+    let lines = build_lines(&result, width);
 
     let header = format!(
         "  edgee suggest  ·  {}  ·  {} sessions",
@@ -287,7 +274,7 @@ pub async fn run(opts: Options) -> Result<()> {
     );
     let footer = format!(
         "  ↑↓ jk  scroll    d/u  half-page    g/G  top/bottom    q  quit    \
-         {} suggestion{}  ·  {}/{}  sessions",
+         {} suggestion{}  ·  {}/{} sessions",
         total_count,
         if total_count == 1 { "" } else { "s" },
         with_suggestions,
@@ -301,7 +288,7 @@ pub async fn run(opts: Options) -> Result<()> {
         footer,
     };
 
-    let result = (|| -> Result<()> {
+    let run_result = (|| -> Result<()> {
         loop {
             terminal.draw(|f| draw(&app, f))?;
 
@@ -332,5 +319,5 @@ pub async fn run(opts: Options) -> Result<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
-    result
+    run_result
 }
