@@ -9,6 +9,9 @@
   </a>
 </p>
 
+**Open-source LLM gateway written in Rust.**
+Route, observe, and compress your AI traffic.
+
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Edgee](https://img.shields.io/badge/discord-edgee-blueviolet.svg?logo=discord)](https://www.edgee.ai/discord)
 [![Docs](https://img.shields.io/badge/docs-published-blue)](https://www.edgee.ai/docs/introduction)
@@ -17,13 +20,20 @@
 
 ---
 
-AI coding assistants are incredible. They're also expensive. Every prompt you send to Claude Code or Codex carries context, your files, your history, your instructions, and your token consumption is crazy.
+Edgee is a lightweight LLM gateway that sits between your application and AI providers. It gives you a single control point for routing, observability, and cost optimization, without changing your existing code.
 
-Edgee sits between your coding agent and the LLM APIs and compresses that context before it reaches the model. Same output. Fewer tokens. Lower bill.
-
+Think of it as an open-source alternative to LiteLLM or OpenRouter, written in Rust for speed and low resource usage, with a built-in token compression engine that reduces your AI costs automatically.
 
 <img width="1997" height="807" alt="ai-gateway-horizontal-light" src="https://github.com/user-attachments/assets/09829f8f-cbf3-4afe-8947-bd4cd421667f" />
 
+## Why Edgee
+
+- **One gateway, any provider** — Unified API for Anthropic, OpenAI, and other LLM providers. Switch models without touching your app code.
+- **Token compression** — Edgee analyzes request context and strips redundancy before it reaches the model. Same output, fewer tokens, lower bill.
+- **Real-time observability** — See exactly how many tokens you're sending, how many you're saving, and what it costs.
+- **Rust-native** — Fast startup, minimal memory footprint, no runtime dependencies. Runs anywhere Docker runs.
+
+---
 
 ## Install
 
@@ -51,28 +61,48 @@ Installs to `%LOCALAPPDATA%\Programs\edgee\`. You can override the directory wit
 
 ## Quickstart
 
-### Launch Claude Code with token compression
+### Use with AI coding assistants
+
+Edgee can wrap your coding assistant and compress traffic automatically:
 
 ```bash
+# Claude Code
 edgee launch claude
+
+# Codex
+edgee launch codex
+
+# Opencode
+edgee launch opencode
 ```
 
-That's it. Edgee configures itself as a gateway and Claude Code routes through it automatically.
+### Use as a standalone gateway
 
-### Launch Codex with token compression
+Point any OpenAI-compatible client at Edgee:
 
 ```bash
-edgee launch codex
+# Start the gateway
+edgee serve
+
+# Your app talks to Edgee instead of the provider directly
+export OPENAI_BASE_URL=http://localhost:1207/v1
 ```
 
 ---
 
-## What it does
+## Features
 
-**Token compression** — Edgee analyzes your request context and removes redundancy before sending it upstream. It's lossless from the model's perspective: the response is identical, but the prompt is leaner.
+### Token compression
 
-**Usage tracking** — See how many tokens you're sending, how many you're saving, and what it costs — in real time.
+Edgee's compression engine analyzes tool outputs (file listings, git logs, build output, test results) and removes noise before they enter the LLM context. The compression is lossless from the model's perspective — responses are identical, but prompts are leaner.
 
+### Multi-provider routing
+
+Route requests across Anthropic, OpenAI, and other providers through a single endpoint. Switch models, load-balance, or failover without code changes.
+
+### Usage tracking
+
+Real-time visibility into token consumption, compression savings, and cost per request.
 
 ---
 
@@ -84,13 +114,17 @@ edgee launch codex
 | Codex | `edgee launch codex` | ✅ Supported |
 | Opencode | `edgee launch opencode` | ✅ Supported |
 | Cursor | `edgee launch cursor` | 🔜 Coming soon |
-
+| Any OpenAI-compatible client | `edgee serve` | ✅ Supported |
 
 ---
 
 ## Acknowledgments
 
-The token compression engine in Edgee Gateway is derived from [RTK](https://github.com/rtk-ai/rtk), created by Patrick Szymkowiak and contributors at rtk-ai Labs. RTK pioneered local tool-output compression for AI coding assistants, and we built on their work to bring the same optimizations to a server-side gateway architecture. RTK is licensed under the Apache License 2.0. All derived files retain the original copyright notice and are individually marked with a modification history. See LICENSE-APACHE and NOTICE for full details. If you're looking for a local-first compression tool, check out RTK directly, it's excellent for individual developer workflows.
+The token compression engine in Edgee is derived from [RTK](https://github.com/rtk-ai/rtk), created by [Patrick Szymkowiak](https://github.com/pszymkowiak) and contributors at rtk-ai Labs. RTK pioneered local tool-output compression for AI coding assistants, and we built on their work to bring the same optimizations to a gateway architecture.
+
+RTK is licensed under the Apache License 2.0. All derived files retain the original copyright notice and are individually marked with a modification history. See [`LICENSE-APACHE`](./LICENSE-APACHE) and [`NOTICE`](./NOTICE) for full details.
+
+If you're looking for a local-first compression tool, [check out RTK directly](https://github.com/rtk-ai/rtk), it's excellent for individual developer workflows.
 
 ---
 
