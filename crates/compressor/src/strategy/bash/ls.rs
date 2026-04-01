@@ -1,3 +1,20 @@
+// Copyright 2024 rtk-ai and rtk-ai Labs
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Original source: https://github.com/rtk-ai/rtk
+//
+// Modifications copyright 2026 Edgee Cloud
+// This file has been modified from its original form:
+//   - Adapted from a local CLI proxy to a server-side gateway compressor
+//   - Refactored to implement Edgee's traits
+//   - Further adapted as needed for this module's role in the gateway
+//
+// See LICENSE-APACHE in the project root for the full license text.
+
 //! Compressor for `ls` command output.
 //!
 //! Strips permissions, owner, group, date columns and noise directories,

@@ -88,6 +88,12 @@ edgee launch codex
 
 ---
 
+## Acknowledgments
+
+The token compression engine in Edgee Gateway is derived from [RTK](https://github.com/rtk-ai/rtk), created by Patrick Szymkowiak and contributors at rtk-ai Labs. RTK pioneered local tool-output compression for AI coding assistants, and we built on their work to bring the same optimizations to a server-side gateway architecture. RTK is licensed under the Apache License 2.0. All derived files retain the original copyright notice and are individually marked with a modification history. See LICENSE-APACHE and NOTICE for full details. If you're looking for a local-first compression tool, check out RTK directly, it's excellent for individual developer workflows.
+
+---
+
 ## Contributing
 
 Edgee is Apache 2.0 licensed and we genuinely want your contributions.
