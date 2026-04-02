@@ -76,6 +76,25 @@ fn build_lines(result: &suggest::SuggestResult, width: u16) -> Vec<Line<'static>
         ]));
         lines.push(Line::default());
 
+        // Co-read pairs for this project
+        if let Some(pairs) = result.coread_pairs.get(project) {
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled("always together  ", Style::new().dark_gray()),
+            ]));
+            for (a, b, count) in pairs.iter().take(5) {
+                lines.push(Line::from(vec![
+                    Span::raw("      "),
+                    Span::styled(a.clone(), Style::new().fg(Color::White)),
+                    Span::styled(" + ", Style::new().dark_gray()),
+                    Span::styled(b.clone(), Style::new().fg(Color::White)),
+                    Span::raw("  "),
+                    Span::styled(format!("{}×", count), Style::new().dark_gray()),
+                ]));
+            }
+            lines.push(Line::default());
+        }
+
         // Sort sessions by max_severity descending, then date descending
         let mut session_ids = by_project[project].clone();
         session_ids.sort_by(|a, b| {

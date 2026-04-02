@@ -19,12 +19,22 @@ pub struct ContentBlock {
     pub is_repeat: bool,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default)]
+pub struct TurnUsage {
+    pub input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Turn {
     pub uuid: String,
     pub role: String,
     pub timestamp: String,
     pub content: Vec<ContentBlock>,
+    #[allow(dead_code)]
+    pub usage: Option<TurnUsage>,
 }
 
 #[derive(Debug)]
@@ -150,11 +160,25 @@ pub fn parse_session_file(path: &Path) -> Vec<Turn> {
         let content = parse_content(&msg["content"]);
         let uuid = rec["uuid"].as_str().unwrap_or("").to_string();
 
+        let usage = {
+            let u = &msg["usage"];
+            if u["cache_creation_input_tokens"].is_number() || u["cache_read_input_tokens"].is_number() {
+                Some(TurnUsage {
+                    input_tokens: u["input_tokens"].as_u64().unwrap_or(0),
+                    cache_creation_input_tokens: u["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+                    cache_read_input_tokens: u["cache_read_input_tokens"].as_u64().unwrap_or(0),
+                })
+            } else {
+                None
+            }
+        };
+
         turns.push(Turn {
             uuid,
             role: role.to_string(),
             timestamp,
             content,
+            usage,
         });
     }
 
