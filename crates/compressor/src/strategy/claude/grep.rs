@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::ClaudeToolCompressor;
+use super::ToolCompressor;
 
 const MAX_LINE_LEN: usize = 120;
 const MAX_MATCHES_PER_FILE: usize = 10;
@@ -35,7 +35,7 @@ const MAX_PATH_LEN: usize = 50;
 
 pub struct GrepCompressor;
 
-impl ClaudeToolCompressor for GrepCompressor {
+impl ToolCompressor for GrepCompressor {
     fn compress(&self, arguments: &str, output: &str) -> Option<String> {
         if output.trim().is_empty() {
             tracing::debug!("grep: not compressing - output is empty");

@@ -1,6 +1,6 @@
 //! Shared utilities for compression.
 
-use crate::strategy::claude::ClaudeToolCompressor;
+use crate::strategy::ToolCompressor;
 use crate::strategy::util::{TextSegment, split_into_segments};
 
 /// Wrap a call to `compressor.compress()`, preserving any `<system-reminder>` blocks verbatim.
@@ -14,7 +14,7 @@ use crate::strategy::util::{TextSegment, split_into_segments};
 ///    compressed output; remaining compressible slots are skipped (their content was
 ///    included in the combined input); protected slots are emitted verbatim.
 pub fn compress_claude_tool_with_segment_protection(
-    compressor: &dyn ClaudeToolCompressor,
+    compressor: &dyn ToolCompressor,
     arguments: &str,
     output: &str,
 ) -> Option<String> {
@@ -78,7 +78,7 @@ mod tests {
 
     /// A minimal compressor that returns the first half of any sufficiently long input.
     struct HalfCompressor;
-    impl crate::strategy::claude::ClaudeToolCompressor for HalfCompressor {
+    impl crate::strategy::ToolCompressor for HalfCompressor {
         fn compress(&self, _args: &str, output: &str) -> Option<String> {
             if output.len() < 10 {
                 return None;

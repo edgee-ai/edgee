@@ -7,11 +7,11 @@
 //! - `grep`          → reuses the Claude `Grep` compressor
 //! - `list_directory` → reuses the Claude `Glob` compressor
 
-use super::claude::ClaudeToolCompressor;
+use super::ToolCompressor;
 
 /// Select the appropriate compressor for a Codex CLI tool name.
 /// Returns `None` for tools we don't compress.
-pub fn compressor_for(tool_name: &str) -> Option<&'static dyn ClaudeToolCompressor> {
+pub fn compressor_for(tool_name: &str) -> Option<&'static dyn ToolCompressor> {
     match tool_name {
         "exec_command" => super::claude::compressor_for("Bash"),
         "shell_command" => super::claude::compressor_for("Bash"),

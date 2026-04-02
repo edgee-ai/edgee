@@ -3,11 +3,11 @@
 //! Extracts the shell command from the tool call arguments JSON,
 //! then delegates to the per-command compressors in `bash/`.
 
-use super::ClaudeToolCompressor;
+use super::ToolCompressor;
 
 pub struct BashCompressor;
 
-impl ClaudeToolCompressor for BashCompressor {
+impl ToolCompressor for BashCompressor {
     fn compress(&self, arguments: &str, output: &str) -> Option<String> {
         let command = extract_command(arguments)?;
 

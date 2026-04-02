@@ -27,7 +27,7 @@ use std::path::Path;
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use super::ClaudeToolCompressor;
+use super::ToolCompressor;
 
 /// Below this many content lines, don't compress at all.
 const SMALL_THRESHOLD: usize = 50;
@@ -284,7 +284,7 @@ pub(crate) fn filter_aggressive(content: &str, lang: &Language) -> String {
 
 pub struct ReadCompressor;
 
-impl ClaudeToolCompressor for ReadCompressor {
+impl ToolCompressor for ReadCompressor {
     fn compress(&self, arguments: &str, output: &str) -> Option<String> {
         // Strip line number prefixes to get raw content
         let content = strip_line_numbers(output);

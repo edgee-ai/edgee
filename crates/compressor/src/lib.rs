@@ -9,7 +9,7 @@ pub mod util;
 
 // Re-export key traits
 pub use strategy::bash::BashCompressor;
-pub use strategy::claude::ClaudeToolCompressor;
+pub use strategy::ToolCompressor;
 
 // Re-export compressor lookup functions
 pub use strategy::bash::compressor_for as bash_compressor_for;

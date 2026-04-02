@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::ClaudeToolCompressor;
+use super::ToolCompressor;
 
 /// Below this threshold, leave output as-is.
 const SMALL_THRESHOLD: usize = 30;
@@ -33,7 +33,7 @@ const MAX_RESULTS: usize = 50;
 
 pub struct GlobCompressor;
 
-impl ClaudeToolCompressor for GlobCompressor {
+impl ToolCompressor for GlobCompressor {
     fn compress(&self, _arguments: &str, output: &str) -> Option<String> {
         let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
 

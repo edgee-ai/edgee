@@ -6,11 +6,11 @@
 
 mod read;
 
-use super::claude::ClaudeToolCompressor;
+use super::ToolCompressor;
 
 /// Select the appropriate compressor for an OpenCode tool name.
 /// Returns `None` for tools we don't compress.
-pub fn compressor_for(tool_name: &str) -> Option<&'static dyn ClaudeToolCompressor> {
+pub fn compressor_for(tool_name: &str) -> Option<&'static dyn ToolCompressor> {
     match tool_name {
         "bash" => super::claude::compressor_for("Bash"),
         "read" => Some(&read::ReadCompressor),

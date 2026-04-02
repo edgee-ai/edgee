@@ -16,7 +16,7 @@
 
 use std::path::Path;
 
-use crate::strategy::claude::ClaudeToolCompressor;
+use crate::strategy::ToolCompressor;
 use crate::strategy::claude::read::{Language, filter_minimal};
 
 /// Below this many content lines, don't compress at all.
@@ -24,7 +24,7 @@ const SMALL_THRESHOLD: usize = 50;
 
 pub struct ReadCompressor;
 
-impl ClaudeToolCompressor for ReadCompressor {
+impl ToolCompressor for ReadCompressor {
     fn compress(&self, _arguments: &str, output: &str) -> Option<String> {
         let file_path = extract_path(output);
         let raw_content = extract_content(output)?;

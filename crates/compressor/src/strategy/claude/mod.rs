@@ -1,24 +1,18 @@
 //! Claude Code tool output compressors.
 //!
 //! Each Claude Code tool that can be compressed gets its own module
-//! implementing the `ClaudeToolCompressor` trait.
+//! implementing the `ToolCompressor` trait.
 
 mod bash;
 mod glob;
 mod grep;
 pub(crate) mod read;
 
-/// Trait for compressing the output of a specific Claude Code tool.
-pub trait ClaudeToolCompressor {
-    /// Compress tool output.
-    /// `arguments` is the raw JSON string from tool_call.function.arguments.
-    /// Returns `Some(compressed)` if compression was applied, `None` to leave as-is.
-    fn compress(&self, arguments: &str, output: &str) -> Option<String>;
-}
+pub use super::ToolCompressor;
 
 /// Select the appropriate compressor for a Claude Code tool name.
 /// Returns `None` for tools we don't compress.
-pub fn compressor_for(tool_name: &str) -> Option<&'static dyn ClaudeToolCompressor> {
+pub fn compressor_for(tool_name: &str) -> Option<&'static dyn ToolCompressor> {
     match tool_name {
         "Bash" => Some(&bash::BashCompressor),
         "Read" => Some(&read::ReadCompressor),
