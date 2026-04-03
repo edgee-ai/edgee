@@ -286,11 +286,9 @@ pub struct ReadCompressor;
 
 impl ToolCompressor for ReadCompressor {
     fn compress(&self, arguments: &str, output: &str) -> Option<String> {
-        // Strip line number prefixes to get raw content
-        let content = strip_line_numbers(output);
-        let lines: Vec<&str> = content.lines().collect();
+        let (fmt, numbered) = parse_numbered_lines(output);
 
-        if lines.len() < SMALL_THRESHOLD {
+        if numbered.len() < SMALL_THRESHOLD {
             return None;
         }
 
@@ -303,16 +301,16 @@ impl ToolCompressor for ReadCompressor {
             .map(Language::from_extension)
             .unwrap_or(Language::Unknown);
 
-        // Aggressive mode disabled for now — only apply minimal filtering
-        let compressed = filter_minimal(&content, &lang);
+        let filtered = filter_minimal_numbered(&numbered, &lang);
 
-        // Check if compressed is empty
-        if compressed.is_empty() {
+        if filtered.is_empty() {
             return None;
         }
 
+        let compressed = format_numbered_lines(&filtered, fmt);
+
         // Only return if we actually saved something meaningful (>10%)
-        let threshold = content.len() * 9 / 10;
+        let threshold = output.len() * 9 / 10;
         if compressed.len() >= threshold {
             return None;
         }
@@ -321,34 +319,169 @@ impl ToolCompressor for ReadCompressor {
     }
 }
 
-/// Strip `cat -n` line number prefixes. Format: optional whitespace + number + tab + content.
-fn strip_line_numbers(output: &str) -> String {
-    let mut result = String::with_capacity(output.len());
-    for line in output.lines() {
-        // Try tab first (standard format)
-        if let Some(pos) = line.find('\t') {
-            // Verify the prefix is whitespace + digits
-            if line[..pos].trim().chars().all(|c| c.is_ascii_digit()) {
-                result.push_str(&line[pos + 1..]);
-                result.push('\n');
-                continue;
-            }
-        }
+/// Which separator character the input uses for line numbers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LineFormat {
+    /// Standard `cat -n`: `"     1\tcontent"`
+    Tab,
+    /// Claude Code Read tool: `"     1→content"`
+    Arrow,
+    /// OpenCode Read tool: `"1:content"`
+    Colon,
+}
 
-        // Try arrow character (alternative format: "123→content")
-        if let Some(pos) = line.find('→') {
-            // Verify the prefix is whitespace + digits
-            if line[..pos].trim().chars().all(|c| c.is_ascii_digit()) {
-                result.push_str(&line[pos + '→'.len_utf8()..]);
-                result.push('\n');
-                continue;
-            }
-        }
+/// Parse numbered-line output into (line_number, content) pairs,
+/// also returning the detected format so the caller can round-trip faithfully.
+/// Supports tab (`     1\t`), arrow (`1→`), and colon (`1:`) formats.
+pub(crate) fn parse_numbered_lines(output: &str) -> (LineFormat, Vec<(Option<usize>, String)>) {
+    let mut format = LineFormat::Tab; // default; overridden on first numbered line
+    let mut format_detected = false;
 
-        // No line number found, keep as-is
-        result.push_str(line);
-        result.push('\n');
+    let lines = output
+        .lines()
+        .map(|line| {
+            // Arrow format: "1→content"
+            if let Some(pos) = line.find('→') {
+                let prefix = line[..pos].trim();
+                if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+                    if !format_detected {
+                        format = LineFormat::Arrow;
+                        format_detected = true;
+                    }
+                    let num = prefix.parse::<usize>().ok();
+                    return (num, line[pos + '→'.len_utf8()..].to_string());
+                }
+            }
+            // Colon format: "1:content"
+            if let Some(pos) = line.find(':') {
+                let prefix = line[..pos].trim();
+                if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+                    if !format_detected {
+                        format = LineFormat::Colon;
+                        format_detected = true;
+                    }
+                    let num = prefix.parse::<usize>().ok();
+                    return (num, line[pos + 1..].to_string());
+                }
+            }
+            // Tab format: "     1\tcontent"
+            if let Some(pos) = line.find('\t') {
+                let prefix = line[..pos].trim();
+                if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+                    if !format_detected {
+                        format = LineFormat::Tab;
+                        format_detected = true;
+                    }
+                    let num = prefix.parse::<usize>().ok();
+                    return (num, line[pos + 1..].to_string());
+                }
+            }
+            (None, line.to_string())
+        })
+        .collect();
+
+    (format, lines)
+}
+
+/// Format (line_number, content) pairs back using the same style as the original input.
+pub(crate) fn format_numbered_lines(
+    lines: &[(Option<usize>, String)],
+    format: LineFormat,
+) -> String {
+    let mut parts = Vec::with_capacity(lines.len());
+    for (num, content) in lines {
+        if let Some(n) = num {
+            let s = match format {
+                LineFormat::Tab => format!("{n:>6}\t{content}"),
+                LineFormat::Arrow => format!("{n:>6}→{content}"),
+                LineFormat::Colon => format!("{n}:{content}"),
+            };
+            parts.push(s);
+        } else {
+            parts.push(content.clone());
+        }
     }
+    parts.join("\n")
+}
+
+/// Filter numbered lines, stripping comments while preserving original line numbers.
+pub(crate) fn filter_minimal_numbered(
+    lines: &[(Option<usize>, String)],
+    lang: &Language,
+) -> Vec<(Option<usize>, String)> {
+    let patterns = lang.comment_patterns();
+    let mut result: Vec<(Option<usize>, String)> = Vec::new();
+    let mut in_block_comment = false;
+    let mut in_docstring = false;
+    let mut consecutive_blanks: usize = 0;
+
+    for (num, line) in lines {
+        let trimmed = line.trim();
+
+        // Handle block comments
+        if let (Some(start), Some(end)) = (patterns.block_start, patterns.block_end) {
+            if !in_docstring
+                && trimmed.contains(start)
+                && !trimmed.starts_with(patterns.doc_block_start.unwrap_or("###"))
+            {
+                in_block_comment = true;
+            }
+            if in_block_comment {
+                if trimmed.contains(end) {
+                    in_block_comment = false;
+                }
+                continue;
+            }
+        }
+
+        // Handle Python docstrings (keep them)
+        if *lang == Language::Python && trimmed.starts_with("\"\"\"") {
+            in_docstring = !in_docstring;
+            consecutive_blanks = 0;
+            result.push((*num, line.clone()));
+            continue;
+        }
+
+        if in_docstring {
+            consecutive_blanks = 0;
+            result.push((*num, line.clone()));
+            continue;
+        }
+
+        // Skip single-line comments (but keep doc comments)
+        if let Some(line_comment) = patterns.line
+            && trimmed.starts_with(line_comment)
+        {
+            if let Some(doc) = patterns.doc_line
+                && trimmed.starts_with(doc)
+            {
+                consecutive_blanks = 0;
+                result.push((*num, line.clone()));
+            }
+            continue;
+        }
+
+        // Blank lines: collapse to at most 2 consecutive
+        if trimmed.is_empty() {
+            if consecutive_blanks < 2 {
+                result.push((*num, line.clone()));
+                consecutive_blanks += 1;
+            }
+            continue;
+        }
+
+        consecutive_blanks = 0;
+        result.push((*num, line.clone()));
+    }
+
+    // Trim leading/trailing blank lines
+    while result.first().is_some_and(|(_, l)| l.trim().is_empty()) {
+        result.remove(0);
+    }
+    while result.last().is_some_and(|(_, l)| l.trim().is_empty()) {
+        result.pop();
+    }
+
     result
 }
 
@@ -439,25 +572,46 @@ mod tests {
     }
 
     #[test]
-    fn test_strips_line_numbers() {
-        let input = "     1\tuse std::io;\n     2\t\n     3\tfn main() {\n";
-        let result = strip_line_numbers(input);
-        assert_eq!(result, "use std::io;\n\nfn main() {\n");
+    fn test_compressed_output_preserves_line_numbers() {
+        let output = make_rust_file(60);
+        let compressor = ReadCompressor;
+        let compressed = compressor.compress(&make_args("/src/main.rs"), &output).unwrap();
+        // Line 3 (comment) is stripped; line 4 (doc comment) should keep number 4.
+        assert!(
+            compressed.contains("4\t/// Doc comment"),
+            "doc comment should keep line number 4"
+        );
+        assert!(
+            compressed.contains("1\tuse std::io;"),
+            "import should keep line number 1"
+        );
+        // Stripped comment must not appear
+        assert!(!compressed.contains("// This is a comment"));
     }
 
     #[test]
-    fn test_strips_line_numbers_preserves_non_numbered() {
-        let input = "not numbered\n     1\tnumbered\n";
-        let result = strip_line_numbers(input);
-        assert_eq!(result, "not numbered\nnumbered\n");
+    fn test_parse_numbered_lines() {
+        let input = "1:use std::io;\n2:\n3:fn main() {\n";
+        let (fmt, result) = parse_numbered_lines(input);
+        assert_eq!(fmt, LineFormat::Colon);
+        assert_eq!(result[0], (Some(1), "use std::io;".to_string()));
+        assert_eq!(result[1], (Some(2), "".to_string()));
+        assert_eq!(result[2], (Some(3), "fn main() {".to_string()));
     }
 
     #[test]
-    fn test_strips_line_numbers_with_arrow_format() {
-        // Test the arrow format: "123→content"
-        let input = " 1→use std::io;\n 2→\n 3→fn main() {\n";
-        let result = strip_line_numbers(input);
-        assert_eq!(result, "use std::io;\n\nfn main() {\n");
+    fn test_parse_numbered_lines_non_numbered() {
+        let input = "not numbered\n1:numbered\n";
+        let (_, result) = parse_numbered_lines(input);
+        assert_eq!(result[0], (None, "not numbered".to_string()));
+        assert_eq!(result[1], (Some(1), "numbered".to_string()));
+    }
+
+    #[test]
+    fn test_parse_numbered_lines_content_with_colons() {
+        let input = "10:http://example.com\n";
+        let (_, result) = parse_numbered_lines(input);
+        assert_eq!(result[0], (Some(10), "http://example.com".to_string()));
     }
 
     #[test]

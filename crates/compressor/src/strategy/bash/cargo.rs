@@ -48,6 +48,35 @@ fn parse_cargo_subcommand(command: &str) -> &str {
     ""
 }
 
+/// Returns true for decorative lines in Rust compiler diagnostics that carry no
+/// actionable information: pure pipe separator lines (`  |`), unlabeled
+/// caret/dash annotation lines (`  |  ^^^^^^^`), and
+/// "For more information about this error, try ..." footers.
+fn is_decorative_diagnostic_line(line: &str) -> bool {
+    let trimmed = line.trim();
+
+    // Pure pipe separator: trimmed is exactly "|" or "|" followed only by spaces
+    let is_pipe_only =
+        trimmed == "|" || (trimmed.starts_with('|') && trimmed[1..].chars().all(|c| c == ' '));
+
+    // Unlabeled caret/dash annotation: `|  ^^^^^^^` or `|  -------` with no text label after.
+    // Labeled annotations like `|  ^ argument #6 of type ... is missing` are kept.
+    let is_pure_caret = if let Some(after_pipe_raw) = trimmed.strip_prefix('|') {
+        let after_pipe = after_pipe_raw.trim_start();
+        !after_pipe.is_empty()
+            && after_pipe
+                .chars()
+                .all(|c| matches!(c, '^' | '-' | '~' | '_' | ' '))
+    } else {
+        false
+    };
+
+    // "For more information about this error, try `rustc --explain ...`"
+    let is_more_info = trimmed.starts_with("For more information about this error");
+
+    is_pipe_only || is_pure_caret || is_more_info
+}
+
 fn is_noise_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with("Compiling")
@@ -100,7 +129,9 @@ fn filter_cargo_build(output: &str) -> String {
             in_error = true;
             current_error.push(line.to_string());
         } else if in_error {
-            if line.trim().is_empty() && current_error.len() > 3 {
+            if is_decorative_diagnostic_line(line) {
+                continue;
+            } else if line.trim().is_empty() && current_error.len() > 3 {
                 errors.push(current_error.join("\n"));
                 current_error.clear();
                 in_error = false;

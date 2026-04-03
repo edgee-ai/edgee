@@ -17,7 +17,9 @@
 use std::path::Path;
 
 use crate::strategy::ToolCompressor;
-use crate::strategy::claude::read::{Language, filter_minimal};
+use crate::strategy::claude::read::{
+    Language, filter_minimal_numbered, format_numbered_lines, parse_numbered_lines,
+};
 
 /// Below this many content lines, don't compress at all.
 const SMALL_THRESHOLD: usize = 50;
@@ -28,10 +30,9 @@ impl ToolCompressor for ReadCompressor {
     fn compress(&self, _arguments: &str, output: &str) -> Option<String> {
         let file_path = extract_path(output);
         let raw_content = extract_content(output)?;
-        let content = strip_line_numbers(&raw_content);
-        let lines: Vec<&str> = content.lines().collect();
+        let (fmt, numbered) = parse_numbered_lines(&raw_content);
 
-        if lines.len() < SMALL_THRESHOLD {
+        if numbered.len() < SMALL_THRESHOLD {
             return None;
         }
 
@@ -42,15 +43,16 @@ impl ToolCompressor for ReadCompressor {
             .map(Language::from_extension)
             .unwrap_or(Language::Unknown);
 
-        // Aggressive mode disabled for now — only apply minimal filtering
-        let compressed = filter_minimal(&content, &lang);
+        let filtered = filter_minimal_numbered(&numbered, &lang);
 
-        if compressed.is_empty() {
+        if filtered.is_empty() {
             return None;
         }
 
+        let compressed = format_numbered_lines(&filtered, fmt);
+
         // Only return if we actually saved something meaningful (>10%)
-        let threshold = content.len() * 9 / 10;
+        let threshold = raw_content.len() * 9 / 10;
         if compressed.len() >= threshold {
             return None;
         }
@@ -73,26 +75,10 @@ fn extract_content(output: &str) -> Option<String> {
     Some(output[start..end].to_string())
 }
 
-/// Strip OpenCode line number prefixes. Format: `N:content`.
-fn strip_line_numbers(content: &str) -> String {
-    let mut result = String::with_capacity(content.len());
-    for line in content.lines() {
-        if let Some(colon_pos) = line.find(':')
-            && line[..colon_pos].trim().chars().all(|c| c.is_ascii_digit())
-        {
-            result.push_str(&line[colon_pos + 1..]);
-            result.push('\n');
-            continue;
-        }
-        result.push_str(line);
-        result.push('\n');
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strategy::claude::read::LineFormat;
 
     fn make_output(path: &str, lines: usize) -> String {
         let mut content = String::new();
@@ -143,25 +129,46 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_line_numbers() {
+    fn test_parse_numbered_lines() {
         let input = "1:use std::io;\n2:\n3:fn main() {\n";
-        let result = strip_line_numbers(input);
-        assert_eq!(result, "use std::io;\n\nfn main() {\n");
+        let (fmt, result) = parse_numbered_lines(input);
+        assert_eq!(fmt, LineFormat::Colon);
+        assert_eq!(result[0], (Some(1), "use std::io;".to_string()));
+        assert_eq!(result[1], (Some(2), "".to_string()));
+        assert_eq!(result[2], (Some(3), "fn main() {".to_string()));
     }
 
     #[test]
-    fn test_strip_line_numbers_preserves_non_numbered() {
+    fn test_parse_numbered_lines_non_numbered() {
         let input = "not numbered\n1:numbered\n";
-        let result = strip_line_numbers(input);
-        assert_eq!(result, "not numbered\nnumbered\n");
+        let (_, result) = parse_numbered_lines(input);
+        assert_eq!(result[0], (None, "not numbered".to_string()));
+        assert_eq!(result[1], (Some(1), "numbered".to_string()));
     }
 
     #[test]
-    fn test_strip_line_numbers_content_with_colons() {
-        // Content itself contains colons — only the first colon is the separator
+    fn test_parse_numbered_lines_content_with_colons() {
         let input = "10:http://example.com\n";
-        let result = strip_line_numbers(input);
-        assert_eq!(result, "http://example.com\n");
+        let (_, result) = parse_numbered_lines(input);
+        assert_eq!(result[0], (Some(10), "http://example.com".to_string()));
+    }
+
+    #[test]
+    fn test_compressed_output_preserves_line_numbers() {
+        let output = make_output("/src/main.rs", 60);
+        let compressor = ReadCompressor;
+        let compressed = compressor.compress("{}", &output).unwrap();
+        // Line 3 (comment) is stripped; line 4 (doc comment) should keep number 4.
+        assert!(
+            compressed.contains("4:/// Doc comment"),
+            "doc comment should keep line number 4"
+        );
+        assert!(
+            compressed.contains("1:use std::io;"),
+            "import should keep line number 1"
+        );
+        // Stripped comment must not appear
+        assert!(!compressed.contains("// This is a comment"));
     }
 
     #[test]

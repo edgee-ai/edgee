@@ -16,6 +16,7 @@ mod ls;
 mod npm;
 mod psql;
 mod pytest;
+mod rg;
 mod tree;
 mod tsc;
 
@@ -33,7 +34,8 @@ pub fn compressor_for(base_command: &str) -> Option<&'static dyn BashCompressor>
         "ls" => Some(&ls::LsCompressor),
         "tree" => Some(&tree::TreeCompressor),
         "find" => Some(&find::FindCompressor),
-        "grep" | "rg" => Some(&grep::GrepCompressor),
+        "grep" => Some(&grep::GrepCompressor),
+        "rg" => Some(&rg::RgCompressor),
         "diff" | "git" => Some(&diff::DiffCompressor),
         "cargo" => Some(&cargo::CargoCompressor),
         "docker" => Some(&docker::DockerCompressor),
