@@ -9,6 +9,7 @@ enum Command {
     /// Launch Codex routed through Edgee
     Codex(codex::Options),
     /// Launch OpenCode routed through Edgee
+    #[command(name = "opencode")]
     OpenCode(opencode::Options),
 }
 
