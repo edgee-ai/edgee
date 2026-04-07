@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 
 pub struct ApiClient {
@@ -23,6 +24,29 @@ struct ListResponse<T> {
 pub struct ApiKeyItem {
     pub id: String,
     pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStats {
+    pub total_requests: u64,
+    pub total_cost: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cached_input_tokens: u64,
+    pub total_cache_creation_input_tokens: u64,
+    pub total_reasoning_output_tokens: u64,
+    pub total_token_cost_savings: u64,
+    pub total_errors: u64,
+    pub total_uncompressed_tools_tokens: u64,
+    pub total_compressed_tools_tokens: u64,
+    pub tool_compression_stats: Option<HashMap<String, ToolCompressionStat>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCompressionStat {
+    pub count: u64,
+    pub before: u64,
+    pub after: u64,
 }
 
 impl ApiClient {
@@ -79,6 +103,21 @@ impl ApiClient {
             .context("Failed to get or create API key")?;
         check_status(&resp, "get or create API key")?;
         resp.json().await.context("Invalid API key response")
+    }
+
+    pub async fn get_session_stats(&self, org_id: &str, session_id: &str) -> Result<SessionStats> {
+        let url = format!(
+            "{}/v1/organizations/{}/sessions/{}/end",
+            self.base_url, org_id, session_id
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .send()
+            .await
+            .context("Failed to get session stats")?;
+        check_status(&resp, "get session stats")?;
+        resp.json().await.context("Invalid session stats response")
     }
 }
 
