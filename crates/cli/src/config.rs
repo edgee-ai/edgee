@@ -22,6 +22,7 @@ pub struct Credentials {
     pub org_id: Option<String>,
     pub claude: Option<ProviderConfig>,
     pub codex: Option<ProviderConfig>,
+    pub opencode: Option<ProviderConfig>,
 }
 
 pub fn credentials_path() -> PathBuf {

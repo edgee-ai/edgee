@@ -135,10 +135,7 @@ pub async fn ensure_provider_key(provider: &str) -> Result<()> {
     let org_id = creds.org_id.as_deref().filter(|t| !t.is_empty())
         .ok_or_else(|| anyhow::anyhow!("No organization selected. Run `edgee auth login` first."))?;
 
-    let assistant_name = match provider {
-        "codex" => "codex",
-        _ => "claude_code",
-    };
+    let assistant_name = coding_assistant_name(provider)?;
 
     let client = crate::api::ApiClient::new(user_token)?;
     let key_item = client.get_or_create_key(org_id, assistant_name).await
@@ -151,13 +148,31 @@ pub async fn ensure_provider_key(provider: &str) -> Result<()> {
         api_key_id: Some(key_item.id),
         connection: None,
     };
-    match provider {
-        "codex" => creds.codex = Some(provider_config),
-        _ => creds.claude = Some(provider_config),
-    }
+    provider_config_mut(&mut creds, provider)?.replace(provider_config);
     crate::config::write(&creds)?;
 
     Ok(())
+}
+
+fn coding_assistant_name(provider: &str) -> Result<&'static str> {
+    match provider {
+        "claude" => Ok("claude_code"),
+        "codex" => Ok("codex"),
+        "opencode" => Ok("opencode"),
+        _ => anyhow::bail!("Unsupported provider `{provider}`"),
+    }
+}
+
+fn provider_config_mut<'a>(
+    creds: &'a mut crate::config::Credentials,
+    provider: &str,
+) -> Result<&'a mut Option<crate::config::ProviderConfig>> {
+    match provider {
+        "claude" => Ok(&mut creds.claude),
+        "codex" => Ok(&mut creds.codex),
+        "opencode" => Ok(&mut creds.opencode),
+        _ => anyhow::bail!("Unsupported provider `{provider}`"),
+    }
 }
 
 async fn browser_auth() -> Result<(String, Option<String>, Option<String>)> {
@@ -309,4 +324,36 @@ fn percent_decode(s: &str) -> String {
         out.push(if c == '+' { ' ' } else { c });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_provider_to_coding_assistant_name() {
+        assert_eq!(coding_assistant_name("claude").unwrap(), "claude_code");
+        assert_eq!(coding_assistant_name("codex").unwrap(), "codex");
+        assert_eq!(coding_assistant_name("opencode").unwrap(), "opencode");
+        assert!(coding_assistant_name("unknown").is_err());
+    }
+
+    #[test]
+    fn selects_the_correct_provider_slot() {
+        let mut creds = crate::config::Credentials::default();
+
+        provider_config_mut(&mut creds, "claude")
+            .unwrap()
+            .replace(crate::config::ProviderConfig::default());
+        provider_config_mut(&mut creds, "codex")
+            .unwrap()
+            .replace(crate::config::ProviderConfig::default());
+        provider_config_mut(&mut creds, "opencode")
+            .unwrap()
+            .replace(crate::config::ProviderConfig::default());
+
+        assert!(creds.claude.is_some());
+        assert!(creds.codex.is_some());
+        assert!(creds.opencode.is_some());
+    }
 }
