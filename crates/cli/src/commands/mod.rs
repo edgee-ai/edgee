@@ -8,6 +8,8 @@ setup_commands! {
     Auth(auth),
     /// Launch an AI tool routed through Edgee
     Launch(launch),
+    /// Show stored session stats
+    Stats(stats),
     /// Reset Edgee credentials and connection mode
     Reset(reset),
     [cfg(feature = "self-update")]
