@@ -58,9 +58,21 @@ fn fmt_tokens(n: u64) -> String {
 }
 
 fn fmt_cost(nanodollars: u64) -> String {
-    let dollars = nanodollars / 1_000_000_000;
-    let frac = nanodollars % 1_000_000_000;
-    format!("${}.{:09}", dollars, frac)
+    let micros = (nanodollars + 500) / 1_000;
+    let s = format!("{}.{:06}", micros / 1_000_000, micros % 1_000_000);
+    let dot = s.find('.').unwrap();
+    let min_end = dot + 3; // keep at least X.XX
+    let trimmed_len = s.trim_end_matches('0').len().max(min_end);
+    format!("${}", &s[..trimmed_len])
+}
+
+pub fn fmt_timestamp(ts: &str) -> String {
+    // Convert RFC3339 "2024-01-15T10:30:45+00:00" → "2024-01-15 10:30"
+    if ts.len() >= 16 {
+        ts[..16].replace('T', " ")
+    } else {
+        ts.to_string()
+    }
 }
 
 fn compression_pct(before: u64, after: u64) -> u64 {
@@ -68,6 +80,16 @@ fn compression_pct(before: u64, after: u64) -> u64 {
         return 0;
     }
     (before - after) * 100 / before
+}
+
+pub fn fmt_bar(pct: u64, width: usize) -> String {
+    let filled = (pct as usize * width / 100).min(width);
+    let empty = width - filled;
+    format!(
+        "{}{}",
+        style("█".repeat(filled)).green(),
+        style("░".repeat(empty)).dim()
+    )
 }
 
 pub fn session_logs_dir() -> PathBuf {
@@ -165,7 +187,7 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
         style("Tool").bold().underlined(),
         style(&entry.tool_name).cyan(),
         style("Ended").bold().underlined(),
-        style(&entry.ended_at).dim(),
+        style(fmt_timestamp(&entry.ended_at)).dim(),
     );
     println!(
         "  {} {}",
@@ -177,24 +199,27 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
 
     println!();
     let error_note = if stats.total_errors > 0 {
-        format!(" · {} errors", style(stats.total_errors).red())
+        format!("  ·  {} errors", style(stats.total_errors).red())
+    } else {
+        String::new()
+    };
+    let savings_note = if stats.total_token_cost_savings > 0 {
+        format!(
+            "  {}  {}",
+            style("·  saved").dim(),
+            style(fmt_cost(stats.total_token_cost_savings)).green()
+        )
     } else {
         String::new()
     };
     println!(
-        "  {}  {} requests{}  ·  {}",
+        "  {}  {} requests  ·  {}{}{}",
         style("Overview").bold().underlined(),
         style(stats.total_requests).cyan(),
-        error_note,
         style(fmt_cost(stats.total_cost)).cyan(),
+        savings_note,
+        error_note,
     );
-    if stats.total_token_cost_savings > 0 {
-        println!(
-            "           {} {}",
-            style("saved").dim(),
-            style(fmt_cost(stats.total_token_cost_savings)).green(),
-        );
-    }
 
     println!();
     println!("  {}", style("Tokens").bold().underlined());
@@ -244,10 +269,11 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
             stats.total_compressed_tools_tokens,
         );
         println!(
-            "  Tools   {} -> {}  {}",
+            "  Tools   {} -> {}  {} {}% saved",
             style(fmt_tokens(stats.total_uncompressed_tools_tokens)).dim(),
             style(fmt_tokens(stats.total_compressed_tools_tokens)).cyan(),
-            style(format!("({}% saved)", pct)).green(),
+            fmt_bar(pct, 20),
+            style(pct).green(),
         );
 
         if let Some(tool_stats) = &stats.tool_compression_stats {
@@ -259,12 +285,13 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
                 for (name, ts) in &tools {
                     let pct = compression_pct(ts.before, ts.after);
                     println!(
-                        "  {:<20} {} calls   {} -> {}  {}",
+                        "  {:<20} {} calls   {} -> {}  {} {}% saved",
                         style(name.as_str()).cyan(),
                         ts.count,
                         style(fmt_tokens(ts.before)).dim(),
                         style(fmt_tokens(ts.after)).cyan(),
-                        style(format!("({}% saved)", pct)).green(),
+                        fmt_bar(pct, 10),
+                        style(pct).green(),
                     );
                 }
             }

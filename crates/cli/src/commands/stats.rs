@@ -8,9 +8,12 @@ setup_command! {
 }
 
 fn fmt_cost(nanodollars: u64) -> String {
-    let dollars = nanodollars / 1_000_000_000;
-    let frac = nanodollars % 1_000_000_000;
-    format!("${}.{:09}", dollars, frac)
+    let micros = (nanodollars + 500) / 1_000;
+    let s = format!("{}.{:06}", micros / 1_000_000, micros % 1_000_000);
+    let dot = s.find('.').unwrap();
+    let min_end = dot + 3;
+    let trimmed_len = s.trim_end_matches('0').len().max(min_end);
+    format!("${}", &s[..trimmed_len])
 }
 
 fn fmt_tokens(n: u64) -> String {
@@ -47,12 +50,13 @@ pub async fn run(opts: Options) -> Result<()> {
 
     println!();
     println!(
-        "  {} {} stored sessions",
+        "  {}  ·  {} sessions",
         style("Edgee stats").bold(),
         style(logs.len()).cyan()
     );
+    println!();
     println!(
-        "  {} {}  {} {}  {} {}",
+        "  {}  {}    {}  {}    {}  {}",
         style("Requests").bold().underlined(),
         style(total_requests).cyan(),
         style("Cost").bold().underlined(),
@@ -61,16 +65,16 @@ pub async fn run(opts: Options) -> Result<()> {
         style(fmt_cost(total_savings)).green(),
     );
     println!(
-        "  {} {}  {} {}  {} {}",
-        style("Input").bold().underlined(),
+        "  {}     {}    {}  {}    {}  {}",
+        style("In").bold().underlined(),
         style(fmt_tokens(total_input_tokens)).cyan(),
-        style("Output").bold().underlined(),
+        style("Out").bold().underlined(),
         style(fmt_tokens(total_output_tokens)).cyan(),
         style("Errors").bold().underlined(),
         if total_errors > 0 {
-            style(total_errors).red()
+            style(total_errors.to_string()).red()
         } else {
-            style(total_errors).green()
+            style(total_errors.to_string()).dim()
         },
     );
 
@@ -88,9 +92,13 @@ pub async fn run(opts: Options) -> Result<()> {
             let pct = (stats.total_uncompressed_tools_tokens - stats.total_compressed_tools_tokens)
                 * 100
                 / stats.total_uncompressed_tools_tokens;
-            style(format!("{pct}%")).green().to_string()
+            format!(
+                "{} {}%",
+                crate::commands::launch::fmt_bar(pct, 8),
+                style(pct).green()
+            )
         } else {
-            style("-").dim().to_string()
+            format!("{}  -", style("░".repeat(8)).dim())
         };
         let errors = if stats.total_errors > 0 {
             style(stats.total_errors).red().to_string()
@@ -99,21 +107,16 @@ pub async fn run(opts: Options) -> Result<()> {
         };
 
         println!(
-            "  {}  {}  {} req  {}  in {}  out {}  saved {}  cmp {}  err {}",
-            style(&entry.ended_at).dim(),
+            "  {}  {}  {:>4} req  {}  in {}  out {}  saved {}  {}  err {}",
+            style(crate::commands::launch::fmt_timestamp(&entry.ended_at)).dim(),
             style(format!("{:<8}", entry.tool_name)).cyan(),
-            style(format!("{:>4}", stats.total_requests)).cyan(),
-            style(format!("{:>13}", fmt_cost(stats.total_cost))).cyan(),
+            style(stats.total_requests).cyan(),
+            style(format!("{:>10}", fmt_cost(stats.total_cost))).cyan(),
             style(format!("{:>9}", fmt_tokens(stats.total_input_tokens))).cyan(),
             style(format!("{:>9}", fmt_tokens(stats.total_output_tokens))).cyan(),
-            style(format!("{:>13}", fmt_cost(stats.total_token_cost_savings))).green(),
+            style(format!("{:>10}", fmt_cost(stats.total_token_cost_savings))).green(),
             compression,
             errors,
-        );
-        println!(
-            "  {} {}",
-            style("session").dim(),
-            style(&entry.session_id).dim()
         );
     }
     println!();
