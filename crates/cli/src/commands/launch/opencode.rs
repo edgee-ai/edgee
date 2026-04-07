@@ -129,14 +129,20 @@ fn build_edgee_provider(api_key: &str, session_id: &str, gateway_url: &str) -> V
             }
         },
         "models": {
-            "anthropic/claude-sonnet-4-5-20250514": {
-                "name": "Claude Sonnet 4.5 (via Edgee)"
+            "anthropic/claude-haiku-4-5": {
+                "name": "Claude Haiku 4.5 (via Edgee)"
             },
-            "openai/gpt-5": {
-                "name": "GPT-5 (via Edgee)"
+            "anthropic/claude-opus-4-6": {
+                "name": "Claude Opus 4.6 (via Edgee)"
             },
-            "openai/gpt-4o": {
-                "name": "GPT-4o (via Edgee)"
+            "anthropic/claude-sonnet-4-6": {
+                "name": "Claude Sonnet 4.6 (via Edgee)"
+            },
+            "openai/gpt-5.4": {
+                "name": "GPT-5.4 (via Edgee)"
+            },
+            "openai/gpt-5.3-codex": {
+                "name": "GPT-5.3 Codex (via Edgee)"
             },
         }
     })
