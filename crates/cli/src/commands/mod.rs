@@ -4,6 +4,8 @@ mod macros;
 setup_commands! {
     /// Initialize a new Edgee project
     Init(init),
+    /// Install shell aliases for Edgee launch commands
+    Alias(alias),
     /// Authenticate with Edgee
     Auth(auth),
     /// Launch an AI tool routed through Edgee

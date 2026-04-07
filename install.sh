@@ -205,6 +205,7 @@ download_and_install() {
   ${_bold}Get started:${_normal}
 
     ${_cyan}edgee auth login${_normal}   ${_dim}# authenticate with your Edgee account${_normal}
+    ${_cyan}edgee alias${_normal}        ${_dim}# optionally install shell aliases for launch commands${_normal}
     ${_cyan}edgee launch claude${_normal} ${_dim}# launch Claude Code with token compression${_normal}
     ${_cyan}edgee --help${_normal}        ${_dim}# show all available commands${_normal}
 
