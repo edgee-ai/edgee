@@ -26,6 +26,16 @@ pub async fn run(_opts: Options) -> Result<()> {
         style("Config:").dim(),
         style(crate::config::credentials_path().display()).dim()
     );
+    let env_label = match crate::config::active_env() {
+        crate::config::Env::Production => "production",
+        crate::config::Env::Staging => "staging",
+        crate::config::Env::Dev => "dev",
+    };
+    println!(
+        "   {}     {}",
+        style("Env:").dim(),
+        style(env_label).cyan()
+    );
 
     match &creds.email {
         Some(e) if !e.is_empty() => println!(

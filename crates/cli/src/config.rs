@@ -25,6 +25,36 @@ pub struct Credentials {
     pub opencode: Option<ProviderConfig>,
 }
 
+/// Top-level credentials file structure.
+/// Production credentials are stored at the root (flattened).
+/// Optional [staging] and [dev] tables hold per-profile credentials.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct CredentialsFile {
+    #[serde(flatten)]
+    pub production: Credentials,
+    pub staging: Option<Credentials>,
+    pub dev: Option<Credentials>,
+}
+
+/// Which environment to target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum Env {
+    #[default]
+    Production,
+    Staging,
+    Dev,
+}
+
+static ACTIVE_ENV: std::sync::OnceLock<Env> = std::sync::OnceLock::new();
+
+pub fn set_env(env: Env) {
+    let _ = ACTIVE_ENV.set(env);
+}
+
+pub fn active_env() -> Env {
+    *ACTIVE_ENV.get_or_init(|| Env::Production)
+}
+
 pub fn credentials_path() -> PathBuf {
     #[cfg(windows)]
     {
@@ -51,6 +81,7 @@ struct CredentialsV1 {
     pub org_slug: Option<String>,
 }
 
+/// Migrate legacy (v1/v2) TOML content to a current-version Credentials.
 fn migrate(content: &str) -> Result<(Credentials, bool)> {
     #[derive(Deserialize, Default)]
     struct VersionProbe {
@@ -89,27 +120,80 @@ fn migrate(content: &str) -> Result<(Credentials, bool)> {
     }
 }
 
+/// Parse the credentials file into a CredentialsFile, handling legacy formats.
+fn parse_credentials_file(content: &str) -> Result<(CredentialsFile, bool)> {
+    #[derive(Deserialize, Default)]
+    struct VersionProbe {
+        version: Option<u32>,
+    }
+    let probe: VersionProbe = toml::from_str(content).unwrap_or_default();
+
+    match probe.version {
+        None | Some(1) | Some(2) => {
+            // Legacy format: only has production credentials
+            let (prod_creds, _) = migrate(content)?;
+            let file = CredentialsFile {
+                production: prod_creds,
+                ..Default::default()
+            };
+            Ok((file, true))
+        }
+        Some(v) if v == CURRENT_VERSION => {
+            let file: CredentialsFile = toml::from_str(content)?;
+            Ok((file, false))
+        }
+        Some(v) => anyhow::bail!("Unsupported credentials version {v}; please upgrade the CLI"),
+    }
+}
+
 pub fn read() -> Result<Credentials> {
     let path = credentials_path();
     if !path.exists() {
         return Ok(Credentials::default());
     }
     let content = fs::read_to_string(&path)?;
-    let (creds, migrated) = migrate(&content)?;
+    let (file, migrated) = parse_credentials_file(&content)?;
     if migrated {
-        write(&creds)?;
+        write_file(&file)?;
     }
+    let creds = match active_env() {
+        Env::Production => file.production,
+        Env::Staging => file.staging.unwrap_or_default(),
+        Env::Dev => file.dev.unwrap_or_default(),
+    };
     Ok(creds)
 }
 
 pub fn write(creds: &Credentials) -> Result<()> {
-    let mut creds = creds.clone();
-    creds.version = Some(CURRENT_VERSION);
+    // Read the full file first so we preserve other profiles
+    let path = credentials_path();
+    let mut file = if path.exists() {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        parse_credentials_file(&content)
+            .map(|(f, _)| f)
+            .unwrap_or_default()
+    } else {
+        CredentialsFile::default()
+    };
+
+    let mut updated = creds.clone();
+    updated.version = Some(CURRENT_VERSION);
+
+    match active_env() {
+        Env::Production => file.production = updated,
+        Env::Staging => file.staging = Some(updated),
+        Env::Dev => file.dev = Some(updated),
+    }
+
+    write_file(&file)
+}
+
+fn write_file(file: &CredentialsFile) -> Result<()> {
     let path = credentials_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let content = toml::to_string_pretty(&creds)?;
+    let content = toml::to_string_pretty(file)?;
     let tmp_path = path.with_extension("tmp");
     fs::write(&tmp_path, &content)?;
     #[cfg(unix)]
@@ -122,15 +206,31 @@ pub fn write(creds: &Credentials) -> Result<()> {
 }
 
 pub fn console_base_url() -> String {
-    std::env::var("EDGEE_CONSOLE_URL").unwrap_or_else(|_| "https://www.edgee.ai".to_string())
+    match active_env() {
+        Env::Production => std::env::var("EDGEE_CONSOLE_URL")
+            .unwrap_or_else(|_| "https://www.edgee.ai".to_string()),
+        Env::Staging => "https://www.edgee.team".to_string(),
+        Env::Dev => "http://localhost".to_string(),
+    }
 }
 
 pub fn console_api_base_url() -> String {
-    std::env::var("EDGEE_CONSOLE_API_URL").unwrap_or_else(|_| "https://api.edgee.app".to_string())
+    match active_env() {
+        Env::Production => std::env::var("EDGEE_CONSOLE_API_URL")
+            .unwrap_or_else(|_| "https://api.edgee.app".to_string()),
+        Env::Staging => "https://api.edgee.team".to_string(),
+        Env::Dev => "http://localhost:3002".to_string(),
+    }
 }
 
 pub fn gateway_base_url() -> String {
-    std::env::var("EDGEE_API_URL").unwrap_or_else(|_| "https://api.edgee.ai".to_string())
+    match active_env() {
+        Env::Production => {
+            std::env::var("EDGEE_API_URL").unwrap_or_else(|_| "https://api.edgee.ai".to_string())
+        }
+        Env::Staging => "https://api-stg.edgee.ai".to_string(),
+        Env::Dev => "http://localhost:7676".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -284,5 +384,77 @@ org_slug = "my-org"
         assert!(migrated);
         assert!(creds.claude.is_none());
         assert!(creds.codex.is_none());
+    }
+
+    #[test]
+    fn parse_credentials_file_with_profiles() {
+        let content = r#"
+version = 3
+user_token = "prod-token"
+email = "user@example.com"
+org_slug = "my-org"
+org_id = "prod-org-id"
+
+[claude]
+api_key = "sk-edgee-prod-claude"
+connection = "plan"
+
+[staging]
+version = 3
+user_token = "staging-token"
+email = "user@example.com"
+org_slug = "staging-org"
+org_id = "staging-org-id"
+
+[staging.claude]
+api_key = "sk-edgee-stg-claude"
+connection = "plan"
+
+[dev]
+version = 3
+user_token = "dev-token"
+org_slug = "dev-org"
+org_id = "dev-org-id"
+"#;
+
+        let (file, migrated) =
+            parse_credentials_file(content).expect("should parse file with profiles");
+        assert!(!migrated);
+
+        // Production (root)
+        assert_eq!(file.production.user_token.as_deref(), Some("prod-token"));
+        assert_eq!(file.production.org_slug.as_deref(), Some("my-org"));
+        let prod_claude = file.production.claude.expect("prod claude should exist");
+        assert_eq!(prod_claude.api_key, "sk-edgee-prod-claude");
+
+        // Staging profile
+        let staging = file.staging.expect("staging profile should exist");
+        assert_eq!(staging.user_token.as_deref(), Some("staging-token"));
+        assert_eq!(staging.org_slug.as_deref(), Some("staging-org"));
+        let stg_claude = staging.claude.expect("staging claude should exist");
+        assert_eq!(stg_claude.api_key, "sk-edgee-stg-claude");
+
+        // Dev profile
+        let dev = file.dev.expect("dev profile should exist");
+        assert_eq!(dev.user_token.as_deref(), Some("dev-token"));
+        assert_eq!(dev.org_slug.as_deref(), Some("dev-org"));
+    }
+
+    #[test]
+    fn parse_credentials_file_legacy_v1_becomes_production() {
+        let v1_content = r#"
+api_key = "sk-edgee-v1-key"
+claude_connection = "plan"
+org_slug = "my-org"
+"#;
+
+        let (file, migrated) =
+            parse_credentials_file(v1_content).expect("v1 should parse as legacy");
+        assert!(migrated, "v1 should be flagged for rewrite");
+
+        let claude = file.production.claude.expect("claude should be migrated");
+        assert_eq!(claude.api_key, "sk-edgee-v1-key");
+        assert!(file.staging.is_none());
+        assert!(file.dev.is_none());
     }
 }
