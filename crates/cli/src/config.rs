@@ -84,16 +84,14 @@ pub fn global_credentials_path() -> PathBuf {
         let appdata = std::env::var("APPDATA")
             .or_else(|_| std::env::var("USERPROFILE").map(|p| format!("{p}\\AppData\\Roaming")))
             .expect("APPDATA or USERPROFILE not set");
-        PathBuf::from(appdata)
-            .join("edgee")
-            .join("credentials.toml")
+        PathBuf::from(appdata).join("edgee")
     }
     #[cfg(not(windows))]
     {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .expect("HOME or USERPROFILE not set");
-        PathBuf::from(home).join(".config/edgee/credentials.toml")
+        PathBuf::from(home).join(".config/edgee")
     }
 }
 
@@ -105,7 +103,6 @@ pub fn credentials_path() -> PathBuf {
 // ---------------------------------------------------------------------------
 // Legacy v1 struct (for migration only)
 // ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize, Default)]
 struct CredentialsV1 {
     pub api_key: Option<String>,
