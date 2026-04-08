@@ -575,7 +575,9 @@ mod tests {
     fn test_compressed_output_preserves_line_numbers() {
         let output = make_rust_file(60);
         let compressor = ReadCompressor;
-        let compressed = compressor.compress(&make_args("/src/main.rs"), &output).unwrap();
+        let compressed = compressor
+            .compress(&make_args("/src/main.rs"), &output)
+            .unwrap();
         // Line 3 (comment) is stripped; line 4 (doc comment) should keep number 4.
         assert!(
             compressed.contains("4\t/// Doc comment"),

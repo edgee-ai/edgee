@@ -8,8 +8,8 @@ pub mod strategy;
 pub mod util;
 
 // Re-export key traits
-pub use strategy::bash::BashCompressor;
 pub use strategy::ToolCompressor;
+pub use strategy::bash::BashCompressor;
 
 // Re-export compressor lookup functions
 pub use strategy::bash::compressor_for as bash_compressor_for;
