@@ -9,12 +9,15 @@ pub struct Options {}
 
 pub async fn run(_opts: Options) -> Result<()> {
     let email = perform_login().await?;
+    let profile = crate::config::active_profile_name();
 
     println!();
-    println!(
-        "  {}",
-        style(format!("Logged in as {email}")).bold()
-    );
+    let line = if profile == "default" {
+        format!("Logged in as {email}")
+    } else {
+        format!("Logged in as {email} (profile: {profile})")
+    };
+    println!("  {}", style(line).bold());
     println!();
     Ok(())
 }

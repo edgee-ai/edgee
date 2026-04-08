@@ -26,6 +26,11 @@ pub async fn run(_opts: Options) -> Result<()> {
         style("Config:").dim(),
         style(crate::config::credentials_path().display()).dim()
     );
+    println!(
+        "   {}  {}",
+        style("Profile:").dim(),
+        style(crate::config::active_profile_name()).bold()
+    );
 
     match &creds.email {
         Some(e) if !e.is_empty() => println!(
