@@ -37,6 +37,9 @@ pub async fn run(opts: Options) -> Result<()> {
     let codex = creds.codex.as_ref().unwrap();
     let api_key = &codex.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
+    let repo_entry = crate::git::detect_origin()
+        .map(|url| format!(",\"x-edgee-repo\"=\"{}\"", url))
+        .unwrap_or_default();
     let base_url = format!("{}/v1", crate::config::gateway_base_url());
     let mut cmd = std::process::Command::new("codex");
     cmd.env("EDGEE_SESSION_ID", &session_id);
@@ -44,7 +47,7 @@ pub async fn run(opts: Options) -> Result<()> {
         "-c", "model_provider=\"edgee-cli\"",
         "-c", "model_providers.edgee-cli.name=\"EDGEE\"",
         "-c", &format!("model_providers.edgee-cli.base_url=\"{base_url}\""),
-        "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"}}"),
+        "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"{repo_entry}}}"),
         "-c", "model_providers.edgee-cli.wire_api=\"responses\"",
     ]);
     cmd.args(&opts.args);
