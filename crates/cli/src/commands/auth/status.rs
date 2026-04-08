@@ -8,7 +8,8 @@ pub async fn run(_opts: Options) -> Result<()> {
 
     let has_any = creds.user_token.as_deref().filter(|t| !t.is_empty()).is_some()
         || creds.claude.as_ref().map(|c| !c.api_key.is_empty()).unwrap_or(false)
-        || creds.codex.as_ref().map(|c| !c.api_key.is_empty()).unwrap_or(false);
+        || creds.codex.as_ref().map(|c| !c.api_key.is_empty()).unwrap_or(false)
+        || creds.opencode.as_ref().map(|c| !c.api_key.is_empty()).unwrap_or(false);
 
     if !has_any {
         println!(
@@ -25,6 +26,11 @@ pub async fn run(_opts: Options) -> Result<()> {
         style("Config:").dim(),
         style(crate::config::credentials_path().display()).dim()
     );
+    println!(
+        "   {}  {}",
+        style("Profile:").dim(),
+        style(crate::config::active_profile_name()).bold()
+    );
 
     match &creds.email {
         Some(e) if !e.is_empty() => println!(
@@ -39,7 +45,11 @@ pub async fn run(_opts: Options) -> Result<()> {
         ),
     }
 
-    for (name, provider) in [("Claude", &creds.claude), ("Codex", &creds.codex)] {
+    for (name, provider) in [
+        ("Claude", &creds.claude),
+        ("Codex", &creds.codex),
+        ("OpenCode", &creds.opencode),
+    ] {
         if let Some(p) = provider.as_ref().filter(|p| !p.api_key.is_empty()) {
             println!(
                 "   {}  {}",
