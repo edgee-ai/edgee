@@ -4,6 +4,7 @@ use clap::Parser;
 mod api;
 mod commands;
 mod config;
+mod git;
 
 #[derive(Debug, Parser)]
 #[command(name = "edgee", about = "Edgee CLI", version)]
