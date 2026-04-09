@@ -57,15 +57,6 @@ fn fmt_tokens(n: u64) -> String {
     out.chars().rev().collect()
 }
 
-fn fmt_cost(nanodollars: u64) -> String {
-    let micros = (nanodollars + 500) / 1_000;
-    let s = format!("{}.{:06}", micros / 1_000_000, micros % 1_000_000);
-    let dot = s.find('.').unwrap();
-    let min_end = dot + 3; // keep at least X.XX
-    let trimmed_len = s.trim_end_matches('0').len().max(min_end);
-    format!("${}", &s[..trimmed_len])
-}
-
 pub fn fmt_timestamp(ts: &str) -> String {
     // Convert RFC3339 "2024-01-15T10:30:45+00:00" → "2024-01-15 10:30"
     if ts.len() >= 16 {
@@ -80,6 +71,14 @@ fn compression_pct(before: u64, after: u64) -> u64 {
         return 0;
     }
     (before - after) * 100 / before
+}
+
+fn pad_left(s: &str, width: usize) -> String {
+    format!("{s:>width$}")
+}
+
+fn pad_right(s: &str, width: usize) -> String {
+    format!("{s:<width$}")
 }
 
 pub fn fmt_bar(pct: u64, width: usize) -> String {
@@ -203,21 +202,10 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
     } else {
         String::new()
     };
-    let savings_note = if stats.total_token_cost_savings > 0 {
-        format!(
-            "  {}  {}",
-            style("·  saved").dim(),
-            style(fmt_cost(stats.total_token_cost_savings)).green()
-        )
-    } else {
-        String::new()
-    };
     println!(
-        "  {}  {} requests  ·  {}{}{}",
+        "  {}  {} requests{}",
         style("Overview").bold().underlined(),
         style(stats.total_requests).cyan(),
-        style(fmt_cost(stats.total_cost)).cyan(),
-        savings_note,
         error_note,
     );
 
@@ -282,14 +270,20 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
                 tools.sort_by(|a, b| b.1.before.cmp(&a.1.before));
                 println!();
                 println!("  {}", style("Tool breakdown").bold().underlined());
+                println!(
+                    "  {} {} {} Savings",
+                    pad_right("Tool", 20),
+                    pad_left("Calls", 5),
+                    pad_right("Tokens", 20)
+                );
                 for (name, ts) in &tools {
                     let pct = compression_pct(ts.before, ts.after);
                     println!(
-                        "  {:<20} {} calls   {} -> {}  {} {}% saved",
-                        style(name.as_str()).cyan(),
-                        ts.count,
-                        style(fmt_tokens(ts.before)).dim(),
-                        style(fmt_tokens(ts.after)).cyan(),
+                        "  {} {} {} -> {} {} {}% saved",
+                        style(pad_right(name.as_str(), 20)).cyan(),
+                        pad_left(&ts.count.to_string(), 5),
+                        style(pad_left(&fmt_tokens(ts.before), 9)).dim(),
+                        style(pad_left(&fmt_tokens(ts.after), 9)).cyan(),
                         fmt_bar(pct, 10),
                         style(pct).green(),
                     );

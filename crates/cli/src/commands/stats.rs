@@ -7,15 +7,6 @@ setup_command! {
     pub limit: Option<usize>,
 }
 
-fn fmt_cost(nanodollars: u64) -> String {
-    let micros = (nanodollars + 500) / 1_000;
-    let s = format!("{}.{:06}", micros / 1_000_000, micros % 1_000_000);
-    let dot = s.find('.').unwrap();
-    let min_end = dot + 3;
-    let trimmed_len = s.trim_end_matches('0').len().max(min_end);
-    format!("${}", &s[..trimmed_len])
-}
-
 fn fmt_tokens(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
@@ -26,6 +17,17 @@ fn fmt_tokens(n: u64) -> String {
         out.push(c);
     }
     out.chars().rev().collect()
+}
+
+fn fmt_compression_cell(before: u64, after: u64) -> (String, bool) {
+    if before == 0 || after >= before {
+        return (format!("{}  -", "░".repeat(8)), false);
+    }
+
+    let pct = (before - after) * 100 / before;
+    let filled = (pct as usize * 8 / 100).min(8);
+    let cell = format!("{}{} {:>2}%", "█".repeat(filled), "░".repeat(8 - filled), pct);
+    (cell, true)
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -39,11 +41,6 @@ pub async fn run(opts: Options) -> Result<()> {
 
     let latest = &logs[0];
     let total_requests: u64 = logs.iter().map(|entry| entry.stats.total_requests).sum();
-    let total_cost: u64 = logs.iter().map(|entry| entry.stats.total_cost).sum();
-    let total_savings: u64 = logs
-        .iter()
-        .map(|entry| entry.stats.total_token_cost_savings)
-        .sum();
     let total_errors: u64 = logs.iter().map(|entry| entry.stats.total_errors).sum();
     let total_input_tokens: u64 = logs.iter().map(|entry| entry.stats.total_input_tokens).sum();
     let total_output_tokens: u64 = logs.iter().map(|entry| entry.stats.total_output_tokens).sum();
@@ -56,13 +53,9 @@ pub async fn run(opts: Options) -> Result<()> {
     );
     println!();
     println!(
-        "  {}  {}    {}  {}    {}  {}",
+        "  {}  {}",
         style("Requests").bold().underlined(),
         style(total_requests).cyan(),
-        style("Cost").bold().underlined(),
-        style(fmt_cost(total_cost)).cyan(),
-        style("Saved").bold().underlined(),
-        style(fmt_cost(total_savings)).green(),
     );
     println!(
         "  {}     {}    {}  {}    {}  {}",
@@ -84,39 +77,74 @@ pub async fn run(opts: Options) -> Result<()> {
     println!("  {}", style("All sessions").bold());
     println!();
     let limit = opts.limit.unwrap_or(logs.len()).max(1);
-    for entry in logs.iter().take(limit) {
+    let visible_logs: Vec<_> = logs.iter().take(limit).collect();
+    let tool_width = visible_logs
+        .iter()
+        .map(|entry| entry.tool_name.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let req_width = visible_logs
+        .iter()
+        .map(|entry| entry.stats.total_requests.to_string().len())
+        .max()
+        .unwrap_or(3)
+        .max(3);
+    let in_width = visible_logs
+        .iter()
+        .map(|entry| fmt_tokens(entry.stats.total_input_tokens).len())
+        .max()
+        .unwrap_or(2)
+        .max(2);
+    let out_width = visible_logs
+        .iter()
+        .map(|entry| fmt_tokens(entry.stats.total_output_tokens).len())
+        .max()
+        .unwrap_or(3)
+        .max(3);
+    let err_width = visible_logs
+        .iter()
+        .map(|entry| entry.stats.total_errors.to_string().len())
+        .max()
+        .unwrap_or(3)
+        .max(3);
+
+    println!(
+        "  {}  {}  {}  {}  {}  {}  {}",
+        style(format!("{:<16}", "ended")).dim().bold(),
+        style(format!("{:<tool_width$}", "tool")).dim().bold(),
+        style(format!("{:>req_width$}", "req")).dim().bold(),
+        style(format!("{:>in_width$}", "in")).dim().bold(),
+        style(format!("{:>out_width$}", "out")).dim().bold(),
+        style(format!("{:<12}", "compression")).dim().bold(),
+        style(format!("{:>err_width$}", "err")).dim().bold(),
+    );
+
+    for entry in visible_logs {
         let stats = &entry.stats;
-        let compression = if stats.total_uncompressed_tools_tokens > 0
-            && stats.total_compressed_tools_tokens < stats.total_uncompressed_tools_tokens
-        {
-            let pct = (stats.total_uncompressed_tools_tokens - stats.total_compressed_tools_tokens)
-                * 100
-                / stats.total_uncompressed_tools_tokens;
-            format!(
-                "{} {}%",
-                crate::commands::launch::fmt_bar(pct, 8),
-                style(pct).green()
-            )
-        } else {
-            format!("{}  -", style("░".repeat(8)).dim())
-        };
-        let errors = if stats.total_errors > 0 {
-            style(stats.total_errors).red().to_string()
-        } else {
-            style("0").dim().to_string()
-        };
+        let (compression, has_compression) = fmt_compression_cell(
+            stats.total_uncompressed_tools_tokens,
+            stats.total_compressed_tools_tokens,
+        );
+        let errors = stats.total_errors.to_string();
 
         println!(
-            "  {}  {}  {:>4} req  {}  in {}  out {}  saved {}  {}  err {}",
+            "  {}  {}  {}  {}  {}  {}  {}",
             style(crate::commands::launch::fmt_timestamp(&entry.ended_at)).dim(),
-            style(format!("{:<8}", entry.tool_name)).cyan(),
-            style(stats.total_requests).cyan(),
-            style(format!("{:>10}", fmt_cost(stats.total_cost))).cyan(),
-            style(format!("{:>9}", fmt_tokens(stats.total_input_tokens))).cyan(),
-            style(format!("{:>9}", fmt_tokens(stats.total_output_tokens))).cyan(),
-            style(format!("{:>10}", fmt_cost(stats.total_token_cost_savings))).green(),
-            compression,
-            errors,
+            style(format!("{:<tool_width$}", entry.tool_name)).cyan(),
+            style(format!("{:>req_width$}", stats.total_requests)).cyan(),
+            style(format!("{:>in_width$}", fmt_tokens(stats.total_input_tokens))).cyan(),
+            style(format!("{:>out_width$}", fmt_tokens(stats.total_output_tokens))).cyan(),
+            if has_compression {
+                style(format!("{:<12}", compression)).green()
+            } else {
+                style(format!("{:<12}", compression)).dim()
+            },
+            if stats.total_errors > 0 {
+                style(format!("{:>err_width$}", errors)).red()
+            } else {
+                style(format!("{:>err_width$}", errors)).dim()
+            },
         );
     }
     println!();
