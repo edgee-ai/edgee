@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex;
 pub mod opencode;
+pub mod statusline;
 
 use anyhow::{Context, Result};
 use console::style;
