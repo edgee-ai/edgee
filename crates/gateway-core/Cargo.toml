@@ -1,0 +1,29 @@
+[package]
+name    = "edgee-ai-gateway-core"
+version = "0.1.0"
+edition = "2024"
+description = "Core LLM request→response pipeline for the Edgee AI Gateway"
+
+[features]
+default = []
+
+tokio = ["dep:reqwest", "dep:tokio"]
+
+[dependencies]
+tower.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+http.workspace = true
+axum-core.workspace = true
+bytes.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+# Runtime-specific — only compiled with the `tokio` feature
+reqwest = { workspace = true, default-features = false, features = ["stream"], optional = true }
+tokio = { workspace = true, features = ["rt"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

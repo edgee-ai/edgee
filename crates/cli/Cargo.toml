@@ -18,7 +18,7 @@ serde = { workspace = true, features = ["derive"] }
 toml.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "io-util"] }
-reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+reqwest = { workspace = true, features = ["json"] }
 serde_json.workspace = true
 self_update = { workspace = true, optional = true, features = ["reqwest", "rustls"] }
 time = { workspace = true, features = ["formatting", "parsing", "serde"] }
