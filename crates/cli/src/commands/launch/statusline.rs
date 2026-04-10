@@ -38,7 +38,7 @@ if [ "$USE_CACHE" = true ]; then
     STATS=$(cat "$CACHE_FILE")
 else
     STATS=$(curl -sf --max-time 5 \
-        "${API_URL}/v1/sessions/${SESSION_ID}" 2>/dev/null) || STATS=""
+        "${API_URL}/v1/sessions/${SESSION_ID}/summary" 2>/dev/null) || STATS=""
     if [ -n "$STATS" ]; then
         echo "$STATS" > "$CACHE_FILE"
     elif [ -f "$CACHE_FILE" ]; then
@@ -47,8 +47,11 @@ else
 fi
 
 # ── render ───────────────────────────────────────────────────────────
+SEP=""
+[ -n "${EDGEE_HAS_EXISTING_STATUSLINE:-}" ] && SEP="| "
+
 if [ -z "$STATS" ] || ! command -v jq &>/dev/null; then
-    echo -e "\033[38;5;128m三 Edgee\033[0m"
+    echo -e "${SEP}\033[38;5;128m三 Edgee\033[0m"
     exit 0
 fi
 
@@ -68,12 +71,12 @@ if [ "$BEFORE" -gt 0 ] && [ "$AFTER" -lt "$BEFORE" ]; then
     for ((i=0; i<FILLED; i++)); do BAR+="█"; done
     for ((i=FILLED; i<10; i++)); do BAR+="░"; done
 
-    echo -e "${PURPLE}三 Edgee${RESET}  ${PURPLE}${BAR}${RESET} ${BOLD_PURPLE}${PCT}%${RESET} tool compression  ${DIM}${REQUESTS} reqs${RESET}"
+    echo -e "${SEP}${PURPLE}三 Edgee${RESET}  ${PURPLE}${BAR}${RESET} ${BOLD_PURPLE}${PCT}%${RESET} tool compression  ${DIM}${REQUESTS} reqs${RESET}"
 else
     if [ "$REQUESTS" -gt 0 ]; then
-        echo -e "${PURPLE}三 Edgee${RESET}  ${DIM}${REQUESTS} reqs${RESET}"
+        echo -e "${SEP}${PURPLE}三 Edgee${RESET}  ${DIM}${REQUESTS} reqs${RESET}"
     else
-        echo -e "${PURPLE}三 Edgee${RESET}"
+        echo -e "${SEP}${PURPLE}三 Edgee${RESET}"
     fi
 fi
 "#;
@@ -179,7 +182,7 @@ pub fn install(session_id: &str, _api_base_url: &str) -> Result<StatuslineGuard>
 
     let wrapper_content = if let Some(ref existing_cmd) = existing_command {
         format!(
-            "#!/usr/bin/env bash\nINPUT=$(cat)\necho \"$INPUT\" | {} 2>/dev/null\necho \"$INPUT\" | {}\n",
+            "#!/usr/bin/env bash\nINPUT=$(cat)\necho \"$INPUT\" | {} 2>/dev/null\nexport EDGEE_HAS_EXISTING_STATUSLINE=1\necho \"$INPUT\" | {}\n",
             existing_cmd,
             edgee_path.display(),
         )
