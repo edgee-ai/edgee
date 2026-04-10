@@ -361,6 +361,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "edgee-compression-layer"
+version = "0.1.0"
+dependencies = [
+ "edgee-ai-gateway-core",
+ "edgee-compressor",
+ "tower",
+]
+
+[[package]]
 name = "edgee-compressor"
 version = "0.1.0"
 dependencies = [
