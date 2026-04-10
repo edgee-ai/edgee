@@ -1,5 +1,4 @@
 use anyhow::Result;
-use console::style;
 
 #[derive(Debug, clap::Parser)]
 pub struct Options {
@@ -62,33 +61,7 @@ pub async fn run(opts: Options) -> Result<()> {
         }
     })?;
 
-    {
-        let logs_url = match creds.org_slug.as_deref() {
-            Some(slug) if !slug.is_empty() => format!(
-                "{}/~/{}/sessions/{}",
-                crate::config::console_base_url(),
-                slug,
-                session_id
-            ),
-            _ => format!(
-                "{}/~/me/sessions/{}",
-                crate::config::console_base_url(),
-                session_id
-            ),
-        };
-        println!();
-        println!(
-            "  {} {}",
-            style("Session ended.").bold(),
-            style("Thanks for using Edgee + Codex!").dim()
-        );
-        println!(
-            "  {} {}",
-            style("View your Codex usage & compression stats at").dim(),
-            style(&logs_url).cyan().underlined()
-        );
-        println!();
-    }
+    crate::commands::launch::print_session_stats(&creds, &session_id, "Codex").await;
 
     if let Some(code) = status.code() {
         std::process::exit(code);

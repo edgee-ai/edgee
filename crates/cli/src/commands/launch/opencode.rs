@@ -1,5 +1,4 @@
 use anyhow::Result;
-use console::style;
 use serde_json::Value;
 
 #[derive(Debug, clap::Parser)]
@@ -237,33 +236,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // Clean up the temporary config file
     let _ = std::fs::remove_file(&config_path);
 
-    {
-        let logs_url = match creds.org_slug.as_deref() {
-            Some(slug) if !slug.is_empty() => format!(
-                "{}/~/{}/sessions/{}",
-                crate::config::console_base_url(),
-                slug,
-                session_id
-            ),
-            _ => format!(
-                "{}/~/me/sessions/{}",
-                crate::config::console_base_url(),
-                session_id
-            ),
-        };
-        println!();
-        println!(
-            "  {} {}",
-            style("Session ended.").bold(),
-            style("Thanks for using Edgee + OpenCode!").dim()
-        );
-        println!(
-            "  {} {}",
-            style("View your OpenCode usage & compression stats at").dim(),
-            style(&logs_url).cyan().underlined()
-        );
-        println!();
-    }
+    crate::commands::launch::print_session_stats(&creds, &session_id, "OpenCode").await;
 
     if let Some(code) = status.code() {
         std::process::exit(code);

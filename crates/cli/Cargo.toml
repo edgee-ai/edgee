@@ -1,6 +1,6 @@
 [package]
 name = "edgee-cli"
-version = "0.1.10"
+version = "0.2.1"
 edition = "2021"
 
 [[bin]]
@@ -21,6 +21,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sig
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 serde_json.workspace = true
 self_update = { workspace = true, optional = true, features = ["reqwest", "rustls"] }
+time = { workspace = true, features = ["formatting", "parsing", "serde"] }
 
 [features]
 default = ["self-update"]

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct ProviderConfig {
@@ -77,35 +77,47 @@ pub fn local_credentials_path() -> Option<PathBuf> {
     }
 }
 
-/// Returns the global credentials path (`~/.config/edgee/credentials.toml`).
-pub fn global_credentials_path() -> PathBuf {
+/// Project-local Edgee config directory (`.edgee` under the cwd) when that credentials file exists.
+pub fn local_config_dir() -> Option<PathBuf> {
+    local_credentials_path().and_then(|p| p.parent().map(Path::to_path_buf))
+}
+
+/// Global Edgee config directory (`~/.config/edgee`, or `%APPDATA%\edgee` on Windows).
+pub fn global_config_dir() -> PathBuf {
     #[cfg(windows)]
     {
         let appdata = std::env::var("APPDATA")
             .or_else(|_| std::env::var("USERPROFILE").map(|p| format!("{p}\\AppData\\Roaming")))
             .expect("APPDATA or USERPROFILE not set");
-        PathBuf::from(appdata)
-            .join("edgee")
-            .join("credentials.toml")
+        PathBuf::from(appdata).join("edgee")
     }
     #[cfg(not(windows))]
     {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .expect("HOME or USERPROFILE not set");
-        PathBuf::from(home).join(".config/edgee/credentials.toml")
+        PathBuf::from(home).join(".config/edgee")
     }
 }
 
-/// Returns the effective credentials path: local project file if present, global otherwise.
+/// Global credentials file path (`~/.config/edgee/credentials.toml`, etc.).
+pub fn global_credentials_path() -> PathBuf {
+    global_config_dir().join("credentials.toml")
+}
+
+/// Effective credentials file: project-local if present, otherwise global.
 pub fn credentials_path() -> PathBuf {
     local_credentials_path().unwrap_or_else(global_credentials_path)
+}
+
+/// Effective Edgee config directory (same scope as [`credentials_path`]).
+pub fn config_dir() -> PathBuf {
+    local_config_dir().unwrap_or_else(global_config_dir)
 }
 
 // ---------------------------------------------------------------------------
 // Legacy v1 struct (for migration only)
 // ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize, Default)]
 struct CredentialsV1 {
     pub api_key: Option<String>,
