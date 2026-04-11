@@ -31,6 +31,7 @@ pub async fn perform_login() -> Result<String> {
     if let Ok(v) = std::env::var("EDGEE_CONSOLE_URL") { creds.console_url = Some(v); }
     if let Ok(v) = std::env::var("EDGEE_CONSOLE_API_URL") { creds.console_api_url = Some(v); }
     if let Ok(v) = std::env::var("EDGEE_API_URL") { creds.gateway_url = Some(v); }
+    if let Ok(v) = std::env::var("EDGEE_MCP_URL") { creds.mcp_url = Some(v); }
 
     let (user_token, email, user_id) = {
         let (token, email, user_id) = browser_auth().await?;

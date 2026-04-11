@@ -26,6 +26,8 @@ pub struct Profile {
     pub console_api_url: Option<String>,
     /// Override for EDGEE_API_URL / gateway (e.g. http://localhost:5000)
     pub gateway_url: Option<String>,
+    /// Override for EDGEE_MCP_URL (e.g. http://localhost:6000)
+    pub mcp_url: Option<String>,
     pub claude: Option<ProviderConfig>,
     pub codex: Option<ProviderConfig>,
     pub opencode: Option<ProviderConfig>,
@@ -270,6 +272,16 @@ pub fn gateway_base_url() -> String {
         .ok()
         .and_then(|p| p.gateway_url)
         .unwrap_or_else(|| "https://api.edgee.ai".to_string())
+}
+
+pub fn mcp_base_url() -> String {
+    if let Ok(v) = std::env::var("EDGEE_MCP_URL") {
+        return v;
+    }
+    read()
+        .ok()
+        .and_then(|p| p.mcp_url)
+        .unwrap_or_else(|| "https://mcp.edgee.ai".to_string())
 }
 
 // ---------------------------------------------------------------------------

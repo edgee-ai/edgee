@@ -32,11 +32,16 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::config::write(&creds)?;
     }
 
-    // Step 3: launch claude with the correct env vars
+    // Step 4: write MCP config with auth token
+    let mcp_config_path = write_mcp_config(&creds)?;
+
+    // Step 5: launch claude with the correct env vars
     let claude = creds.claude.as_ref().unwrap();
     let api_key = &claude.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
-    let repo_header = crate::git::detect_origin()
+    let repo_origin = crate::git::detect_origin();
+    let repo_header = repo_origin
+        .as_ref()
         .map(|url| format!("\nx-edgee-repo: {}", url))
         .unwrap_or_default();
 
@@ -56,6 +61,9 @@ pub async fn run(opts: Options) -> Result<()> {
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env("EDGEE_CONSOLE_API_URL", crate::config::console_api_base_url());
 
+    cmd.arg("--mcp-config").arg(&mcp_config_path);
+    cmd.arg("--append-system-prompt").arg(system_prompt(&session_id, repo_origin.as_deref()));
+    cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__setSessionGitHubRepo");
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {
@@ -78,4 +86,54 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Writes an MCP config file to the Edgee config directory with the user's auth token.
+/// Returns the path to the written file.
+fn write_mcp_config(creds: &crate::config::Credentials) -> Result<std::path::PathBuf> {
+    let token = creds.user_token.as_deref().unwrap_or("");
+    let mcp_config = serde_json::json!({
+        "mcpServers": {
+            "edgee": {
+                "type": "http",
+                "url": crate::config::mcp_base_url(),
+                "headers": {
+                    "Authorization": format!("Bearer {}", token)
+                }
+            }
+        }
+    });
+
+    let dir = crate::config::config_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("mcp.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&mcp_config)?)?;
+    Ok(path)
+}
+
+fn system_prompt(session_id: &str, repo: Option<&str>) -> String {
+    let mut prompt = format!(
+        r#"You are running inside the Edgee CLI and have access to the Edgee MCP server for tracking session metadata.
+
+Your Edgee session ID is: {session_id}
+
+You MUST use the following Edgee MCP tools during this session:
+
+1. `setSessionName` — call this EXACTLY ONCE, immediately after the user's first message, before doing anything else. Arguments:
+   - sessionId: "{session_id}"
+   - name: a short descriptive name (3-6 words) summarizing what the user is asking for.
+
+2. `addSessionPullRequest` — call this EVERY TIME you open a pull request (e.g., via `gh pr create`). Immediately after the PR is created, call this tool with:
+   - sessionId: "{session_id}"
+   - pullRequest: the full PR URL returned by `gh pr create`.
+   This is required for every PR you open during this session, with no exceptions."#
+    );
+
+    if let Some(repo) = repo {
+        prompt.push_str(&format!(
+            "\n\n3. `setSessionGitHubRepo` — call this EXACTLY ONCE at the start of the session, together with (or right after) `setSessionName`. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
+        ));
+    }
+
+    prompt
 }
