@@ -62,7 +62,8 @@ pub async fn run(opts: Options) -> Result<()> {
     cmd.env("EDGEE_CONSOLE_API_URL", crate::config::console_api_base_url());
 
     cmd.arg("--mcp-config").arg(&mcp_config_path);
-    cmd.arg("--append-system-prompt").arg(system_prompt(&session_id, repo_origin.as_deref()));
+    let session_url = format!("{}/session/{}", crate::config::console_base_url(), session_id);
+    cmd.arg("--append-system-prompt").arg(system_prompt(&session_id, repo_origin.as_deref(), &session_url));
     cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__setSessionGitHubRepo");
     cmd.args(&opts.args);
 
@@ -111,22 +112,35 @@ fn write_mcp_config(creds: &crate::config::Credentials) -> Result<std::path::Pat
     Ok(path)
 }
 
-fn system_prompt(session_id: &str, repo: Option<&str>) -> String {
+fn system_prompt(session_id: &str, repo: Option<&str>, session_url: &str) -> String {
     let mut prompt = format!(
         r#"You are running inside the Edgee CLI and have access to the Edgee MCP server for tracking session metadata.
 
 Your Edgee session ID is: {session_id}
+Your Edgee public session page is: {session_url}
 
 You MUST use the following Edgee MCP tools during this session:
 
-1. `setSessionName` — call this EXACTLY ONCE, immediately after the user's first message, before doing anything else. Arguments:
+1. `setSessionName` — call this immediately after the user's first message with a short descriptive name (3-6 words) summarizing what the user is asking for. Arguments:
    - sessionId: "{session_id}"
-   - name: a short descriptive name (3-6 words) summarizing what the user is asking for.
+   - name: the descriptive name.
+   If at any later point during the session you come up with a clearly better name (e.g., the task's real scope becomes obvious only after exploring the code, or the user pivots the request), call `setSessionName` again with the improved name. Prefer calling it once, but do not hesitate to update when a materially better name emerges.
 
 2. `addSessionPullRequest` — call this EVERY TIME you open a pull request (e.g., via `gh pr create`). Immediately after the PR is created, call this tool with:
    - sessionId: "{session_id}"
    - pullRequest: the full PR URL returned by `gh pr create`.
-   This is required for every PR you open during this session, with no exceptions."#
+   This is required for every PR you open during this session, with no exceptions.
+
+PULL REQUEST DESCRIPTION REQUIREMENT (mandatory, no exceptions):
+Whenever you create OR edit a pull request (via `gh pr create`, `gh pr edit`, or any other tool), you MUST include the Edgee session link in the PR description/body. Add the following block at the very top of the PR body, before any other section:
+
+---
+Built with [Edgee](https://www.edgee.ai) — [View session]({session_url})
+
+![Edgee session]({session_url}/og)
+---
+
+The `/og` path returns an OpenGraph image for the session. When you edit an existing PR to add commits or update the description, preserve this block. If it is missing from a PR you are editing, add it back."#
     );
 
     if let Some(repo) = repo {
