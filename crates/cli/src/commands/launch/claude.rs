@@ -126,21 +126,10 @@ You MUST use the following Edgee MCP tools during this session:
    - name: the descriptive name.
    If at any later point during the session you come up with a clearly better name (e.g., the task's real scope becomes obvious only after exploring the code, or the user pivots the request), call `setSessionName` again with the improved name. Prefer calling it once, but do not hesitate to update when a materially better name emerges.
 
-2. `addSessionPullRequest` — call this EVERY TIME you open a pull request (e.g., via `gh pr create`). Immediately after the PR is created, call this tool with:
+2. `addSessionPullRequest` — call this EVERY TIME you create OR edit a pull request (e.g., via `gh pr create`, `gh pr edit`, or any other tool). Immediately after the PR is created or modified, call this tool with:
    - sessionId: "{session_id}"
-   - pullRequest: the full PR URL returned by `gh pr create`.
-   This is required for every PR you open during this session, with no exceptions.
-
-PULL REQUEST DESCRIPTION REQUIREMENT (mandatory, no exceptions):
-Whenever you create OR edit a pull request (via `gh pr create`, `gh pr edit`, or any other tool), you MUST include the Edgee session link in the PR description/body. Add the following block at the very top of the PR body, before any other section:
-
----
-Built with [Edgee](https://www.edgee.ai) — [View session]({session_url})
-
-![Edgee session]({session_url}/og)
----
-
-The `/og` path returns an OpenGraph image for the session. When you edit an existing PR to add commits or update the description, preserve this block. If it is missing from a PR you are editing, add it back."#
+   - pullRequest: the full PR URL.
+   This is required for every PR you touch during this session, with no exceptions. Always call it on edits too — the PR may not yet be associated with this session, and the API handles duplicates safely, so redundant calls are harmless."#
     );
 
     if let Some(repo) = repo {
