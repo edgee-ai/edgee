@@ -45,15 +45,18 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     let extensions: Vec<&str> = pathext.split(';').collect();
 
     for dir in std::env::split_paths(&path_var) {
-        let bare = dir.join(name);
-        if bare.is_file() {
-            return Some(bare);
-        }
+        // Check PATHEXT extensions first (e.g. .CMD, .EXE) — matches Windows
+        // shell behavior and avoids picking up broken extensionless binaries
+        // (like Nodist shims) over working .cmd wrappers.
         for ext in &extensions {
             let candidate = dir.join(format!("{name}{ext}"));
             if candidate.is_file() {
                 return Some(candidate);
             }
+        }
+        let bare = dir.join(name);
+        if bare.is_file() {
+            return Some(bare);
         }
     }
     None
