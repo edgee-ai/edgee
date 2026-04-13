@@ -32,10 +32,11 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::config::write(&creds)?;
     }
 
-    // Step 4: write MCP config with auth token
-    let mcp_config_path = write_mcp_config(&creds)?;
+    // Step 3b: ensure MCP preference is set
+    crate::commands::auth::login::ensure_mcp_preference().await?;
+    creds = crate::config::read()?;
 
-    // Step 5: launch claude with the correct env vars
+    // Step 4: launch claude with the correct env vars
     let claude = creds.claude.as_ref().unwrap();
     let api_key = &claude.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -61,10 +62,16 @@ pub async fn run(opts: Options) -> Result<()> {
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env("EDGEE_CONSOLE_API_URL", crate::config::console_api_base_url());
 
-    cmd.arg("--mcp-config").arg(&mcp_config_path);
-    let session_url = format!("{}/session/{}", crate::config::console_base_url(), session_id);
-    cmd.arg("--append-system-prompt").arg(system_prompt(&session_id, repo_origin.as_deref(), &session_url));
-    cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__setSessionGitHubRepo");
+    // Step 5: conditionally set up MCP integration
+    let use_mcp = creds.enable_mcp.unwrap_or(false);
+    if use_mcp {
+        let mcp_config_path = write_mcp_config(&creds)?;
+        cmd.arg("--mcp-config").arg(&mcp_config_path);
+        let session_url = format!("{}/session/{}", crate::config::console_base_url(), session_id);
+        cmd.arg("--append-system-prompt").arg(system_prompt(&session_id, repo_origin.as_deref(), &session_url));
+        cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__setSessionGitHubRepo");
+    }
+
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {

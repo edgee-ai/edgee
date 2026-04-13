@@ -28,6 +28,9 @@ pub struct Profile {
     pub gateway_url: Option<String>,
     /// Override for EDGEE_MCP_URL (e.g. http://localhost:6000)
     pub mcp_url: Option<String>,
+    /// Whether to enable Edgee MCP integration (GitHub repo detection, session naming, PR tracking).
+    /// When false, no MCP config or system prompt is injected into the coding assistant.
+    pub enable_mcp: Option<bool>,
     pub claude: Option<ProviderConfig>,
     pub codex: Option<ProviderConfig>,
     pub opencode: Option<ProviderConfig>,

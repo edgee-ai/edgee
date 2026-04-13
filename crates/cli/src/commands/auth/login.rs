@@ -134,6 +134,40 @@ pub async fn ensure_org_selected() -> Result<()> {
     Ok(())
 }
 
+/// Ensures the user has chosen whether to enable Edgee MCP integration.
+/// If the preference is not yet set, prompts the user interactively.
+pub async fn ensure_mcp_preference() -> Result<()> {
+    let mut creds = crate::config::read()?;
+    if creds.enable_mcp.is_some() {
+        return Ok(());
+    }
+
+    println!();
+    println!("  {}", style("Edgee MCP Integration").bold());
+    println!(
+        "{}",
+        style(
+            r#"  This gives the model access to the Edgee MCP server, enabling:
+    - Automatic GitHub repo detection
+    - Session naming for easier tracking
+    - PR tracking linked to your sessions
+
+  You can change this later in your profile config.
+"#
+        )
+        .dim()
+    );
+
+    let confirmed = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enable Edgee MCP integration?")
+        .default(true)
+        .interact()?;
+
+    creds.enable_mcp = Some(confirmed);
+    crate::config::write(&creds)?;
+    Ok(())
+}
+
 /// Creates a gateway API key for the given provider if one doesn't exist yet.
 /// Requires that the user is already authenticated (user_token + org_id set).
 pub async fn ensure_provider_key(provider: &str) -> Result<()> {
