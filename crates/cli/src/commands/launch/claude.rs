@@ -39,7 +39,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let repo_header = crate::git::detect_origin()
         .map(|url| format!("\nx-edgee-repo: {}", url))
         .unwrap_or_default();
-    let mut cmd = std::process::Command::new("claude");
+    let mut cmd = std::process::Command::new(crate::commands::launch::resolve_binary("claude"));
     cmd.env("ANTHROPIC_BASE_URL", crate::config::gateway_base_url());
     cmd.env(
         "ANTHROPIC_CUSTOM_HEADERS",

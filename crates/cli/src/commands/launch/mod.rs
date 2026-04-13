@@ -10,6 +10,71 @@ use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+/// Resolve a CLI tool binary, handling Windows PATH + PATHEXT lookup
+/// and npm global prefix as a fallback.
+pub fn resolve_binary(name: &str) -> std::ffi::OsString {
+    #[cfg(not(windows))]
+    {
+        name.into()
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(found) = find_on_path(name) {
+            return found.into_os_string();
+        }
+
+        // Fallback: ask npm for its global prefix and check there
+        if let Some(npm_bin) = npm_global_bin_dir() {
+            for ext in &["cmd", "exe", "ps1"] {
+                let candidate = npm_bin.join(format!("{name}.{ext}"));
+                if candidate.is_file() {
+                    return candidate.into_os_string();
+                }
+            }
+        }
+
+        name.into()
+    }
+}
+
+#[cfg(windows)]
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    let extensions: Vec<&str> = pathext.split(';').collect();
+
+    for dir in std::env::split_paths(&path_var) {
+        let bare = dir.join(name);
+        if bare.is_file() {
+            return Some(bare);
+        }
+        for ext in &extensions {
+            let candidate = dir.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn npm_global_bin_dir() -> Option<PathBuf> {
+    let output = std::process::Command::new("npm")
+        .args(["config", "get", "prefix"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let prefix = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(prefix))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionLogEntry {
     pub session_id: String,
