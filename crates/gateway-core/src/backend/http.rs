@@ -1,7 +1,7 @@
 use axum_core::body::Body;
 use http::{Request, Response};
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 /// Abstract HTTP transport.
 ///
@@ -38,6 +38,8 @@ impl ReqwestHttpClient {
 #[async_trait::async_trait]
 impl HttpClient for ReqwestHttpClient {
     async fn send(&self, req: Request<Body>) -> Result<Response<Body>> {
+        use crate::error::Error;
+
         let req: reqwest::Request = req
             .map(|body| reqwest::Body::wrap_stream(body.into_data_stream()))
             .try_into()
