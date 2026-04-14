@@ -144,28 +144,25 @@ pub fn install(session_id: &str, _api_base_url: &str) -> Result<StatuslineGuard>
     })
 }
 
-/// Restore the previous `statusLine` setting and clean up.
-pub fn uninstall(guard: StatuslineGuard) -> Result<()> {
-    let mut settings = read_claude_settings(&guard.settings_path)?;
+impl Drop for StatuslineGuard {
+    fn drop(&mut self) {
+        let Ok(mut settings) = read_claude_settings(&self.settings_path) else {
+            return;
+        };
 
-    if let Some(obj) = settings.as_object_mut() {
-        match &guard.previous_status_line {
-            Some(prev) => {
-                obj.insert("statusLine".to_string(), prev.clone());
-            }
-            None => {
-                obj.remove("statusLine");
+        if let Some(obj) = settings.as_object_mut() {
+            match &self.previous_status_line {
+                Some(prev) => {
+                    obj.insert("statusLine".to_string(), prev.clone());
+                }
+                None => {
+                    obj.remove("statusLine");
+                }
             }
         }
+
+        let _ = write_claude_settings(&self.settings_path, &settings);
+        let _ = fs::remove_file(&self.cache_file);
+        let _ = fs::remove_file(&self.wrapper_script_path);
     }
-
-    write_claude_settings(&guard.settings_path, &settings)?;
-
-    // Clean up cache file
-    let _ = fs::remove_file(&guard.cache_file);
-
-    // Remove wrapper script (leave the main edgee script for reuse)
-    let _ = fs::remove_file(&guard.wrapper_script_path);
-
-    Ok(())
 }

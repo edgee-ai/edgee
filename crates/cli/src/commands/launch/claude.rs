@@ -40,8 +40,8 @@ pub async fn run(opts: Options) -> Result<()> {
         .map(|url| format!("\nx-edgee-repo: {}", url))
         .unwrap_or_default();
 
-    // Install Edgee status line (best-effort)
-    let statusline_guard = crate::commands::launch::statusline::install(
+    // Install Edgee status line (best-effort); guard restores it on drop.
+    let _statusline_guard = crate::commands::launch::statusline::install(
         &session_id,
         &crate::config::console_api_base_url(),
     )
@@ -69,9 +69,7 @@ pub async fn run(opts: Options) -> Result<()> {
     })?;
 
     // Restore previous status line setting
-    if let Some(guard) = statusline_guard {
-        let _ = crate::commands::launch::statusline::uninstall(guard);
-    }
+    drop(_statusline_guard);
 
     crate::commands::launch::print_session_stats(&creds, &session_id, "Claude").await;
 
