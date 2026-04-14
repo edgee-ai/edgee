@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-/// Resolve a CLI tool binary, handling Windows PATH + PATHEXT lookup
-/// and npm global prefix as a fallback.
+/// Resolve a CLI tool binary, using the `which` crate on Windows
+/// with an npm global prefix fallback.
 pub fn resolve_binary(name: &str) -> std::ffi::OsString {
     #[cfg(not(windows))]
     {
@@ -20,11 +20,10 @@ pub fn resolve_binary(name: &str) -> std::ffi::OsString {
 
     #[cfg(windows)]
     {
-        if let Some(found) = find_on_path(name) {
+        if let Ok(found) = which::which(name) {
             return found.into_os_string();
         }
 
-        // Fallback: ask npm for its global prefix and check there
         if let Some(npm_bin) = npm_global_bin_dir() {
             for ext in &["cmd", "exe", "ps1"] {
                 let candidate = npm_bin.join(format!("{name}.{ext}"));
@@ -36,30 +35,6 @@ pub fn resolve_binary(name: &str) -> std::ffi::OsString {
 
         name.into()
     }
-}
-
-#[cfg(windows)]
-fn find_on_path(name: &str) -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-    let extensions: Vec<&str> = pathext.split(';').collect();
-
-    for dir in std::env::split_paths(&path_var) {
-        // Check PATHEXT extensions first (e.g. .CMD, .EXE) — matches Windows
-        // shell behavior and avoids picking up broken extensionless binaries
-        // (like Nodist shims) over working .cmd wrappers.
-        for ext in &extensions {
-            let candidate = dir.join(format!("{name}{ext}"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-        let bare = dir.join(name);
-        if bare.is_file() {
-            return Some(bare);
-        }
-    }
-    None
 }
 
 #[cfg(windows)]
