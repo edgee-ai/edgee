@@ -77,6 +77,13 @@ fn strip_jsonc(input: &str) -> String {
     result
 }
 
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(std::path::PathBuf::from)
+}
+
 fn find_user_config() -> Option<Value> {
     let candidates: Vec<std::path::PathBuf> = {
         let mut paths = Vec::new();
@@ -84,8 +91,14 @@ fn find_user_config() -> Option<Value> {
             paths.push(cwd.join("opencode.json"));
             paths.push(cwd.join("opencode.jsonc"));
         }
-        if let Ok(home) = std::env::var("HOME") {
-            let config_dir = std::path::PathBuf::from(home).join(".config/opencode");
+        if let Some(home) = home_dir() {
+            let config_dir = home.join(".config").join("opencode");
+            paths.push(config_dir.join("opencode.json"));
+            paths.push(config_dir.join("opencode.jsonc"));
+        }
+        #[cfg(windows)]
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let config_dir = std::path::PathBuf::from(appdata).join("opencode");
             paths.push(config_dir.join("opencode.json"));
             paths.push(config_dir.join("opencode.jsonc"));
         }
@@ -218,7 +231,7 @@ pub async fn run(opts: Options) -> Result<()> {
     std::fs::write(&config_path, &config_content)?;
 
     // Step 5: launch opencode with the correct env vars
-    let mut cmd = std::process::Command::new("opencode");
+    let mut cmd = std::process::Command::new(crate::commands::launch::resolve_binary("opencode"));
     cmd.env("OPENCODE_CONFIG", &config_path);
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.args(&opts.args);
