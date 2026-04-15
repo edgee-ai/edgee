@@ -23,6 +23,9 @@ serde_json.workspace = true
 self_update = { workspace = true, optional = true, features = ["reqwest", "rustls"] }
 time = { workspace = true, features = ["formatting", "parsing", "serde"] }
 
+[target.'cfg(windows)'.dependencies]
+which = "8"
+
 [features]
 default = ["self-update"]
 self-update = ["dep:self_update"]

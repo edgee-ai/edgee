@@ -46,8 +46,8 @@ pub async fn run(opts: Options) -> Result<()> {
         &crate::config::console_api_base_url(),
     )
     .ok();
+    let mut cmd = std::process::Command::new(crate::commands::launch::resolve_binary("claude"));
 
-    let mut cmd = std::process::Command::new("claude");
     cmd.env("ANTHROPIC_BASE_URL", crate::config::gateway_base_url());
     cmd.env(
         "ANTHROPIC_CUSTOM_HEADERS",

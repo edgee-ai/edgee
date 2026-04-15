@@ -11,6 +11,49 @@ use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+/// Resolve a CLI tool binary, using the `which` crate on Windows
+/// with an npm global prefix fallback.
+pub fn resolve_binary(name: &str) -> std::ffi::OsString {
+    #[cfg(not(windows))]
+    {
+        name.into()
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(found) = which::which(name) {
+            return found.into_os_string();
+        }
+
+        if let Some(npm_bin) = npm_global_bin_dir() {
+            for ext in &["cmd", "exe", "ps1"] {
+                let candidate = npm_bin.join(format!("{name}.{ext}"));
+                if candidate.is_file() {
+                    return candidate.into_os_string();
+                }
+            }
+        }
+
+        name.into()
+    }
+}
+
+#[cfg(windows)]
+fn npm_global_bin_dir() -> Option<PathBuf> {
+    let output = std::process::Command::new("npm")
+        .args(["config", "get", "prefix"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let prefix = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(prefix))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionLogEntry {
     pub session_id: String,

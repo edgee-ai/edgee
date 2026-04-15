@@ -40,7 +40,7 @@ pub async fn run(opts: Options) -> Result<()> {
         .map(|url| format!(",\"x-edgee-repo\"=\"{}\"", url))
         .unwrap_or_default();
     let base_url = format!("{}/v1", crate::config::gateway_base_url());
-    let mut cmd = std::process::Command::new("codex");
+    let mut cmd = std::process::Command::new(crate::commands::launch::resolve_binary("codex"));
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.args([
         "-c", "model_provider=\"edgee-cli\"",
