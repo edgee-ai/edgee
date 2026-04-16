@@ -186,7 +186,7 @@ fn filter_eslint_text(output: &str) -> Option<String> {
 
     // Top files
     let mut sorted_files = files;
-    sorted_files.sort_by(|a, b| b.issues.len().cmp(&a.issues.len()));
+    sorted_files.sort_by_key(|b| std::cmp::Reverse(b.issues.len()));
 
     result.push_str("Files:\n");
     for file in sorted_files.iter().take(15) {

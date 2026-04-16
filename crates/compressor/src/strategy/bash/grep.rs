@@ -212,10 +212,10 @@ fn parse_grep_command(command: &str) -> GrepCommandInfo {
                 }
                 // Flags that consume the next token as their value.
                 "--max-count" | "--label" | "--include" | "--exclude" | "--exclude-dir"
-                | "--color" | "--colour" => {
-                    if inline_val.is_none() {
-                        i += 1; // skip value token
-                    }
+                | "--color" | "--colour"
+                    if inline_val.is_none() =>
+                {
+                    i += 1; // skip value token
                 }
                 _ => {}
             }

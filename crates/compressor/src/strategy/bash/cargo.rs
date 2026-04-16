@@ -317,7 +317,7 @@ fn filter_cargo_clippy(output: &str) -> String {
     );
 
     let mut rule_counts: Vec<_> = by_rule.iter().collect();
-    rule_counts.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    rule_counts.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
 
     for (rule, locations) in rule_counts.iter().take(15) {
         result.push_str(&format!("  {} ({}x)\n", rule, locations.len()));

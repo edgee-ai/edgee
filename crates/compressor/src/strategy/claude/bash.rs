@@ -42,18 +42,9 @@ fn contains_shell_operators(command: &str) -> bool {
                 chars.next();
             }
             ';' if !in_single && !in_double => return true,
-            '&' if !in_single && !in_double => {
-                if chars.peek() == Some(&'&') {
-                    return true;
-                }
-                // Single `&` (background operator) is not a bundling operator
-            }
-            '|' if !in_single && !in_double => {
-                if chars.peek() == Some(&'|') {
-                    return true;
-                }
-                // Single `|` is a pipe, not a bundling operator
-            }
+            // Single `&` (background) and `|` (pipe) are not bundling operators
+            '&' if !in_single && !in_double && chars.peek() == Some(&'&') => return true,
+            '|' if !in_single && !in_double && chars.peek() == Some(&'|') => return true,
             _ => {}
         }
     }

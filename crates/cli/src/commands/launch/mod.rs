@@ -185,7 +185,7 @@ pub fn read_all_session_logs() -> Result<Vec<SessionLogEntry>> {
         }
     }
 
-    entries.sort_by(|a, b| b.ended_at_unix.cmp(&a.ended_at_unix));
+    entries.sort_by_key(|b| std::cmp::Reverse(b.ended_at_unix));
     Ok(entries)
 }
 
@@ -311,7 +311,7 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
         if let Some(tool_stats) = &stats.tool_compression_stats {
             if !tool_stats.is_empty() {
                 let mut tools: Vec<_> = tool_stats.iter().collect();
-                tools.sort_by(|a, b| b.1.before.cmp(&a.1.before));
+                tools.sort_by_key(|b| std::cmp::Reverse(b.1.before));
                 println!();
                 println!("  {}", style("Tool breakdown").bold().underlined());
                 println!(
