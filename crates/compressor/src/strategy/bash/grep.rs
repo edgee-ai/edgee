@@ -1422,7 +1422,7 @@ src/tests.rs
     // ── real-world: grep -A 30 '"operationId": "getMe"' edgee-cli/ ─────────
 
     #[test]
-    fn test_real_grep_rA_multi_file() {
+    fn test_real_grep_r_a_multi_file() {
         // grep -rA 30 '"operationId": "getMe"' edgee-cli/
         // Multi-file, no line numbers, dashed filenames, large context block
         let input = "\
@@ -1481,7 +1481,7 @@ edgee-cli/openapi/openapi.json-        \"summary\": \"Get a User\",
     }
 
     #[test]
-    fn test_real_grep_rnA_multi_file() {
+    fn test_real_grep_rn_a_multi_file() {
         // grep -rnA 30 '"operationId": "getMe"' edgee-cli/
         // Multi-file, with line numbers, dashed filenames, large context block
         let input = "\
@@ -1545,7 +1545,7 @@ edgee-cli/openapi/openapi.json-2456-        \"summary\": \"Get a User\",
     }
 
     #[test]
-    fn test_real_grep_rnA_single_file() {
+    fn test_real_grep_rn_a_single_file() {
         // grep -rnA 30 '"operationId": "getMe"' edgee-cli/openapi/openapi.json
         // Single file, with line numbers, no filename prefix in output
         let input = "\
@@ -1610,7 +1610,7 @@ edgee-cli/openapi/openapi.json-2456-        \"summary\": \"Get a User\",
     }
 
     #[test]
-    fn test_real_grep_rA_single_file_no_linenums() {
+    fn test_real_grep_r_a_single_file_no_linenums() {
         // grep -rA 30 '"operationId": "getMe"' edgee-cli/openapi/openapi.json
         // Single file, no line numbers, no filename prefix in output (bare content)
         let input = "\
@@ -1664,7 +1664,7 @@ edgee-cli/openapi/openapi.json-2456-        \"summary\": \"Get a User\",
     }
 
     #[test]
-    fn test_real_grep_nB_single_file_json() {
+    fn test_real_grep_n_b_single_file_json() {
         // Reproduces: grep -nB 30 getMe openapi.json
         // Single file, line numbers, -B only (match is LAST line)
         let input = "\
@@ -1716,7 +1716,7 @@ edgee-cli/openapi/openapi.json-2456-        \"summary\": \"Get a User\",
     }
 
     #[test]
-    fn test_real_grep_nB_single_file_json_no_context_info() {
+    fn test_real_grep_n_b_single_file_json_no_context_info() {
         // Same data but with context_lines=0 (simulates parse failure)
         let input = "\
 2396-              \"type\": \"string\"
