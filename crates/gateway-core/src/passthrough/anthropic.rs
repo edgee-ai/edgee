@@ -98,7 +98,7 @@ mod tests {
     }
 
     #[test]
-    fn strips_skipped_headers() {
+    fn forwards_headers_as_is() {
         let req = PassthroughRequest::new(
             Bytes::from("{}"),
             vec![

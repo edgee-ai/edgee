@@ -1,14 +1,9 @@
-use std::{
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::task::{Context, Poll};
 
 use futures::future::BoxFuture;
 use tower::Service;
 
 use crate::{
-    backend::http::HttpClient,
-    config::ProviderConfig,
     error::{Error, Result},
     types::{CompletionRequest, GatewayResponse},
 };
@@ -49,23 +44,12 @@ use crate::{
 ///     openai_config,
 /// );
 /// ```
-pub struct ProviderDispatchService {
-    _client: Arc<dyn HttpClient>,
-    _anthropic_config: ProviderConfig,
-    _openai_config: ProviderConfig,
-}
+pub struct ProviderDispatchService {}
 
 impl ProviderDispatchService {
-    pub fn new(
-        client: Arc<dyn HttpClient>,
-        anthropic_config: ProviderConfig,
-        openai_config: ProviderConfig,
-    ) -> Self {
-        Self {
-            _client: client,
-            _anthropic_config: anthropic_config,
-            _openai_config: openai_config,
-        }
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
@@ -89,21 +73,13 @@ impl Service<CompletionRequest> for ProviderDispatchService {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use tower::ServiceExt as _;
 
     use super::*;
-    use crate::{
-        testing::StubClient,
-        types::message::{Message, MessageContent, UserMessage},
-    };
+    use crate::types::message::{Message, MessageContent, UserMessage};
 
     fn make_service() -> ProviderDispatchService {
-        ProviderDispatchService::new(
-            Arc::new(StubClient),
-            ProviderConfig::new("test-anthropic-key"),
-            ProviderConfig::new("test-openai-key"),
-        )
+        ProviderDispatchService::new()
     }
 
     #[tokio::test]

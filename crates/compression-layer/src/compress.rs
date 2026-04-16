@@ -39,20 +39,31 @@ pub fn compress_request(
                 continue;
             };
 
-            let compressor = match config.agent {
-                AgentType::Claude => edgee_compressor::claude_compressor_for(name),
-                AgentType::Codex => edgee_compressor::codex_compressor_for(name),
-                AgentType::OpenCode => edgee_compressor::opencode_compressor_for(name),
-            };
-
-            let Some(compressor) = compressor else {
-                continue;
-            };
-
             let text = tool_msg.content.as_text();
-            if let Some(compressed) = edgee_compressor::compress_claude_tool_with_segment_protection(
-                compressor, arguments, &text,
-            ) {
+
+            // Each agent type has different tool-name conventions and output
+            // formats. Codex outputs include a header ("Exit code: …\nOutput:\n")
+            // that must be stripped before compression, so it uses a dedicated
+            // pipeline that handles header stripping + segment protection.
+            let compressed = match config.agent {
+                AgentType::Codex => {
+                    edgee_compressor::compress_codex_tool_output(name, arguments, &text)
+                }
+                AgentType::Claude => edgee_compressor::claude_compressor_for(name).and_then(|c| {
+                    edgee_compressor::compress_claude_tool_with_segment_protection(
+                        c, arguments, &text,
+                    )
+                }),
+                AgentType::OpenCode => {
+                    edgee_compressor::opencode_compressor_for(name).and_then(|c| {
+                        edgee_compressor::compress_claude_tool_with_segment_protection(
+                            c, arguments, &text,
+                        )
+                    })
+                }
+            };
+
+            if let Some(compressed) = compressed {
                 tool_msg.content = MessageContent::Text(compressed);
             }
         }

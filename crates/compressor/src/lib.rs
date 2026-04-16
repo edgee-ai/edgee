@@ -17,6 +17,9 @@ pub use strategy::claude::compressor_for as claude_compressor_for;
 pub use strategy::codex::compressor_for as codex_compressor_for;
 pub use strategy::opencode::compressor_for as opencode_compressor_for;
 
+// Re-export complete compression pipelines (includes header stripping, segment protection, etc.)
+pub use strategy::codex::compress as compress_codex_tool_output;
+
 // Re-export the main compression utility
 pub use util::compress_claude_tool_with_segment_protection;
 

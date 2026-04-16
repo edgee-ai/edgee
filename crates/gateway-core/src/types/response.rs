@@ -106,10 +106,15 @@ pub struct Delta {
 }
 
 /// An incremental tool call in a streaming delta.
+///
+/// Only the **first** chunk for a given `index` carries `id` and `type`;
+/// subsequent chunks omit them, so both fields are optional.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeltaToolCall {
     pub index: u32,
-    pub id: String,
+    /// Present only in the first chunk for this tool call index.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(rename = "type")]
     pub tool_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]

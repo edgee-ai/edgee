@@ -70,7 +70,11 @@ fn extract_command(arguments: &str) -> Option<String> {
             (Some(command), None) => command.as_str().map(String::from),
             (None, Some(cmd)) => cmd.as_str().map(String::from),
             (Some(command), Some(cmd)) => {
-                println!("command: {:?}, cmd: {:?}", command, cmd);
+                tracing::debug!(
+                    ?command,
+                    ?cmd,
+                    "bash: both 'command' and 'cmd' keys present, using 'command'"
+                );
                 command.as_str().map(String::from)
             }
             (None, None) => None,
