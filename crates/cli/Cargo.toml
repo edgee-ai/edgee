@@ -1,6 +1,6 @@
 [package]
 name = "edgee-cli"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 
 [[bin]]
@@ -22,6 +22,9 @@ reqwest = { workspace = true, features = ["json"] }
 serde_json.workspace = true
 self_update = { workspace = true, optional = true, features = ["reqwest", "rustls"] }
 time = { workspace = true, features = ["formatting", "parsing", "serde"] }
+
+[target.'cfg(windows)'.dependencies]
+which = "8"
 
 [features]
 default = ["self-update"]
