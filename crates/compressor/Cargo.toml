@@ -2,7 +2,7 @@
 name = "edgee-compressor"
 version = "0.1.0"
 edition = "2024"
-description = "HTTP response compression layer for Edgee"
+description = "HTTP response compression library for Edgee"
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
