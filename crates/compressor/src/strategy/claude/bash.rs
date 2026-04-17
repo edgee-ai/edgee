@@ -42,18 +42,9 @@ fn contains_shell_operators(command: &str) -> bool {
                 chars.next();
             }
             ';' if !in_single && !in_double => return true,
-            '&' if !in_single && !in_double => {
-                if chars.peek() == Some(&'&') {
-                    return true;
-                }
-                // Single `&` (background operator) is not a bundling operator
-            }
-            '|' if !in_single && !in_double => {
-                if chars.peek() == Some(&'|') {
-                    return true;
-                }
-                // Single `|` is a pipe, not a bundling operator
-            }
+            // Single `&` (background) and `|` (pipe) are not bundling operators
+            '&' if !in_single && !in_double && chars.peek() == Some(&'&') => return true,
+            '|' if !in_single && !in_double && chars.peek() == Some(&'|') => return true,
             _ => {}
         }
     }
@@ -70,7 +61,11 @@ fn extract_command(arguments: &str) -> Option<String> {
             (Some(command), None) => command.as_str().map(String::from),
             (None, Some(cmd)) => cmd.as_str().map(String::from),
             (Some(command), Some(cmd)) => {
-                println!("command: {:?}, cmd: {:?}", command, cmd);
+                tracing::debug!(
+                    ?command,
+                    ?cmd,
+                    "bash: both 'command' and 'cmd' keys present, using 'command'"
+                );
                 command.as_str().map(String::from)
             }
             (None, None) => None,

@@ -230,13 +230,93 @@ struct GrepOutputLine<'a> {
     is_match: bool,
 }
 
-/// Normalize file path: convert absolute paths to relative if possible.
-fn normalize_path(path: &str) -> &str {
-    // If it starts with /home/clement/work/, strip that prefix
-    if let Some(stripped) = path.strip_prefix("/home/clement/work/") {
-        return stripped;
+/// Compute the longest common directory prefix among *absolute* paths in `lines`.
+///
+/// Returns a prefix that ends with `/` (i.e. a full directory component),
+/// so that stripping it produces valid relative paths. Returns `""` when
+/// no meaningful common prefix exists.
+///
+/// Only considers paths starting with `/` — relative paths are left alone.
+/// When relative paths are also present, the prefix is further constrained so
+/// that stripping it from absolute paths produces results that match the
+/// relative paths (i.e. the prefix covers exactly the absolute portion that
+/// relative paths don't have).
+fn compute_common_prefix(lines: &[&str]) -> String {
+    let mut abs_paths: Vec<&str> = Vec::new();
+    let mut rel_paths: Vec<&str> = Vec::new();
+
+    for line in lines.iter().filter(|l| !l.trim().is_empty()) {
+        // Extract the path portion before a separator followed by digits.
+        // We can't break on the first `:` or `-` because paths may contain `-`
+        // (e.g. `edgee-cli/`). Instead, scan for all separators and pick the
+        // one where the remainder starts with a digit (i.e. a line number).
+        for (i, ch) in line.char_indices() {
+            if (ch == ':' || ch == '-') && i > 0 {
+                let maybe_path = &line[..i];
+                if maybe_path.contains('/') {
+                    let rest = &line[i + 1..];
+                    if rest.starts_with(|c: char| c.is_ascii_digit()) {
+                        if maybe_path.starts_with('/') {
+                            abs_paths.push(maybe_path);
+                        } else {
+                            rel_paths.push(maybe_path);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
-    path
+
+    if abs_paths.is_empty() {
+        return String::new();
+    }
+
+    // When we have both absolute and relative paths, find the prefix that
+    // makes the absolute paths match the relative ones. For example:
+    //   abs:  /home/user/project/src/main.rs
+    //   rel:  src/main.rs
+    //   prefix = /home/user/project/
+    if !rel_paths.is_empty() {
+        if let Some(first_rel) = rel_paths.first() {
+            for abs in &abs_paths {
+                if let Some(pos) = abs.find(first_rel) {
+                    let candidate = &abs[..pos];
+                    // Verify this prefix works for all absolute paths.
+                    if abs_paths.iter().all(|a| a.starts_with(candidate)) {
+                        return candidate.to_string();
+                    }
+                }
+            }
+        }
+        // If we can't reconcile, don't strip — safer to leave paths as-is.
+        return String::new();
+    }
+
+    // All paths are absolute — find the longest common directory prefix.
+    let mut prefix = abs_paths[0].to_string();
+    for path in &abs_paths[1..] {
+        while !path.starts_with(prefix.as_str()) && !prefix.is_empty() {
+            prefix.pop();
+        }
+        if prefix.is_empty() {
+            return String::new();
+        }
+    }
+
+    // Trim to the last `/` so we strip whole directory components.
+    if let Some(last_slash) = prefix.rfind('/') {
+        prefix.truncate(last_slash + 1);
+    } else {
+        return String::new();
+    }
+
+    // Must be at least `/x/` to be worth stripping.
+    if prefix.len() <= 1 {
+        return String::new();
+    }
+
+    prefix
 }
 
 /// Extract the file path from a grep line and normalize it.
@@ -260,7 +340,7 @@ fn extract_and_normalize_prefix(line: &str) -> Option<String> {
             .unwrap_or(false)
         {
             // Likely a match line: path:linenum...
-            let normalized = normalize_path(parts[0]);
+            let normalized = parts[0];
             return Some(normalized.to_string());
         }
     }
@@ -279,7 +359,7 @@ fn extract_and_normalize_prefix(line: &str) -> Option<String> {
                 // Remove the trailing "-linenum" part if present
                 if let Some(path_end) = path_part.rfind('-') {
                     let path_only = &path_part[..path_end];
-                    let normalized = normalize_path(path_only);
+                    let normalized = path_only;
                     return Some(normalized.to_string());
                 }
             }
@@ -289,26 +369,25 @@ fn extract_and_normalize_prefix(line: &str) -> Option<String> {
     None
 }
 
-/// Normalize all paths in the output to convert absolute paths to relative
+/// Normalize all paths in the output by stripping the longest common directory
+/// prefix. This converts absolute paths to shorter relative paths, saving tokens
+/// and unifying files that appear with mixed absolute/relative paths.
 fn normalize_all_output_paths(output: &str) -> String {
-    output
-        .lines()
+    let lines: Vec<&str> = output.lines().collect();
+    let common = compute_common_prefix(&lines);
+    if common.is_empty() {
+        return output.to_string();
+    }
+
+    lines
+        .iter()
         .map(|line| {
-            // Find the first : or - (separator between path and rest)
-            for (i, ch) in line.char_indices() {
-                if (ch == ':' || ch == '-') && i > 0 {
-                    let path_part = &line[..i];
-                    let normalized_path = normalize_path(path_part);
-                    if normalized_path != path_part {
-                        // Path was absolute, normalize it
-                        let sep = ch;
-                        let rest = &line[i + 1..];
-                        return format!("{}{}{}", normalized_path, sep, rest);
-                    }
-                    break;
-                }
+            // Try to strip the common prefix from the path portion of each line.
+            if line.starts_with(&common) {
+                line[common.len()..].to_string()
+            } else {
+                line.to_string()
             }
-            line.to_string()
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -395,7 +474,7 @@ fn parse_match_line_content(line: &str) -> Option<GrepOutputLine<'_>> {
     // Now try to parse as match line
     let parts: Vec<&str> = line.splitn(3, ':').collect();
     if parts.len() == 3 {
-        let file = normalize_path(parts[0]);
+        let file = parts[0];
         if let Ok(ln) = parts[1].trim().parse::<usize>() {
             return Some(GrepOutputLine {
                 file,
@@ -413,7 +492,7 @@ fn parse_match_line_content(line: &str) -> Option<GrepOutputLine<'_>> {
         });
     }
     if parts.len() == 2 {
-        let file = normalize_path(parts[0]);
+        let file = parts[0];
         return Some(GrepOutputLine {
             file,
             line_num: 0,
@@ -438,7 +517,7 @@ fn parse_context_line_content<'a>(
                 for (i, ch) in line.char_indices() {
                     if ch == '-' && i > 0 {
                         let path_part = &line[..i];
-                        if normalize_path(path_part) == *file {
+                        if path_part == *file {
                             let rest = &line[i + 1..];
                             // Try "linenum-content"
                             if let Some(dash_pos) = rest.find('-') {

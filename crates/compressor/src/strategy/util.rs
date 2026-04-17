@@ -1,13 +1,12 @@
 //! Shared utilities for compression strategies.
 
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
+
 use regex::Regex;
 
-lazy_static! {
-    /// Matches `<system-reminder>…</system-reminder>` blocks, including newlines.
-    pub static ref SYSTEM_REMINDER_RE: Regex =
-        Regex::new(r"(?s)<system-reminder>.*?</system-reminder>").unwrap();
-}
+/// Matches `<system-reminder>…</system-reminder>` blocks, including newlines.
+static SYSTEM_REMINDER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<system-reminder>.*?</system-reminder>").unwrap());
 
 /// A segment of text that is either eligible for compression or must be passed through verbatim.
 #[derive(Debug, PartialEq)]

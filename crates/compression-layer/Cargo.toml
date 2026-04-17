@@ -1,0 +1,10 @@
+[package]
+name = "edgee-compression-layer"
+version = "0.1.0"
+edition = "2024"
+description = "Tower Layer that compresses LLM tool-result content before provider dispatch"
+
+[dependencies]
+edgee-ai-gateway-core = { path = "../gateway-core" }
+edgee-compressor = { path = "../compressor" }
+tower = { workspace = true }

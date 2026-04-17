@@ -23,8 +23,8 @@
 //! collapsing blank lines, and optionally collapsing function bodies.
 
 use std::path::Path;
+use std::sync::LazyLock;
 
-use lazy_static::lazy_static;
 use regex::Regex;
 
 use super::ToolCompressor;
@@ -130,15 +130,15 @@ pub struct CommentPatterns {
 
 // --- Filters ---
 
-lazy_static! {
-    static ref MULTIPLE_BLANK_LINES: Regex = Regex::new(r"\n{3,}").unwrap();
-    static ref IMPORT_PATTERN: Regex =
-        Regex::new(r"^(use |import |from |require\(|#include)").unwrap();
-    static ref FUNC_SIGNATURE: Regex = Regex::new(
-        r"^(pub\s+)?(async\s+)?(fn|def|function|func|class|struct|enum|trait|interface|type)\s+\w+"
+static MULTIPLE_BLANK_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
+static IMPORT_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(use |import |from |require\(|#include)").unwrap());
+static FUNC_SIGNATURE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(pub\s+)?(async\s+)?(fn|def|function|func|class|struct|enum|trait|interface|type)\s+\w+",
     )
-    .unwrap();
-}
+    .unwrap()
+});
 
 /// Strip comments while preserving doc comments and collapse blank lines.
 pub(crate) fn filter_minimal(content: &str, lang: &Language) -> String {
@@ -210,6 +210,10 @@ pub(crate) fn filter_minimal(content: &str, lang: &Language) -> String {
 }
 
 /// Strip comments, collapse function bodies, keep signatures/imports/constants.
+///
+/// TODO: wire up aggressive mode — currently only minimal filtering is applied.
+/// Aggressive mode strips function bodies, retaining only signatures/imports/constants;
+/// enable it for very large files once the quality/correctness bar is established.
 #[allow(dead_code)] // Aggressive mode temporarily disabled
 pub(crate) fn filter_aggressive(content: &str, lang: &Language) -> String {
     let minimal = filter_minimal(content, lang);
