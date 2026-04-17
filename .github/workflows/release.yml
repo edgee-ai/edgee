@@ -207,9 +207,10 @@ jobs:
             { echo "ERROR: version patch did not apply to $MANIFEST"; exit 1; }
 
       - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p "${{ needs.setup.outputs.crate }}" --allow-dirty
+        uses: katyo/publish-crates@v2
+        with:
+          args: -p ${{ needs.setup.outputs.crate }} --allow-dirty
+          registry-token: ${{ secrets.CRATES_IO_TOKEN }}
 
   update-homebrew-tap:
     needs: [setup, build-release-binaries]
