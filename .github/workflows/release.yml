@@ -182,6 +182,7 @@ jobs:
 
   publish-crate:
     needs: setup
+    if: needs.setup.outputs.is_cli != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
