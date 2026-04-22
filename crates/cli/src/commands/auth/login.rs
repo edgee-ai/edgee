@@ -31,6 +31,7 @@ pub async fn perform_login() -> Result<String> {
     if let Ok(v) = std::env::var("EDGEE_CONSOLE_URL") { creds.console_url = Some(v); }
     if let Ok(v) = std::env::var("EDGEE_CONSOLE_API_URL") { creds.console_api_url = Some(v); }
     if let Ok(v) = std::env::var("EDGEE_API_URL") { creds.gateway_url = Some(v); }
+    if let Ok(v) = std::env::var("EDGEE_MCP_URL") { creds.mcp_url = Some(v); }
 
     let (user_token, email, user_id) = {
         let (token, email, user_id) = browser_auth().await?;
@@ -130,6 +131,40 @@ pub async fn ensure_org_selected() -> Result<()> {
     creds.org_id = Some(org_id);
     crate::config::write(&creds)?;
 
+    Ok(())
+}
+
+/// Ensures the user has chosen whether to enable Edgee MCP integration.
+/// If the preference is not yet set, prompts the user interactively.
+pub async fn ensure_mcp_preference() -> Result<()> {
+    let mut creds = crate::config::read()?;
+    if creds.enable_mcp.is_some() {
+        return Ok(());
+    }
+
+    println!();
+    println!("  {}", style("Edgee MCP Integration").bold());
+    println!(
+        "{}",
+        style(
+            r#"  This gives the model access to the Edgee MCP server, enabling:
+    - Automatic GitHub repo detection
+    - Session naming for easier tracking
+    - PR tracking linked to your sessions
+
+  You can change this later in your profile config.
+"#
+        )
+        .dim()
+    );
+
+    let confirmed = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enable Edgee MCP integration?")
+        .default(true)
+        .interact()?;
+
+    creds.enable_mcp = Some(confirmed);
+    crate::config::write(&creds)?;
     Ok(())
 }
 
