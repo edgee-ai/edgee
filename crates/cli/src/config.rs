@@ -284,7 +284,7 @@ pub fn mcp_base_url() -> String {
     read()
         .ok()
         .and_then(|p| p.mcp_url)
-        .unwrap_or_else(|| "https://mcp.edgee.ai".to_string())
+        .unwrap_or_else(|| "https://api.edgee.app/mcp".to_string())
 }
 
 // ---------------------------------------------------------------------------

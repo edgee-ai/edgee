@@ -15,6 +15,7 @@ on:
         type: string
   push:
     tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
       - "*-[0-9]*.[0-9]*.[0-9]*"
 jobs:
   setup:
@@ -33,8 +34,14 @@ jobs:
             VERSION="${{ inputs.version }}"
           else
             TAG="${GITHUB_REF_NAME}"
-            VERSION=$(echo "$TAG" | grep -oP '\d+\.\d+\.\d+[^-]*$')
-            CRATE="${TAG%-${VERSION}}"
+            if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+              # `v<X.Y.Z>` is reserved for CLI releases.
+              VERSION="${TAG#v}"
+              CRATE="edgee-cli"
+            else
+              VERSION=$(echo "$TAG" | grep -oP '\d+\.\d+\.\d+[^-]*$')
+              CRATE="${TAG%-${VERSION}}"
+            fi
           fi
 
           if [ -z "$CRATE" ] || [ -z "$VERSION" ]; then
