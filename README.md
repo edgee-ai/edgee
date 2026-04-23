@@ -76,6 +76,14 @@ edgee launch codex
 edgee launch opencode
 ```
 
+Any extra flags you pass after the subcommand are forwarded straight to the underlying agent. For example, to resume the most recent session:
+
+```bash
+edgee launch claude --resume abcd # continue the last Claude Code session
+edgee launch codex resume         # resume the last Codex session
+edgee launch opencode -c          # continue the last OpenCode session
+```
+
 ### Use as a standalone gateway
 
 Point any OpenAI-compatible client at Edgee:
