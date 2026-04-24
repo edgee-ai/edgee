@@ -3,7 +3,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use edgee_ai_gateway_core::CompletionRequest;
+use edgee_gateway_core::CompletionRequest;
 use tower::Service;
 
 use crate::{compress::compress_request, config::CompressionConfig};

@@ -379,24 +379,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
-name = "edgee-ai-gateway-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum-core",
- "bytes",
- "futures",
- "http",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tower",
- "tracing",
-]
-
-[[package]]
 name = "edgee-cli"
 version = "0.2.3"
 dependencies = [
@@ -421,8 +403,8 @@ dependencies = [
 name = "edgee-compression-layer"
 version = "0.1.0"
 dependencies = [
- "edgee-ai-gateway-core",
  "edgee-compressor",
+ "edgee-gateway-core",
  "tower",
 ]
 
@@ -435,6 +417,28 @@ dependencies = [
  "serde_json",
  "tracing",
 ]
+
+[[package]]
+name = "edgee-gateway-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum-core",
+ "bytes",
+ "futures",
+ "http",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "edgee-gateway-http"
+version = "0.1.0"
 
 [[package]]
 name = "encode_unicode"

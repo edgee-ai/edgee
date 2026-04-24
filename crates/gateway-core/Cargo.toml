@@ -1,5 +1,5 @@
 [package]
-name    = "edgee-ai-gateway-core"
+name    = "edgee-gateway-core"
 version = "0.1.0"
 edition = "2024"
 description = "Core LLM request→response pipeline for the Edgee AI Gateway"
@@ -10,6 +10,7 @@ default = []
 tokio = ["dep:reqwest", "dep:tokio"]
 
 [dependencies]
+# External dependencies
 tower.workspace = true
 futures.workspace = true
 async-trait.workspace = true

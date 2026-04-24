@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use edgee_ai_gateway_core::{
+use edgee_gateway_core::{
     CompletionRequest,
     types::{Message, MessageContent},
 };
@@ -74,7 +74,7 @@ pub fn compress_request(
 
 #[cfg(test)]
 mod tests {
-    use edgee_ai_gateway_core::{
+    use edgee_gateway_core::{
         CompletionRequest,
         types::{
             AssistantMessage, FunctionCall, Message, MessageContent, ToolCall, ToolMessage,
