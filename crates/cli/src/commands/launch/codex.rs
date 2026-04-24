@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 #[derive(Debug, clap::Parser)]
+#[command(disable_help_flag = true)]
 pub struct Options {
     /// Extra args passed through to the codex CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
