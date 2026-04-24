@@ -1,0 +1,10 @@
+[package]
+name = "edgee-gateway-http"
+version = "0.1.0"
+edition = "2024"
+description = "HTTP server layer for the Edgee AI Gateway"
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
