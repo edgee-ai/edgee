@@ -15,6 +15,7 @@ pub use strategy::bash::BashCompressor;
 pub use strategy::bash::compressor_for as bash_compressor_for;
 pub use strategy::claude::compressor_for as claude_compressor_for;
 pub use strategy::codex::compressor_for as codex_compressor_for;
+pub use strategy::cursor::compressor_for as cursor_compressor_for;
 pub use strategy::opencode::compressor_for as opencode_compressor_for;
 
 // Re-export complete compression pipelines (includes header stripping, segment protection, etc.)

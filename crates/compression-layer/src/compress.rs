@@ -54,6 +54,11 @@ pub fn compress_request(
                         c, arguments, &text,
                     )
                 }),
+                AgentType::Cursor => edgee_compressor::cursor_compressor_for(name).and_then(|c| {
+                    edgee_compressor::compress_claude_tool_with_segment_protection(
+                        c, arguments, &text,
+                    )
+                }),
                 AgentType::OpenCode => {
                     edgee_compressor::opencode_compressor_for(name).and_then(|c| {
                         edgee_compressor::compress_claude_tool_with_segment_protection(
