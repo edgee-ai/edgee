@@ -8,6 +8,7 @@ name = "edgee"
 path = "src/main.rs"
 
 [dependencies]
+# External dependencies
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 colored.workspace = true

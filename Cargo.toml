@@ -8,6 +8,13 @@ homepage = "https://www.edgee.cloud"
 repository = "https://github.com/edgee-ai/edgee"
 
 [workspace.dependencies]
+# Workspace crates
+edgee-gateway-core      = { path = "crates/gateway-core" }
+edgee-gateway-http      = { path = "crates/gateway-http" }
+edgee-compressor        = { path = "crates/compressor" }
+edgee-compression-layer = { path = "crates/compression-layer" }
+
+# External dependencies
 anyhow = "1"
 async-trait = "0.1"
 axum-core = "0.5"
