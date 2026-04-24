@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 #[derive(Debug, clap::Parser)]
+#[command(disable_help_flag = true)]
 pub struct Options {
     /// Extra args passed through to the opencode CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
