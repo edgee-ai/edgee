@@ -33,5 +33,7 @@ async fn main() -> Result<()> {
 
     config::set_active_profile(profile);
 
+    api::spawn_cli_version_report(env!("CARGO_PKG_VERSION"));
+
     commands::run(opts.command).await
 }
