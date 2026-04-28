@@ -105,8 +105,16 @@ impl ApiClient {
         resp.json().await.context("Invalid API key response")
     }
 
-    pub async fn set_cli_version(&self, version: &str) -> Result<()> {
-        let url = format!("{}/v1/users/me/cli-version", self.base_url);
+    pub async fn set_session_cli_version(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        version: &str,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/v1/organizations/{}/sessions/{}/cli-version",
+            self.base_url, org_id, session_id
+        );
         let body = serde_json::json!({ "version": version });
         let resp = self
             .http
@@ -150,23 +158,4 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
         }
         _ => anyhow::bail!("Failed to {action}: HTTP {status}"),
     }
-}
-
-/// Fire-and-forget: report the running CLI version to the console.
-///
-/// No-op when the active profile has no user token. All errors are swallowed —
-/// this is best-effort telemetry and must never affect command execution or
-/// surface output to the user.
-pub fn spawn_cli_version_report(version: &'static str) {
-    let token = match crate::config::read() {
-        Ok(creds) => creds.user_token.filter(|t| !t.trim().is_empty()),
-        Err(_) => None,
-    };
-    let Some(token) = token else { return };
-
-    tokio::spawn(async move {
-        if let Ok(client) = ApiClient::new(&token) {
-            let _ = client.set_cli_version(version).await;
-        }
-    });
 }
