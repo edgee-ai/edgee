@@ -41,6 +41,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let claude = creds.claude.as_ref().unwrap();
     let api_key = &claude.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
+    crate::commands::launch::spawn_cli_version_report(&creds, &session_id);
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
         .as_ref()
