@@ -410,9 +410,11 @@ dependencies = [
  "self_update",
  "serde",
  "serde_json",
+ "tempfile",
  "time",
  "tokio",
  "toml",
+ "unicode-width",
  "uuid",
  "which",
 ]
