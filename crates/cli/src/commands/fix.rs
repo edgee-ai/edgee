@@ -103,6 +103,7 @@ fn apply(diag: &Diagnosis) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -301,6 +302,81 @@ mod tests {
         });
         let after_second = read(&proj.join(".claude").join(LOCAL_FILE));
         assert_eq!(after_first, after_second);
+    }
+
+    /// End-to-end realistic shadowing scenario: a project ships a shared
+    /// `.claude/settings.json` whose statusLine prints `HELLO_FROM_OTHER_TOOL`.
+    /// We:
+    ///   1. diagnose → SHADOWED.
+    ///   2. apply the fix → write `.claude/settings.local.json` with our wrap.
+    ///   3. read the resulting wrap command back.
+    ///   4. extract the wrapped command (between single quotes).
+    ///   5. run the wrap merge with that command and verify the output
+    ///      preserves Edgee verbatim AND contains `HELLO_FROM_OTHER_TOOL`.
+    #[tokio::test]
+    async fn end_to_end_shadow_then_fix_then_wrap_renders_both() {
+        let (_tmp, home, proj) = fixture("e2e");
+        let other_tool_marker = "HELLO_FROM_OTHER_TOOL";
+        write_json(
+            &proj.join(".claude").join("settings.json"),
+            json!({"statusLine": {
+                "type": "command",
+                "command": format!("echo {other_tool_marker}")
+            }}),
+        );
+
+        let _lock = env_lock();
+        let _h = isolate_home(&home);
+
+        // Make sure unrelated env vars don't leak between tests.
+        unsafe {
+            std::env::remove_var("EDGEE_NO_AUTO_OVERLAY");
+            std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::remove_var("EDGEE_HAS_EXISTING_STATUSLINE");
+            std::env::remove_var("EDGEE_STATUSLINE_TIMEOUT_MS");
+            std::env::set_var("COLUMNS", "200");
+            std::env::set_var("EDGEE_STATUSLINE_SEPARATOR", " | ");
+            std::env::remove_var("EDGEE_STATUSLINE_POSITION");
+        }
+
+        // 1 + 2: diagnose & apply.
+        let diag = doctor::diagnose(&proj).unwrap();
+        assert_eq!(diag.status, ConflictStatus::Shadowed);
+        apply(&diag).unwrap();
+
+        // 3: read the resulting wrap command.
+        let local = read(&proj.join(".claude").join(LOCAL_FILE));
+        let wrap_cmd = local["statusLine"]["command"].as_str().unwrap();
+        assert!(wrap_cmd.starts_with("edgee statusline --wrap '"));
+        assert!(wrap_cmd.ends_with("'"));
+
+        // 4: extract the wrapped command (everything between the first `'`
+        // and the last `'`, with POSIX `'\''` escapes unwrapped).
+        let inner_quoted = &wrap_cmd["edgee statusline --wrap '".len()..wrap_cmd.len() - 1];
+        let inner = inner_quoted.replace("'\\''", "'");
+        assert_eq!(inner, format!("echo {other_tool_marker}"));
+
+        // 5: run the wrap merge with that command. We bypass the binary and
+        // call the merge function directly so the test stays hermetic.
+        let merged = crate::commands::statusline::wrap::run_merge_for_test(inner).await;
+
+        assert!(
+            merged.contains("Edgee"),
+            "Edgee segment must appear: {merged:?}"
+        );
+        assert!(
+            merged.contains(other_tool_marker),
+            "wrapped marker must appear: {merged:?}"
+        );
+        assert!(
+            merged.contains(" | "),
+            "separator must appear when both render: {merged:?}"
+        );
+
+        unsafe {
+            std::env::remove_var("COLUMNS");
+            std::env::remove_var("EDGEE_STATUSLINE_SEPARATOR");
+        }
     }
 
     #[test]

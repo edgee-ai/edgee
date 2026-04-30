@@ -55,6 +55,12 @@ fn read_stdin() -> Vec<u8> {
     buf
 }
 
+/// Test-only entrypoint for the merge logic. Reads no stdin (passes empty).
+#[cfg(test)]
+pub async fn run_merge_for_test(command: String) -> String {
+    run_merge(command, Vec::new()).await
+}
+
 async fn run_merge(command: String, stdin: Vec<u8>) -> String {
     let timeout = Duration::from_millis(parse_env_u64(
         "EDGEE_STATUSLINE_TIMEOUT_MS",
