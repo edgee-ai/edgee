@@ -18,6 +18,12 @@ setup_command! {
     /// Emit a machine-readable JSON report instead of human-readable text.
     #[arg(long)]
     pub json: bool,
+
+    /// Print nothing on success, only a one-line warning when status is
+    /// SHADOWED. Used by the user-level `SessionStart` hook installed by
+    /// `edgee install`. Honors `EDGEE_SILENCE_CONFLICT_WARNING=1`.
+    #[arg(long)]
+    pub warn_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -80,12 +86,44 @@ pub async fn run(opts: Options) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let diag = diagnose(&cwd)?;
 
+    if opts.warn_only {
+        // Hook-friendly mode: silent unless SHADOWED, never fails the caller.
+        if matches!(diag.status, ConflictStatus::Shadowed) && !is_silenced() {
+            if let Some(cmd) = &diag.effective_command {
+                println!(
+                    "[edgee] Project-level statusLine '{}' is shadowing Edgee. \
+                     Run `edgee fix` from the project root to overlay both. \
+                     Silence with EDGEE_SILENCE_CONFLICT_WARNING=1.",
+                    truncate_for_warning(cmd, 60)
+                );
+            }
+        }
+        return Ok(());
+    }
+
     if opts.json {
         println!("{}", serde_json::to_string_pretty(&diag.to_json())?);
     } else {
         print_human(&diag);
     }
     Ok(())
+}
+
+fn is_silenced() -> bool {
+    matches!(
+        std::env::var("EDGEE_SILENCE_CONFLICT_WARNING").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+fn truncate_for_warning(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
 }
 
 pub fn diagnose(cwd: &std::path::Path) -> Result<Diagnosis> {
