@@ -1,6 +1,8 @@
 #[macro_use]
 mod macros;
 
+pub mod claude_settings;
+
 setup_commands! {
     /// Install shell aliases for Edgee launch commands
     Alias(alias),
