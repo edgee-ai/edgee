@@ -6,20 +6,21 @@ use std::{
 use edgee_ai_gateway_core::CompletionRequest;
 use tower::Service;
 
-use crate::{compress::compress_request, config::CompressionConfig};
+use crate::technique::CompressionPipeline;
 
 /// Tower [`Service`] produced by [`CompressionLayer`](crate::CompressionLayer).
 ///
-/// Intercepts each [`CompletionRequest`], compresses tool-result content
-/// in-place, then delegates to the wrapped inner service.
+/// Each request runs through the configured [`CompressionPipeline`] before it
+/// reaches the wrapped inner service. The pipeline is shared (`Arc`) so cloned
+/// services stay coherent.
 pub struct CompressionService<S> {
     inner: S,
-    config: Arc<CompressionConfig>,
+    pipeline: Arc<CompressionPipeline>,
 }
 
 impl<S> CompressionService<S> {
-    pub(crate) fn new(inner: S, config: Arc<CompressionConfig>) -> Self {
-        Self { inner, config }
+    pub(crate) fn new(inner: S, pipeline: Arc<CompressionPipeline>) -> Self {
+        Self { inner, pipeline }
     }
 }
 
@@ -37,7 +38,7 @@ where
     }
 
     fn call(&mut self, req: CompletionRequest) -> Self::Future {
-        let compressed = compress_request(&self.config, req);
-        self.inner.call(compressed)
+        let req = self.pipeline.apply(req);
+        self.inner.call(req)
     }
 }
