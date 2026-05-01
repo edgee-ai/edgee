@@ -39,6 +39,12 @@ const AGGRESSIVE_THRESHOLD: usize = 500;
 /// bodies hurts readability without saving meaningful tokens.
 const MIN_BODY_FOR_COLLAPSE: usize = 8;
 
+/// Minimum absolute byte savings to accept a compression result. Combined
+/// with the 10 % ratio threshold via OR — either is enough. The pure-ratio
+/// rule rejects modest savings on large files (8 % of 100 KB = 8 KB lost),
+/// so this floor lets us keep them when the absolute gain is meaningful.
+const MIN_BYTES_SAVED: usize = 200;
+
 // --- Language detection ---
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,9 +236,12 @@ impl ToolCompressor for ReadCompressor {
 
         let compressed = format_numbered_lines(&filtered, fmt);
 
-        // Only return if we actually saved something meaningful (>10%)
-        let threshold = output.len() * 9 / 10;
-        if compressed.len() >= threshold {
+        // Only return if we saved something worth the round-trip. Accept
+        // when EITHER the savings ratio crosses 10 % OR the absolute byte
+        // gain is large enough (whichever happens first).
+        let saved = output.len().saturating_sub(compressed.len());
+        let pct_threshold = output.len() / 10;
+        if saved < MIN_BYTES_SAVED && saved < pct_threshold {
             return None;
         }
 
@@ -944,5 +953,38 @@ mod tests {
         assert!(collapsed[0].1.contains("fn fat()"));
         assert!(collapsed[1].1.contains("lines collapsed"));
         assert_eq!(collapsed[2].1, "}");
+    }
+
+    #[test]
+    fn test_threshold_accepts_modest_absolute_savings_on_large_file() {
+        // Build a 200-line Rust-ish file with comments interspersed such that
+        // the savings ratio comes in just under 10 % but well above the
+        // 200-byte floor — must compress under the new OR-rule.
+        let mut lines = Vec::new();
+        let mut ln = 1;
+        for _ in 0..200 {
+            // 100-char meaningful line
+            lines.push(format!(
+                "     {}\tlet meaningful_long_name_to_dilute_savings = some_function_call(with_args, more_args);",
+                ln
+            ));
+            ln += 1;
+            // 5-char comment line — small relative to body, easy strip target
+            lines.push(format!("     {}\t// x", ln));
+            ln += 1;
+        }
+        let output = lines.join("\n");
+        let args = make_args("/src/main.rs");
+        let compressor = ReadCompressor;
+        let result = compressor.compress(&args, &output);
+        assert!(
+            result.is_some(),
+            "modest absolute savings on a large file must be accepted"
+        );
+        let compressed = result.unwrap();
+        assert!(
+            output.len() - compressed.len() >= MIN_BYTES_SAVED,
+            "must save at least the byte floor"
+        );
     }
 }
