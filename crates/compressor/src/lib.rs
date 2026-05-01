@@ -23,6 +23,9 @@ pub use strategy::codex::compress as compress_codex_tool_output;
 // Re-export the main compression utility
 pub use util::compress_claude_tool_with_segment_protection;
 
+// Re-export marker / idempotency helpers and the memory guard for downstream use
+pub use util::{COMPRESSION_MARKER, MAX_COMPRESSIBLE_BYTES, is_already_compressed};
+
 /// Compress a Claude Code tool output by tool name.
 ///
 /// Looks up the appropriate compressor for the given tool name and applies it,
