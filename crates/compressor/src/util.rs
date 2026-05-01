@@ -3,6 +3,14 @@
 use crate::strategy::ToolCompressor;
 use crate::strategy::util::{TextSegment, split_into_segments};
 
+/// Maximum input size we will attempt to compress.
+///
+/// Above this threshold the compressor returns `None` (caller keeps original)
+/// to bound memory/CPU per request. Two megabytes covers virtually every
+/// real-world tool output while preventing pathological / malicious payloads
+/// from turning a single request into a DoS vector on the gateway.
+pub const MAX_COMPRESSIBLE_BYTES: usize = 2 * 1024 * 1024;
+
 /// Wrap a call to `compressor.compress()`, preserving any `<system-reminder>` blocks verbatim.
 ///
 /// Strategy:
@@ -18,6 +26,11 @@ pub fn compress_claude_tool_with_segment_protection(
     arguments: &str,
     output: &str,
 ) -> Option<String> {
+    // Bound memory/CPU: refuse to process payloads larger than the configured limit.
+    if output.len() > MAX_COMPRESSIBLE_BYTES {
+        return None;
+    }
+
     // Never compress tool outputs containing error or persisted-output tags —
     // these carry important context that must be preserved verbatim.
     if output.contains("<tool_use_error>") || output.contains("<persisted-output>") {
@@ -167,6 +180,31 @@ mod tests {
         assert!(
             result.is_none(),
             "persisted-output must not be compressed; got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn skip_compression_when_input_exceeds_max_bytes() {
+        // Build an input just over the limit. Use repeat() to keep allocation cheap.
+        let oversized = "x".repeat(MAX_COMPRESSIBLE_BYTES + 1);
+
+        let result =
+            compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", &oversized);
+
+        assert!(
+            result.is_none(),
+            "oversized input must not be compressed; got Some(_)"
+        );
+    }
+
+    #[test]
+    fn compresses_when_input_at_max_bytes_boundary() {
+        // Exactly at the limit must still go through.
+        let at_limit = "x".repeat(MAX_COMPRESSIBLE_BYTES);
+        let result = compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", &at_limit);
+        assert!(
+            result.is_some(),
+            "input at exactly MAX_COMPRESSIBLE_BYTES must compress"
         );
     }
 }
