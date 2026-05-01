@@ -31,6 +31,17 @@ pub fn is_already_compressed(output: &str) -> bool {
     output.starts_with(COMPRESSION_MARKER_PREFIX)
 }
 
+/// Returns `true` if `output` contains a `<tool_use_error>` or
+/// `<persisted-output>` tag at the start of any line. Anchoring to the line
+/// start avoids false positives on documents or code that *mentions* these
+/// tags in body content (e.g., a Read of this very file would otherwise
+/// trigger).
+fn has_protected_tag(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.starts_with("<tool_use_error>") || line.starts_with("<persisted-output>"))
+}
+
 /// Wrap a call to `compressor.compress()`, preserving any `<system-reminder>` blocks verbatim.
 ///
 /// Strategy:
@@ -58,8 +69,10 @@ pub fn compress_claude_tool_with_segment_protection(
     }
 
     // Never compress tool outputs containing error or persisted-output tags —
-    // these carry important context that must be preserved verbatim.
-    if output.contains("<tool_use_error>") || output.contains("<persisted-output>") {
+    // these carry important context that must be preserved verbatim. The
+    // detection is anchored to line start so that documentation/code that
+    // *mentions* these tags in body content does not get rejected.
+    if has_protected_tag(output) {
         return None;
     }
 
@@ -273,5 +286,32 @@ mod tests {
         assert!(!is_already_compressed("plain content"));
         assert!(!is_already_compressed("<!--other--> content"));
         assert!(!is_already_compressed(""));
+    }
+
+    #[test]
+    fn protected_tag_at_line_start_skips_compression() {
+        // Tag at start of output.
+        let output = "<tool_use_error>boom</tool_use_error>\nlong compressible content here";
+        assert!(
+            compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", output).is_none()
+        );
+
+        // Tag mid-output but at line start.
+        let output = "some preamble line\n<persisted-output>data</persisted-output>\nrest";
+        assert!(
+            compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", output).is_none()
+        );
+    }
+
+    #[test]
+    fn protected_tag_inside_line_does_not_block_compression() {
+        // Tag appears mid-line (e.g., in a comment about the tag) — must NOT
+        // trigger the skip.
+        let output = "// see <tool_use_error> docs for details — this is just a long compressible doc string with enough body to exceed the HalfCompressor's 10-byte minimum";
+        let result = compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", output);
+        assert!(
+            result.is_some(),
+            "tag inside body line must not block compression"
+        );
     }
 }
