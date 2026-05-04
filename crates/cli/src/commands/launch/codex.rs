@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 #[derive(Debug, clap::Parser)]
+#[command(disable_help_flag = true)]
 pub struct Options {
     /// Extra args passed through to the codex CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -36,6 +37,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let codex = creds.codex.as_ref().unwrap();
     let api_key = &codex.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
+    crate::commands::launch::spawn_cli_version_report(&creds, &session_id);
     let repo_entry = crate::git::detect_origin()
         .map(|url| format!(",\"x-edgee-repo\"=\"{}\"", url))
         .unwrap_or_default();

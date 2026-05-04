@@ -1,7 +1,11 @@
 use anyhow::Result;
 
 #[derive(Debug, clap::Parser)]
+#[command(disable_help_flag = true)]
 pub struct Options {
+    /// Skip installing the Edgee status line
+    #[arg(long)]
+    pub no_statusline: bool,
     /// Extra args passed through to the claude CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
@@ -40,6 +44,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let claude = creds.claude.as_ref().unwrap();
     let api_key = &claude.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
+    crate::commands::launch::spawn_cli_version_report(&creds, &session_id);
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
         .as_ref()
@@ -47,11 +52,15 @@ pub async fn run(opts: Options) -> Result<()> {
         .unwrap_or_default();
 
     // Install Edgee status line (best-effort); guard restores it on drop.
-    let _statusline_guard = crate::commands::launch::statusline::install(
-        &session_id,
-        &crate::config::console_api_base_url(),
-    )
-    .ok();
+    let _statusline_guard = if opts.no_statusline {
+        None
+    } else {
+        crate::commands::launch::statusline::install(
+            &session_id,
+            &crate::config::console_api_base_url(),
+        )
+        .ok()
+    };
     let mut cmd = std::process::Command::new(crate::commands::launch::resolve_binary("claude"));
 
     cmd.env("ANTHROPIC_BASE_URL", crate::config::gateway_base_url());
@@ -69,7 +78,7 @@ pub async fn run(opts: Options) -> Result<()> {
         cmd.arg("--mcp-config").arg(&mcp_config_path);
         let session_url = format!("{}/session/{}", crate::config::console_base_url(), session_id);
         cmd.arg("--append-system-prompt").arg(system_prompt(&session_id, repo_origin.as_deref(), &session_url));
-        cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__setSessionGitHubRepo");
+        cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitHubRepo");
     }
 
     cmd.args(&opts.args);
