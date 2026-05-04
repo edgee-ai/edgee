@@ -37,7 +37,14 @@ where
     }
 
     fn call(&mut self, req: CompletionRequest) -> Self::Future {
-        let compressed = compress_request(&self.config, req);
+        let compressed = {
+            let _span = tracing::debug_span!(
+                "gateway.compression",
+                agent = ?self.config.agent,
+            )
+            .entered();
+            compress_request(&self.config, req)
+        };
         self.inner.call(compressed)
     }
 }

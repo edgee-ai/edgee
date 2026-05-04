@@ -33,6 +33,11 @@ pub fn compress_request(
     }
 
     // Sweep 2 — compress ToolMessage content
+    let mut tools_checked: u32 = 0;
+    let mut tools_compressed: u32 = 0;
+    let mut bytes_before: usize = 0;
+    let mut bytes_after: usize = 0;
+
     for msg in &mut req.messages {
         if let Message::Tool(tool_msg) = msg {
             let Some((name, arguments)) = call_index.get(&tool_msg.tool_call_id) else {
@@ -40,6 +45,9 @@ pub fn compress_request(
             };
 
             let text = tool_msg.content.as_text();
+
+            tools_checked += 1;
+            bytes_before += text.len();
 
             // Each agent type has different tool-name conventions and output
             // formats. Codex outputs include a header ("Exit code: …\nOutput:\n")
@@ -64,9 +72,23 @@ pub fn compress_request(
             };
 
             if let Some(compressed) = compressed {
+                bytes_after += compressed.len();
+                tools_compressed += 1;
                 tool_msg.content = MessageContent::Text(compressed);
+            } else {
+                bytes_after += text.len();
             }
         }
+    }
+
+    if tools_checked > 0 {
+        tracing::debug!(
+            tools_checked,
+            tools_compressed,
+            bytes_before,
+            bytes_after,
+            "compression complete",
+        );
     }
 
     req
