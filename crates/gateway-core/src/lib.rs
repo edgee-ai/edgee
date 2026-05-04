@@ -35,7 +35,7 @@
 //! # Platform compatibility
 //!
 //! This crate has **no hard dependency on tokio or reqwest**. Enable the `tokio`
-//! feature to get a concrete [`backend::http::ReqwestHttpClient`] backed by reqwest.
+//! feature to get a concrete `backend::http::ReqwestHttpClient` backed by reqwest.
 //! On other platforms (e.g. Fastly `wasm32-wasip1`), provide your own
 //! [`backend::http::HttpClient`] implementation.
 //!

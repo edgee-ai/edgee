@@ -6,7 +6,7 @@ use crate::error::Result;
 /// Abstract HTTP transport.
 ///
 /// Implementations exist for:
-/// - [`ReqwestHttpClient`] (tokio feature, local/AWS backends)
+/// - `ReqwestHttpClient` (tokio feature, local/AWS backends)
 /// - Platform-specific clients (e.g. Fastly backend — no tokio/reqwest required)
 ///
 /// Callers inject a concrete implementation at construction time via

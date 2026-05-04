@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{config::CompressionConfig, service::CompressionService};
 
-/// Tower [`Layer`] that wraps a downstream service with tool-result compression.
+/// Tower [`Layer`](tower::Layer) that wraps a downstream service with tool-result compression.
 ///
 /// Construct via [`CompressionLayer::new`], then compose with Tower's
 /// [`ServiceBuilder`](tower::ServiceBuilder):
