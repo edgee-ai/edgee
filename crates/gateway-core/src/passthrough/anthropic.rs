@@ -8,6 +8,8 @@ use futures::future::BoxFuture;
 use http::{Request, Response};
 use tower::Service;
 
+use tracing::Instrument as _;
+
 use crate::{
     PassthroughRequest,
     backend::http::HttpClient,
@@ -27,6 +29,7 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 ///
 /// This is one of the two "distinct Tower `Service` implementations" for
 /// passthrough described in the spec (§6 Milestone 1).
+#[derive(Clone)]
 pub struct AnthropicPassthroughService {
     client: Arc<dyn HttpClient>,
     config: ProviderConfig,
@@ -55,27 +58,33 @@ impl Service<PassthroughRequest> for AnthropicPassthroughService {
     fn call(&mut self, req: PassthroughRequest) -> Self::Future {
         let client = self.client.clone();
         let uri = self.target_uri();
+        let span = tracing::debug_span!("passthrough.anthropic", url = %uri);
 
-        Box::pin(async move {
-            let mut builder = Request::builder().method(http::Method::POST).uri(&uri);
+        Box::pin(
+            async move {
+                tracing::debug!("forwarding to Anthropic");
 
-            for (key, value) in &req.headers {
-                builder = builder.header(key.as_str(), value.as_str());
+                let mut builder = Request::builder().method(http::Method::POST).uri(&uri);
+
+                for (key, value) in &req.headers {
+                    builder = builder.header(key, value);
+                }
+
+                let body_bytes = serde_json::to_vec(&req.body)
+                    .map_err(|e| Error::RequestBuild(e.to_string()))?;
+                let forwarded = builder
+                    .body(Body::from(body_bytes))
+                    .map_err(|e| Error::RequestBuild(e.to_string()))?;
+
+                client.send(forwarded).await
             }
-
-            let forwarded = builder
-                .body(Body::from(req.body))
-                .map_err(|e| Error::RequestBuild(e.to_string()))?;
-
-            client.send(forwarded).await
-        })
+            .instrument(span),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-
     use super::*;
     use crate::config::ProviderConfig;
 
@@ -99,15 +108,13 @@ mod tests {
 
     #[test]
     fn forwards_headers_as_is() {
-        let req = PassthroughRequest::new(
-            Bytes::from("{}"),
-            vec![
-                ("content-type".into(), "application/json".into()),
-                // x-edgee-api-key should have been stripped by the caller;
-                // here we verify the service forwards what it receives as-is.
-                ("x-api-key".into(), "sk-ant-test".into()),
-            ],
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
         );
+        headers.insert("x-api-key", "sk-ant-test".parse().unwrap());
+        let req = PassthroughRequest::new(serde_json::json!({}), headers);
         // The service itself does not filter — it trusts the caller.
         assert_eq!(req.headers.len(), 2);
     }

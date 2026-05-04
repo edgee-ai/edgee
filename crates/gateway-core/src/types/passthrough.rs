@@ -1,4 +1,4 @@
-use bytes::Bytes;
+use http::HeaderMap;
 
 /// A raw LLM request in a provider's native wire format, ready for passthrough.
 ///
@@ -7,7 +7,7 @@ use bytes::Bytes;
 /// [`crate::passthrough::openai::OpenAIPassthroughService`]).
 ///
 /// The HTTP boundary layer above `gateway-core` is responsible for:
-/// - Reading the raw request body into [`Bytes`].
+/// - Reading the raw request body into [`serde_json::Value`].
 /// - Stripping gateway-internal headers (see [`crate::passthrough::SKIP_HEADERS`]).
 /// - Constructing this type before handing the request to the pipeline.
 ///
@@ -16,15 +16,16 @@ use bytes::Bytes;
 /// public interface.
 #[derive(Debug, Clone)]
 pub struct PassthroughRequest {
-    /// Raw serialized request body in the provider's native format.
-    pub body: Bytes,
+    /// The raw request body, parsed as JSON.
+    pub body: serde_json::Value,
     /// Pre-filtered headers to forward (gateway-internal headers already stripped).
-    /// Each entry is a `(name, value)` pair as UTF-8 strings.
-    pub headers: Vec<(String, String)>,
+    /// The HTTP boundary layer is responsible for stripping out any headers that
+    /// are meant for internal use only and should not be forwarded to the provider.
+    pub headers: HeaderMap,
 }
 
 impl PassthroughRequest {
-    pub fn new(body: Bytes, headers: Vec<(String, String)>) -> Self {
+    pub fn new(body: serde_json::Value, headers: HeaderMap) -> Self {
         Self { body, headers }
     }
 }
