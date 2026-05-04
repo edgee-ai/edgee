@@ -78,7 +78,7 @@ pub async fn run(opts: Options) -> Result<()> {
         cmd.arg("--mcp-config").arg(&mcp_config_path);
         let session_url = format!("{}/session/{}", crate::config::console_base_url(), session_id);
         cmd.arg("--append-system-prompt").arg(system_prompt(&session_id, repo_origin.as_deref(), &session_url));
-        cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__setSessionGitHubRepo");
+        cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitHubRepo");
     }
 
     cmd.args(&opts.args);
