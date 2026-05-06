@@ -1,12 +1,12 @@
-//! `edgee fix` — overlay Edgee's statusline on top of a conflicting
-//! project-level `statusLine` command, by writing into
+//! `edgee statusline claude fix` — overlay Edgee's statusline on top of a
+//! conflicting project-level `statusLine` command, by writing into
 //! `.claude/settings.local.json` (never the shared `.claude/settings.json`).
 
 use anyhow::{Context, Result};
 use console::style;
 
 use crate::commands::claude_settings::{self, CommandKind, LOCAL_FILE};
-use crate::commands::doctor::{self, ConflictStatus, Diagnosis};
+use crate::commands::statusline::claude::doctor::{self, ConflictStatus, Diagnosis};
 
 setup_command! {
     /// Apply the fix without prompting for confirmation.
@@ -48,7 +48,7 @@ fn apply(diag: &Diagnosis) -> Result<()> {
             println!("  Suggested manual overlay (paste into .claude/settings.local.json):");
             println!();
             println!(
-                "    \"statusLine\": {{ \"type\": \"command\", \"command\": \"edgee statusline --wrap '{}'\" }}",
+                "    \"statusLine\": {{ \"type\": \"command\", \"command\": \"edgee statusline wrap '{}'\" }}",
                 claude_settings::posix_single_quote_escape(cmd)
             );
             println!();
@@ -72,7 +72,7 @@ fn apply(diag: &Diagnosis) -> Result<()> {
         CommandKind::EdgeeWrap
     ) {
         anyhow::bail!(
-            "Refusing to wrap a command that already starts with `edgee statusline --wrap`."
+            "Refusing to wrap a command that already starts with `edgee statusline wrap`."
         );
     }
 
@@ -84,7 +84,7 @@ fn apply(diag: &Diagnosis) -> Result<()> {
     };
 
     let escaped = claude_settings::posix_single_quote_escape(original);
-    let new_command = format!("edgee statusline --wrap '{escaped}'");
+    let new_command = format!("edgee statusline wrap '{escaped}'");
     claude_settings::set_status_line(&mut local_value, &new_command, Some(10));
 
     claude_settings::write_settings(&local_path, &local_value)?;
@@ -182,7 +182,7 @@ mod tests {
         let v = read(&local_path);
         assert_eq!(
             v["statusLine"]["command"],
-            "edgee statusline --wrap '/path/to/tool.sh'"
+            "edgee statusline wrap '/path/to/tool.sh'"
         );
         assert_eq!(v["statusLine"]["type"], "command");
     }
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(v["env"]["FOO"], "bar");
         assert_eq!(
             v["statusLine"]["command"],
-            "edgee statusline --wrap '/path/to/tool.sh'"
+            "edgee statusline wrap '/path/to/tool.sh'"
         );
     }
 
@@ -250,7 +250,7 @@ mod tests {
         let cmd = v["statusLine"]["command"].as_str().unwrap();
         // The escaped form must be wrapped in single quotes with `'\''` for
         // the embedded single quote.
-        assert!(cmd.starts_with("edgee statusline --wrap '"));
+        assert!(cmd.starts_with("edgee statusline wrap '"));
         assert!(cmd.ends_with("'"));
         assert!(cmd.contains("it'\\''s working"));
     }
@@ -274,7 +274,7 @@ mod tests {
         let cmd = v["statusLine"]["command"].as_str().unwrap();
         assert_eq!(
             cmd,
-            "edgee statusline --wrap 'echo `whoami` $HOME \\ done'"
+            "edgee statusline wrap 'echo `whoami` $HOME \\ done'"
         );
     }
 
@@ -347,12 +347,12 @@ mod tests {
         // 3: read the resulting wrap command.
         let local = read(&proj.join(".claude").join(LOCAL_FILE));
         let wrap_cmd = local["statusLine"]["command"].as_str().unwrap();
-        assert!(wrap_cmd.starts_with("edgee statusline --wrap '"));
+        assert!(wrap_cmd.starts_with("edgee statusline wrap '"));
         assert!(wrap_cmd.ends_with("'"));
 
         // 4: extract the wrapped command (everything between the first `'`
         // and the last `'`, with POSIX `'\''` escapes unwrapped).
-        let inner_quoted = &wrap_cmd["edgee statusline --wrap '".len()..wrap_cmd.len() - 1];
+        let inner_quoted = &wrap_cmd["edgee statusline wrap '".len()..wrap_cmd.len() - 1];
         let inner = inner_quoted.replace("'\\''", "'");
         assert_eq!(inner, format!("echo {other_tool_marker}"));
 

@@ -3,9 +3,6 @@ use anyhow::Result;
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
-    /// Skip installing the Edgee status line
-    #[arg(long)]
-    pub no_statusline: bool,
     /// Extra args passed through to the claude CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
@@ -51,16 +48,10 @@ pub async fn run(opts: Options) -> Result<()> {
         .map(|url| format!("\nx-edgee-repo: {}", url))
         .unwrap_or_default();
 
-    // Install Edgee status line (best-effort); guard restores it on drop.
-    let _statusline_guard = if opts.no_statusline {
-        None
-    } else {
-        crate::commands::launch::statusline::install(
-            &session_id,
-            &crate::config::console_api_base_url(),
-        )
-        .ok()
-    };
+    // First-run: install the persistent user-level statusline integration
+    // exactly once (honors the disable marker).
+    crate::commands::launch::ensure_first_run_installed().await;
+
     let mut cmd = std::process::Command::new(crate::commands::launch::resolve_binary("claude"));
 
     cmd.env("ANTHROPIC_BASE_URL", crate::config::gateway_base_url());
@@ -92,9 +83,6 @@ pub async fn run(opts: Options) -> Result<()> {
             anyhow::anyhow!(e)
         }
     })?;
-
-    // Restore previous status line setting
-    drop(_statusline_guard);
 
     crate::commands::launch::print_session_stats(&creds, &session_id, "Claude").await;
 

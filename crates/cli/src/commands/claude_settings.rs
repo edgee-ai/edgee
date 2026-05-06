@@ -233,12 +233,19 @@ pub fn classify_command(command: &str) -> CommandKind {
 }
 
 fn is_edgee_wrap(cmd: &str) -> bool {
-    // Accept naming variants we may pick: `edgee statusline --wrap` and
-    // `edgee statusline-wrap` (no-dash hyphenation as a hedge).
+    // Accept naming variants we may pick:
+    //   - `edgee statusline wrap <cmd>`        (current, written by `fix`)
+    //   - `edgee statusline --wrap <cmd>`      (legacy, still in deployed
+    //                                          `.claude/settings.local.json`
+    //                                          files written before the
+    //                                          subcommand restructure)
+    //   - `edgee statusline-wrap <cmd>`        (no-dash hyphenation hedge)
     let head = cmd.split_whitespace().take(3).collect::<Vec<_>>();
     matches!(
         head.as_slice(),
-        ["edgee", "statusline", "--wrap"] | ["edgee", "statusline-wrap", ..]
+        ["edgee", "statusline", "wrap"]
+            | ["edgee", "statusline", "--wrap"]
+            | ["edgee", "statusline-wrap", ..]
     )
 }
 
@@ -280,6 +287,10 @@ mod tests {
         );
         assert_eq!(
             classify_command("edgee statusline --wrap 'foo'"),
+            CommandKind::EdgeeWrap
+        );
+        assert_eq!(
+            classify_command("edgee statusline wrap 'foo'"),
             CommandKind::EdgeeWrap
         );
         assert_eq!(

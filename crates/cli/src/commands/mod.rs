@@ -13,14 +13,8 @@ setup_commands! {
     /// Show stored session stats
     #[command(visible_alias = "report")]
     Stats(stats),
-    /// Render the Edgee statusline (used by Claude Code's statusLine setting)
+    /// Render the Edgee statusline and manage agent statusline integrations
     Statusline(statusline),
-    /// Diagnose Claude Code statusLine conflicts in the current project
-    Doctor(doctor),
-    /// Auto-overlay Edgee's statusline on top of a conflicting project setting
-    Fix(fix),
-    /// Install Edgee's user-level Claude Code integration (statusline, hooks)
-    Install(install),
     /// Reset Edgee credentials and connection mode
     Reset(reset),
     [cfg(feature = "self-update")]

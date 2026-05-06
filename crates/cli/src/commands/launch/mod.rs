@@ -1,7 +1,6 @@
 pub mod claude;
 pub mod codex;
 pub mod opencode;
-pub mod statusline;
 
 use anyhow::{Context, Result};
 use console::style;
@@ -408,6 +407,40 @@ async fn fetch_stats(
         .ok_or_else(|| anyhow::anyhow!("no org selected"))?;
     let client = crate::api::ApiClient::new(token)?;
     client.get_session_stats(org_id, session_id).await
+}
+
+/// Run the user-level Claude integration installer the first time the user
+/// launches any agent through Edgee, so they don't have to remember a
+/// separate setup step.
+///
+/// Idempotent and best-effort:
+/// - If the disable marker exists, do nothing (user opted out).
+/// - If the installed marker exists, do nothing (already ran once).
+/// - Otherwise run the installer and create the installed marker.
+/// - Any error is logged and swallowed; never blocks the launch.
+pub async fn ensure_first_run_installed() {
+    use crate::commands::statusline::claude::{install, toggle};
+
+    if toggle::is_disabled() {
+        return;
+    }
+    let marker = toggle::installed_marker_path();
+    if marker.is_file() {
+        return;
+    }
+
+    if let Err(e) = install::run(install::Options::default()).await {
+        eprintln!(
+            "  {} edgee: skipped first-run statusline install: {e}",
+            console::style("⚠").yellow()
+        );
+        return;
+    }
+
+    if let Some(parent) = marker.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&marker, b"");
 }
 
 /// Fire-and-forget: record the running CLI version on the session metadata.
