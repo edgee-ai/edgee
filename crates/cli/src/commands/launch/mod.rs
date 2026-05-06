@@ -424,6 +424,14 @@ pub async fn ensure_first_run_installed() {
     if toggle::is_disabled() {
         return;
     }
+
+    // Always heal legacy/stale `statusLine.command` values on every launch
+    // (silent and cheap). Covers users upgrading from older Edgee versions
+    // whose `~/.claude/settings.json` still has the bare `edgee statusline`
+    // form (which now prints help) or a wrapper-script path from the old
+    // transient install. No-op if the field is already current or third-party.
+    install::heal_legacy_statusline();
+
     let marker = toggle::installed_marker_path();
     if marker.is_file() {
         return;

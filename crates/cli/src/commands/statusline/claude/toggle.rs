@@ -213,7 +213,7 @@ mod tests {
         // Start from a clean install.
         install::run(install::Options::default()).await.unwrap();
         let installed = read_user(&home);
-        assert_eq!(installed["statusLine"]["command"], "edgee statusline");
+        assert_eq!(installed["statusLine"]["command"], "edgee statusline render");
 
         // Disable.
         disable().await.unwrap();
@@ -225,7 +225,7 @@ mod tests {
         enable().await.unwrap();
         assert!(!disabled_marker_path().is_file());
         let after_enable = read_user(&home);
-        assert_eq!(after_enable["statusLine"]["command"], "edgee statusline");
+        assert_eq!(after_enable["statusLine"]["command"], "edgee statusline render");
     }
 
     #[tokio::test]
@@ -267,6 +267,6 @@ mod tests {
 
         assert!(!marker.is_file(), "marker should be cleared");
         let v = read_user(&home);
-        assert_eq!(v["statusLine"]["command"], "edgee statusline");
+        assert_eq!(v["statusLine"]["command"], "edgee statusline render");
     }
 }

@@ -130,7 +130,7 @@ edgee statusline claude fix       # overlay Edgee on a conflicting project
 
 The install writes two things to `~/.claude/settings.json`:
 
-- `statusLine.command = "edgee statusline"` — only if you don't already have a statusLine; we never overwrite yours.
+- `statusLine.command = "edgee statusline render"` — only if you don't already have a statusLine; we never overwrite yours. (Older Edgee versions wrote `edgee statusline` without the explicit subcommand; that form now prints help, and is auto-migrated to `edgee statusline render` on next launch.)
 - A `SessionStart` hook running `edgee statusline claude doctor --warn-only`, which prints a one-line warning when you open a project that shadows Edgee.
 
 State is tracked with two empty marker files in `~/.config/edgee/`:

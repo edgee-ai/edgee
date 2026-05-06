@@ -2,9 +2,9 @@
 //! wrapped command's output, plus management subcommands for per-agent
 //! integrations (currently `claude`).
 //!
-//! Default action when invoked with no subcommand and no flags is to render
-//! Edgee's statusline segment. This is the form used in Claude Code's
-//! `statusLine.command` setting.
+//! Bare invocation (`edgee statusline` with no flags or subcommand) prints
+//! help. The actual renderer used by Claude Code's `statusLine.command` is
+//! `edgee statusline render`.
 
 pub mod claude;
 pub mod render;
@@ -14,7 +14,7 @@ pub mod width;
 use anyhow::Result;
 
 #[derive(Debug, clap::Parser)]
-#[command(args_conflicts_with_subcommands = true)]
+#[command(args_conflicts_with_subcommands = true, arg_required_else_help = true)]
 pub struct Options {
     /// **Deprecated** — use `edgee statusline wrap <COMMAND>` instead. Kept
     /// as a hidden flag so already-deployed `.claude/settings.local.json`
@@ -28,7 +28,8 @@ pub struct Options {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
-    /// Render the Edgee statusline segment (default action).
+    /// Render the Edgee statusline segment. Used by Claude Code's
+    /// `statusLine.command` setting.
     Render,
     /// Run a command through the platform shell and merge its output with
     /// Edgee's. Used as an overlay in `.claude/settings.local.json` to
@@ -47,9 +48,14 @@ pub async fn run(opts: Options) -> Result<()> {
         return wrap::run(cmd).await;
     }
     match opts.command {
-        None | Some(Command::Render) => render::run().await,
+        Some(Command::Render) => render::run().await,
         Some(Command::Wrap { command }) => wrap::run(command).await,
         Some(Command::Claude(o)) => claude::run(o).await,
+        None => {
+            // Unreachable: `arg_required_else_help` makes clap exit with help
+            // before we get here.
+            unreachable!("clap should have printed help when no args/subcommand were given")
+        }
     }
 }
 
@@ -59,10 +65,17 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn parses_bare_invocation_as_render() {
-        let opts = Options::try_parse_from(["edgee-statusline"]).unwrap();
-        assert!(opts.wrap.is_none());
-        assert!(opts.command.is_none());
+    fn bare_invocation_errors_with_help() {
+        let err = Options::try_parse_from(["edgee-statusline"]).unwrap_err();
+        // clap returns a "DisplayHelpOnMissingArgumentOrSubcommand" kind for
+        // `arg_required_else_help`. We don't need to inspect the kind — the
+        // important behaviour is that bare invocation does NOT yield a parsed
+        // `Options` struct, so we can't accidentally render anything.
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("Usage:") || rendered.contains("USAGE:"),
+            "expected help text in error: {rendered}"
+        );
     }
 
     #[test]
@@ -70,6 +83,13 @@ mod tests {
         let opts =
             Options::try_parse_from(["edgee-statusline", "--wrap", "echo hi"]).unwrap();
         assert_eq!(opts.wrap.as_deref(), Some("echo hi"));
+    }
+
+    #[test]
+    fn parses_render_subcommand() {
+        let opts = Options::try_parse_from(["edgee-statusline", "render"]).unwrap();
+        assert!(opts.wrap.is_none());
+        assert!(matches!(opts.command, Some(Command::Render)));
     }
 
     #[test]

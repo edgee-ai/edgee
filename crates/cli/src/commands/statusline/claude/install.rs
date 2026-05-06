@@ -3,14 +3,19 @@
 //!
 //! Two side effects on `~/.claude/settings.json`:
 //!
-//! 1. Sets `statusLine.command` to `edgee statusline` if no statusLine is
-//!    configured at user level. (Doesn't touch the user's existing one — we
-//!    overlay via `edgee statusline claude fix` per project, never globally.)
+//! 1. Sets `statusLine.command` to `edgee statusline render` if no statusLine
+//!    is configured at user level. (Doesn't touch the user's existing one —
+//!    we overlay via `edgee statusline claude fix` per project, never
+//!    globally.)
 //! 2. Adds a `SessionStart` hook that runs
 //!    `edgee statusline claude doctor --warn-only`, so users in projects with
 //!    their own statusLine get a one-line warning when Edgee is shadowed.
 //!    Idempotent. Legacy hook entries pointing at the previous top-level
 //!    `edgee doctor --warn-only` command are rewritten to the new path.
+//!
+//! Legacy `statusLine.command` values (bare `edgee statusline` or wrapper
+//! script paths from the pre-restructure transient install) are migrated to
+//! the canonical `edgee statusline render` form on every install.
 //!
 //! The shared `.claude/settings.json` files in projects are **never**
 //! modified by this command — only the user-level file.
@@ -47,7 +52,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let mut changes = Vec::new();
 
     if !opts.skip_statusline && install_statusline(&mut value)? {
-        changes.push("statusLine → edgee statusline");
+        changes.push("statusLine → edgee statusline render");
     }
 
     if !opts.skip_hook && install_session_start_hook(&mut value)? {
@@ -83,25 +88,63 @@ pub async fn run(opts: Options) -> Result<()> {
 fn install_statusline(value: &mut Value) -> Result<bool> {
     if let Some(sl) = value.get("statusLine") {
         if let Some(cmd) = claude_settings::status_line_command(sl) {
-            // Heal stale state from the old transient install: a previous
-            // launch that crashed (or otherwise didn't run its Drop guard)
-            // can leave the wrapper-script path in here. The file no longer
-            // exists, so the only sane thing is to overwrite with the
-            // canonical command.
-            if is_legacy_wrapper(cmd) {
-                claude_settings::set_status_line(value, "edgee statusline", Some(10));
+            // Heal a legacy form (bare `edgee statusline`, or a wrapper-script
+            // path left over from the old transient install): rewrite it to
+            // the canonical explicit form so Claude Code calls the renderer
+            // directly instead of hitting our help output.
+            if is_legacy_statusline(cmd) {
+                claude_settings::set_status_line(value, STATUSLINE_COMMAND, Some(10));
                 return Ok(true);
             }
         }
         // User has their own statusLine — never override.
         return Ok(false);
     }
-    claude_settings::set_status_line(value, "edgee statusline", Some(10));
+    claude_settings::set_status_line(value, STATUSLINE_COMMAND, Some(10));
     Ok(true)
+}
+
+const STATUSLINE_COMMAND: &str = "edgee statusline render";
+
+fn is_legacy_statusline(cmd: &str) -> bool {
+    // Bare `edgee statusline` (no subcommand) — would now print help, so
+    // rewrite to the explicit `render` form.
+    let tokens: Vec<&str> = cmd.split_whitespace().collect();
+    if tokens == ["edgee", "statusline"] {
+        return true;
+    }
+    is_legacy_wrapper(cmd)
 }
 
 fn is_legacy_wrapper(cmd: &str) -> bool {
     cmd.contains("statusline-wrapper.sh") || cmd.contains("edgee/statusline.sh")
+}
+
+/// Silent heal pass for the launch flow: read `~/.claude/settings.json`,
+/// rewrite a legacy `statusLine.command` to the canonical form if needed,
+/// and write back. Never adds the SessionStart hook, never prints output.
+/// All errors are swallowed.
+pub fn heal_legacy_statusline() {
+    let path = claude_settings::user_settings_path();
+    if !path.is_file() {
+        return;
+    }
+    let Ok(file) = claude_settings::read_settings(&path) else {
+        return;
+    };
+    let mut value = file.value;
+
+    let needs_rewrite = value
+        .get("statusLine")
+        .and_then(claude_settings::status_line_command)
+        .is_some_and(is_legacy_statusline);
+
+    if !needs_rewrite {
+        return;
+    }
+
+    claude_settings::set_status_line(&mut value, STATUSLINE_COMMAND, Some(10));
+    let _ = claude_settings::write_settings(&path, &value);
 }
 
 fn cleanup_legacy_wrapper_scripts() {
@@ -263,7 +306,7 @@ mod tests {
         .await
         .unwrap();
         let v = read_user(&home);
-        assert_eq!(v["statusLine"]["command"], "edgee statusline");
+        assert_eq!(v["statusLine"]["command"], "edgee statusline render");
         let arr = v["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert!(
@@ -387,9 +430,81 @@ mod tests {
         let _lock = env_lock();
         let _h = isolate_home(&home);
         run(Options::default()).await.unwrap();
+        let v = read_user(&home);
+        assert_eq!(v["statusLine"]["command"], "edgee statusline render");
+    }
+
+    #[tokio::test]
+    async fn install_migrates_bare_statusline_to_render() {
+        // Pre-restructure installs wrote `edgee statusline` (which now prints
+        // help, not the renderer). Next install must rewrite to the explicit
+        // `edgee statusline render` form so Claude Code renders properly.
+        let (_tmp, home) = fresh_home();
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::write(
+            home.join(".claude").join("settings.json"),
+            serde_json::to_string_pretty(&json!({
+                "statusLine": {"type": "command", "command": "edgee statusline"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let _lock = env_lock();
+        let _h = isolate_home(&home);
+        run(Options::default()).await.unwrap();
 
         let v = read_user(&home);
-        assert_eq!(v["statusLine"]["command"], "edgee statusline");
+        assert_eq!(v["statusLine"]["command"], "edgee statusline render");
+    }
+
+    #[tokio::test]
+    async fn heal_legacy_statusline_silently_rewrites_bare_form() {
+        // The launch flow calls heal_legacy_statusline() on every launch.
+        // It must rewrite legacy forms without invoking the full installer
+        // (no SessionStart hook touched, no print output).
+        let (_tmp, home) = fresh_home();
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::write(
+            home.join(".claude").join("settings.json"),
+            serde_json::to_string_pretty(&json!({
+                "statusLine": {"type": "command", "command": "edgee statusline"},
+                "hooks": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let _lock = env_lock();
+        let _h = isolate_home(&home);
+        super::heal_legacy_statusline();
+
+        let v = read_user(&home);
+        assert_eq!(v["statusLine"]["command"], "edgee statusline render");
+        // Hook section preserved as-is (heal must not add the SessionStart
+        // hook — that's the installer's job).
+        assert!(v["hooks"].as_object().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn heal_legacy_statusline_leaves_third_party_alone() {
+        let (_tmp, home) = fresh_home();
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::write(
+            home.join(".claude").join("settings.json"),
+            serde_json::to_string_pretty(&json!({
+                "statusLine": {"type": "command", "command": "/path/to/user-custom.sh"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let _lock = env_lock();
+        let _h = isolate_home(&home);
+        super::heal_legacy_statusline();
+
+        let v = read_user(&home);
+        assert_eq!(v["statusLine"]["command"], "/path/to/user-custom.sh");
     }
 
     #[tokio::test]
