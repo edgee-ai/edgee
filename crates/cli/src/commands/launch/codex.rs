@@ -33,12 +33,18 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::config::write(&creds)?;
     }
 
-    // Step 3: launch codex with the correct env vars
+    // Step 3b: ensure MCP preference is set
+    crate::commands::auth::login::ensure_mcp_preference().await?;
+    creds = crate::config::read()?;
+
+    // Step 4: launch codex with the correct env vars
     let codex = creds.codex.as_ref().unwrap();
     let api_key = &codex.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
     crate::commands::launch::spawn_cli_version_report(&creds, &session_id);
-    let repo_entry = crate::git::detect_origin()
+    let repo_origin = crate::git::detect_origin();
+    let repo_entry = repo_origin
+        .as_ref()
         .map(|url| format!(",\"x-edgee-repo\"=\"{}\"", url))
         .unwrap_or_default();
     let base_url = format!("{}/v1", crate::config::gateway_base_url());
@@ -51,6 +57,32 @@ pub async fn run(opts: Options) -> Result<()> {
         "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"{repo_entry}}}"),
         "-c", "model_providers.edgee-cli.wire_api=\"responses\"",
     ]);
+
+    // Step 5: conditionally set up MCP integration
+    let use_mcp = creds.enable_mcp.unwrap_or(false);
+    let user_token = creds.user_token.as_deref().unwrap_or("");
+    if use_mcp && !user_token.is_empty() {
+        cmd.env("EDGEE_USER_TOKEN", user_token);
+        let session_url = format!("{}/session/{}", crate::config::console_base_url(), session_id);
+        let prompt = crate::commands::launch::agent_session_prompt(
+            &session_id,
+            repo_origin.as_deref(),
+            &session_url,
+        );
+        let escaped_prompt = crate::commands::launch::toml_escape_string(&prompt);
+        cmd.args([
+            "-c",
+            &format!(
+                "mcp_servers.edgee.url=\"{}\"",
+                crate::config::mcp_base_url()
+            ),
+            "-c",
+            "mcp_servers.edgee.bearer_token_env_var=\"EDGEE_USER_TOKEN\"",
+            "-c",
+            &format!("developer_instructions={escaped_prompt}"),
+        ]);
+    }
+
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {

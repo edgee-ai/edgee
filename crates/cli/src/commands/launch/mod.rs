@@ -410,6 +410,67 @@ async fn fetch_stats(
     client.get_session_stats(org_id, session_id).await
 }
 
+/// Build the per-session "agent instructions" prompt that tells the model to
+/// call the Edgee MCP tools (`setSessionName`, `addSessionPullRequest`,
+/// optionally `setSessionGitHubRepo`).
+///
+/// Shared by every `edgee launch <agent>` that wires Edgee MCP. The text
+/// references only the bare MCP tool names, so it works regardless of how the
+/// host agent namespaces them.
+pub fn agent_session_prompt(session_id: &str, repo: Option<&str>, session_url: &str) -> String {
+    let mut prompt = format!(
+        r#"You are running inside the Edgee CLI and have access to the Edgee MCP server for tracking session metadata.
+
+Your Edgee session ID is: {session_id}
+Your Edgee public session page is: {session_url}
+
+You MUST use the following Edgee MCP tools during this session:
+
+1. `setSessionName` — call this immediately after the user's first message with a short descriptive name (3-6 words) summarizing what the user is asking for. Arguments:
+   - sessionId: "{session_id}"
+   - name: the descriptive name.
+   If at any later point during the session you come up with a clearly better name (e.g., the task's real scope becomes obvious only after exploring the code, or the user pivots the request), call `setSessionName` again with the improved name. Prefer calling it once, but do not hesitate to update when a materially better name emerges.
+
+2. `addSessionPullRequest` — call this EVERY TIME you create OR edit a pull request (e.g., via `gh pr create`, `gh pr edit`, or any other tool). Immediately after the PR is created or modified, call this tool with:
+   - sessionId: "{session_id}"
+   - pullRequest: the full PR URL.
+   This is required for every PR you touch during this session, with no exceptions. Always call it on edits too — the PR may not yet be associated with this session, and the API handles duplicates safely, so redundant calls are harmless."#
+    );
+
+    if let Some(repo) = repo {
+        prompt.push_str(&format!(
+            "\n\n3. `setSessionGitHubRepo` — call this EXACTLY ONCE at the start of the session, together with (or right after) `setSessionName`. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
+        ));
+    }
+
+    prompt
+}
+
+/// Wrap `s` as a TOML basic string literal (including surrounding `"`), escaping
+/// the characters TOML requires per the spec. Used to embed multi-line prompts
+/// into Codex's `-c key=value` overrides without TOML parse errors.
+pub fn toml_escape_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str(r"\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str(r"\n"),
+            '\r' => out.push_str(r"\r"),
+            '\t' => out.push_str(r"\t"),
+            '\x08' => out.push_str(r"\b"),
+            '\x0c' => out.push_str(r"\f"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7F => {
+                out.push_str(&format!("\\u{:04X}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Fire-and-forget: record the running CLI version on the session metadata.
 ///
 /// No-op when the active profile has no user token or no selected org. All
@@ -438,4 +499,49 @@ pub fn spawn_cli_version_report(creds: &crate::config::Credentials, session_id: 
                 .await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toml_escape_round_trip_through_parser() {
+        let prompt = agent_session_prompt(
+            "abc-123",
+            Some("git@github.com:owner/repo.git"),
+            "https://www.edgee.ai/session/abc-123",
+        );
+        let escaped = toml_escape_string(&prompt);
+        let doc = format!("value = {escaped}");
+        let parsed: toml::Value =
+            toml::from_str(&doc).expect("escaped TOML literal must parse cleanly");
+        let round_tripped = parsed
+            .get("value")
+            .and_then(|v| v.as_str())
+            .expect("value must be a string");
+        assert_eq!(round_tripped, prompt);
+    }
+
+    #[test]
+    fn toml_escape_handles_quotes_backslashes_and_control_chars() {
+        let raw = "He said \"hi\"\nback\\slash\ttab\x07bell";
+        let escaped = toml_escape_string(raw);
+        let doc = format!("value = {escaped}");
+        let parsed: toml::Value = toml::from_str(&doc).expect("must parse");
+        assert_eq!(parsed.get("value").and_then(|v| v.as_str()).unwrap(), raw);
+    }
+
+    #[test]
+    fn agent_prompt_omits_repo_block_when_absent() {
+        let p = agent_session_prompt("sid", None, "https://example/sid");
+        assert!(!p.contains("setSessionGitHubRepo"));
+    }
+
+    #[test]
+    fn agent_prompt_includes_repo_block_when_present() {
+        let p = agent_session_prompt("sid", Some("owner/repo"), "https://example/sid");
+        assert!(p.contains("setSessionGitHubRepo"));
+        assert!(p.contains("owner/repo"));
+    }
 }
