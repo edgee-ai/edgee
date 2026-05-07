@@ -14,11 +14,16 @@ use edgee_gateway_core::{CompletionRequest, GatewayResponse, ProviderDispatchSer
 use crate::error::Error;
 use crate::passthrough::MAX_BODY_BYTES;
 
+// TODO: not exposed publicly yet — `ProviderDispatchService` is still a stub
+// (returns `Err` on every call), so wiring `GatewayService` would 500 on every
+// request. Re-export from `lib.rs` once the dispatch path is real.
+#[allow(dead_code)]
 #[derive(Clone, Default)]
 pub struct GatewayService {
     dispatch: ProviderDispatchService,
 }
 
+#[allow(dead_code)]
 impl GatewayService {
     pub fn new(dispatch: ProviderDispatchService) -> Self {
         Self { dispatch }
