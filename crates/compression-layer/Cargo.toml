@@ -7,4 +7,5 @@ description = "Tower Layer that compresses LLM tool-result content before provid
 [dependencies]
 edgee-ai-gateway-core = { path = "../gateway-core" }
 edgee-compressor = { path = "../compressor" }
+serde_json = { workspace = true }
 tower = { workspace = true }

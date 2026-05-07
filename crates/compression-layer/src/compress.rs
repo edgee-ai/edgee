@@ -40,6 +40,7 @@ pub fn compress_request(
             };
 
             let text = tool_msg.content.as_text();
+            let original_len = text.len();
 
             // Each agent type has different tool-name conventions and output
             // formats. Codex outputs include a header ("Exit code: …\nOutput:\n")
@@ -63,8 +64,16 @@ pub fn compress_request(
                 }
             };
 
-            if let Some(compressed) = compressed {
-                tool_msg.content = MessageContent::Text(compressed);
+            match compressed {
+                Some(compressed) => {
+                    config
+                        .metrics
+                        .record_compression(name, original_len, compressed.len());
+                    tool_msg.content = MessageContent::Text(compressed);
+                }
+                None => {
+                    config.metrics.record_skip(name, original_len);
+                }
             }
         }
     }
@@ -130,9 +139,7 @@ mod tests {
             ],
         );
 
-        let config = CompressionConfig {
-            agent: AgentType::Claude,
-        };
+        let config = CompressionConfig::new(AgentType::Claude);
         let compressed = compress_request(&config, req);
 
         let tool_msg = compressed.messages.iter().find_map(|m| {
@@ -160,9 +167,7 @@ mod tests {
             })],
         );
 
-        let config = CompressionConfig {
-            agent: AgentType::Claude,
-        };
+        let config = CompressionConfig::new(AgentType::Claude);
         let result = compress_request(&config, req);
 
         // Content should be unchanged
@@ -174,5 +179,57 @@ mod tests {
             }
         });
         assert_eq!(tool_msg.unwrap().content.as_text(), "some output");
+    }
+
+    #[test]
+    fn metrics_record_compression_outcome() {
+        let output = glob_output(50);
+        let original_len = output.len();
+
+        let req = CompletionRequest::new(
+            "claude-3-5-sonnet".to_string(),
+            vec![
+                Message::User(UserMessage {
+                    name: None,
+                    content: MessageContent::Text("list files".into()),
+                    cache_control: None,
+                }),
+                Message::Assistant(AssistantMessage {
+                    name: None,
+                    content: None,
+                    refusal: None,
+                    cache_control: None,
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_1".into(),
+                        tool_type: "function".into(),
+                        function: FunctionCall {
+                            name: "Glob".into(),
+                            arguments: r#"{"pattern":"**/*.rs"}"#.into(),
+                        },
+                    }]),
+                }),
+                Message::Tool(ToolMessage {
+                    tool_call_id: "call_1".into(),
+                    content: MessageContent::Text(output),
+                }),
+            ],
+        );
+
+        let config = CompressionConfig::new(AgentType::Claude);
+        let _ = compress_request(&config, req);
+
+        let snap = config.metrics.snapshot();
+        assert_eq!(snap.len(), 1, "exactly one tool recorded");
+        let (name, stats) = &snap[0];
+        assert_eq!(name, "Glob");
+        assert_eq!(stats.invocations, 1);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(stats.bytes_in, original_len as u64);
+        assert!(
+            stats.bytes_out < stats.bytes_in,
+            "bytes_out should be smaller than bytes_in, got {} vs {}",
+            stats.bytes_out,
+            stats.bytes_in
+        );
     }
 }

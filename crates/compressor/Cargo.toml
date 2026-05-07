@@ -12,3 +12,10 @@ serde     = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 regex    .workspace = true
 tracing  .workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "compressor"
+harness = false

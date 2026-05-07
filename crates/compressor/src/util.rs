@@ -3,6 +3,45 @@
 use crate::strategy::ToolCompressor;
 use crate::strategy::util::{TextSegment, split_into_segments};
 
+/// Maximum input size we will attempt to compress.
+///
+/// Above this threshold the compressor returns `None` (caller keeps original)
+/// to bound memory/CPU per request. Two megabytes covers virtually every
+/// real-world tool output while preventing pathological / malicious payloads
+/// from turning a single request into a DoS vector on the gateway.
+pub const MAX_COMPRESSIBLE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Marker prepended to every compressed output.
+///
+/// Re-compression of an already-compressed message would invalidate the
+/// upstream prompt cache (Anthropic / OpenAI). Detecting the marker lets us
+/// skip work on tool messages we have processed in a previous request,
+/// keeping the cached prefix stable across the entire conversation.
+///
+/// Format: `<!--ec{N}-->` where `N` is a monotonically increasing schema
+/// version. The detection prefix matches any version, so a compressor
+/// rolled forward from `ec1` to `ec2` will still recognize old outputs as
+/// "already compressed" and leave them alone.
+pub const COMPRESSION_MARKER: &str = "<!--ec1-->";
+const COMPRESSION_MARKER_PREFIX: &str = "<!--ec";
+
+/// Returns `true` if `output` was produced by a previous compression pass
+/// (i.e. starts with a recognized version marker).
+pub fn is_already_compressed(output: &str) -> bool {
+    output.starts_with(COMPRESSION_MARKER_PREFIX)
+}
+
+/// Returns `true` if `output` contains a `<tool_use_error>` or
+/// `<persisted-output>` tag at the start of any line. Anchoring to the line
+/// start avoids false positives on documents or code that *mentions* these
+/// tags in body content (e.g., a Read of this very file would otherwise
+/// trigger).
+fn has_protected_tag(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.starts_with("<tool_use_error>") || line.starts_with("<persisted-output>"))
+}
+
 /// Wrap a call to `compressor.compress()`, preserving any `<system-reminder>` blocks verbatim.
 ///
 /// Strategy:
@@ -18,9 +57,22 @@ pub fn compress_claude_tool_with_segment_protection(
     arguments: &str,
     output: &str,
 ) -> Option<String> {
+    // Bound memory/CPU: refuse to process payloads larger than the configured limit.
+    if output.len() > MAX_COMPRESSIBLE_BYTES {
+        return None;
+    }
+
+    // Idempotency: skip outputs we have already compressed in a previous
+    // request. Re-compressing would invalidate the upstream prompt cache.
+    if is_already_compressed(output) {
+        return None;
+    }
+
     // Never compress tool outputs containing error or persisted-output tags —
-    // these carry important context that must be preserved verbatim.
-    if output.contains("<tool_use_error>") || output.contains("<persisted-output>") {
+    // these carry important context that must be preserved verbatim. The
+    // detection is anchored to line start so that documentation/code that
+    // *mentions* these tags in body content does not get rejected.
+    if has_protected_tag(output) {
         return None;
     }
 
@@ -30,7 +82,10 @@ pub fn compress_claude_tool_with_segment_protection(
         .iter()
         .any(|s| matches!(s, TextSegment::Protected(_)))
     {
-        return compressor.compress(arguments, output);
+        // Fast path: no protected segments, delegate directly and tag the result.
+        return compressor
+            .compress(arguments, output)
+            .map(|c| format!("{COMPRESSION_MARKER}{c}"));
     }
 
     let compressible_combined: String = segments
@@ -52,7 +107,10 @@ pub fn compress_claude_tool_with_segment_protection(
     // because their content was already included in the combined input.
     let compressed = compressor.compress(arguments, &compressible_combined)?;
 
-    let mut result = String::new();
+    // Prepend the version marker so the rebuilt output is recognizable on the
+    // next pass. Putting it before the first segment guarantees `starts_with`
+    // detection works even when a `<system-reminder>` block is at index 0.
+    let mut result = String::from(COMPRESSION_MARKER);
     let mut compressed_inserted = false;
     for segment in &segments {
         match segment {
@@ -100,8 +158,12 @@ mod tests {
             result.contains(reminder),
             "reminder must be preserved verbatim; got: {result:?}"
         );
-        // The compressed portion is `body` halved; reminder comes before it.
-        assert!(result.starts_with(reminder), "reminder should be at start");
+        // The version marker comes first, then the reminder before the compressed body.
+        assert!(result.starts_with(COMPRESSION_MARKER), "marker should lead");
+        assert!(
+            result[COMPRESSION_MARKER.len()..].starts_with(reminder),
+            "reminder should follow marker"
+        );
     }
 
     #[test]
@@ -118,6 +180,7 @@ mod tests {
             "reminder must be preserved verbatim; got: {result:?}"
         );
         assert!(result.ends_with(reminder), "reminder should be at end");
+        assert!(result.starts_with(COMPRESSION_MARKER), "marker should lead");
     }
 
     #[test]
@@ -126,9 +189,12 @@ mod tests {
 
         let result = compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", output);
 
-        // HalfCompressor returns first half; no reminder → direct delegation
+        // HalfCompressor returns first half; no reminder → direct delegation, with marker prefix.
         let result = result.expect("should compress plain text");
-        assert_eq!(result, &output[..output.len() / 2]);
+        assert_eq!(
+            result,
+            format!("{COMPRESSION_MARKER}{}", &output[..output.len() / 2])
+        );
     }
 
     #[test]
@@ -167,6 +233,85 @@ mod tests {
         assert!(
             result.is_none(),
             "persisted-output must not be compressed; got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn skip_compression_when_input_exceeds_max_bytes() {
+        // Build an input just over the limit. Use repeat() to keep allocation cheap.
+        let oversized = "x".repeat(MAX_COMPRESSIBLE_BYTES + 1);
+
+        let result =
+            compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", &oversized);
+
+        assert!(
+            result.is_none(),
+            "oversized input must not be compressed; got Some(_)"
+        );
+    }
+
+    #[test]
+    fn compresses_when_input_at_max_bytes_boundary() {
+        // Exactly at the limit must still go through.
+        let at_limit = "x".repeat(MAX_COMPRESSIBLE_BYTES);
+        let result = compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", &at_limit);
+        assert!(
+            result.is_some(),
+            "input at exactly MAX_COMPRESSIBLE_BYTES must compress"
+        );
+    }
+
+    #[test]
+    fn idempotency_skips_already_compressed_output() {
+        // First pass: produces a result tagged with the marker.
+        let raw = "plain compressible output long enough to compress";
+        let first = compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", raw)
+            .expect("first pass must compress");
+        assert!(first.starts_with(COMPRESSION_MARKER));
+
+        // Second pass: feeding the tagged output back must short-circuit.
+        let second = compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", &first);
+        assert!(
+            second.is_none(),
+            "already-compressed output must return None; got: {second:?}"
+        );
+    }
+
+    #[test]
+    fn is_already_compressed_recognizes_known_versions() {
+        assert!(is_already_compressed("<!--ec1-->payload"));
+        // Forward-compat: future schema versions should also be recognized.
+        assert!(is_already_compressed("<!--ec99-->payload"));
+        // Negatives.
+        assert!(!is_already_compressed("plain content"));
+        assert!(!is_already_compressed("<!--other--> content"));
+        assert!(!is_already_compressed(""));
+    }
+
+    #[test]
+    fn protected_tag_at_line_start_skips_compression() {
+        // Tag at start of output.
+        let output = "<tool_use_error>boom</tool_use_error>\nlong compressible content here";
+        assert!(
+            compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", output).is_none()
+        );
+
+        // Tag mid-output but at line start.
+        let output = "some preamble line\n<persisted-output>data</persisted-output>\nrest";
+        assert!(
+            compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", output).is_none()
+        );
+    }
+
+    #[test]
+    fn protected_tag_inside_line_does_not_block_compression() {
+        // Tag appears mid-line (e.g., in a comment about the tag) — must NOT
+        // trigger the skip.
+        let output = "// see <tool_use_error> docs for details — this is just a long compressible doc string with enough body to exceed the HalfCompressor's 10-byte minimum";
+        let result = compress_claude_tool_with_segment_protection(&HalfCompressor, "{}", output);
+        assert!(
+            result.is_some(),
+            "tag inside body line must not block compression"
         );
     }
 }
