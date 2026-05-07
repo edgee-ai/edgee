@@ -44,7 +44,7 @@ impl Service<Request<Body>> for GatewayService {
         let span = tracing::info_span!(
             "gateway.http.request",
             "gen_ai.request.model" = tracing::field::Empty,
-            stream = tracing::field::Empty,
+            "gen_ai.request.stream" = tracing::field::Empty,
         );
 
         Box::pin(
@@ -59,7 +59,7 @@ impl Service<Request<Body>> for GatewayService {
 
                 let current = tracing::Span::current();
                 current.record("gen_ai.request.model", completion_req.model.as_str());
-                current.record("stream", completion_req.stream);
+                current.record("gen_ai.request.stream", completion_req.stream);
 
                 tracing::debug!("dispatching request to provider");
 

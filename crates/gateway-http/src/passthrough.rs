@@ -56,7 +56,11 @@ where
         use edgee_gateway_core::passthrough::SKIP_HEADERS;
 
         let mut inner = self.inner.clone();
-        let span = tracing::debug_span!("gateway.http.passthrough");
+        let span = tracing::info_span!(
+            "gateway.http.passthrough",
+            "gen_ai.request.model" = tracing::field::Empty,
+            "gen_ai.request.stream" = tracing::field::Empty,
+        );
 
         Box::pin(
             async move {
@@ -69,6 +73,14 @@ where
                     .to_bytes();
 
                 let json_body = serde_json::from_slice::<serde_json::Value>(&bytes)?;
+
+                let current = tracing::Span::current();
+                if let Some(model) = json_body.get("model").and_then(|v| v.as_str()) {
+                    current.record("gen_ai.request.model", model);
+                }
+                if let Some(stream) = json_body.get("stream").and_then(|v| v.as_bool()) {
+                    current.record("gen_ai.request.stream", stream);
+                }
 
                 let mut headers = http::HeaderMap::new();
                 for (name, value) in &parts.headers {
