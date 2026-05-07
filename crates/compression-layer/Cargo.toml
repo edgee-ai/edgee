@@ -5,6 +5,12 @@ edition = "2024"
 description = "Tower Layer that compresses LLM tool-result content before provider dispatch"
 
 [dependencies]
-edgee-ai-gateway-core = { path = "../gateway-core" }
-edgee-compressor = { path = "../compressor" }
-tower = { workspace = true }
+# Workspace crates
+edgee-gateway-core.workspace = true
+edgee-compressor.workspace   = true
+
+# External dependencies
+bon.workspace = true
+serde_json.workspace = true
+tower.workspace      = true
+tracing.workspace    = true

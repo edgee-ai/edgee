@@ -10,6 +10,8 @@ setup_commands! {
     Auth(auth),
     /// Launch an AI tool routed through Edgee
     Launch(launch),
+    /// Run a local HTTP gateway that forwards LLM requests through the Edgee pipeline
+    LocalGateway(local_gateway),
     /// Show stored session stats
     #[command(visible_alias = "report")]
     Stats(stats),

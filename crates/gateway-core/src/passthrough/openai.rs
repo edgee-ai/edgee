@@ -8,20 +8,14 @@ use futures::future::BoxFuture;
 use http::{Request, Response};
 use tower::Service;
 
+use tracing::Instrument as _;
+
 use crate::{
     PassthroughRequest,
     backend::http::HttpClient,
-    config::ProviderConfig,
+    config::OpenAIPassthroughConfig,
     error::{Error, Result},
 };
-
-/// OpenAI Responses API endpoint for requests authenticated with a project key
-/// (`sk-proj-…`). These keys belong to the OpenAI Platform API.
-const OPENAI_API_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
-
-/// Default Responses API endpoint (ChatGPT backend, used by Codex CLI without
-/// a project key).
-const OPENAI_CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 
 /// Passthrough Tower service for the OpenAI Responses API.
 ///
@@ -30,39 +24,44 @@ const OPENAI_CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/code
 /// forwarded as-is (gateway-internal headers must already be stripped by the
 /// caller — see [`crate::passthrough::SKIP_HEADERS`]).
 ///
-/// Endpoint selection (when `ProviderConfig::base_url` is `None`):
-/// - `authorization: Bearer sk-proj-…` → `api.openai.com` (Platform API key)
-/// - anything else → `chatgpt.com` backend (Codex CLI default)
+/// # Routing
+///
+/// The OpenAI Responses API is reachable via two production endpoints, both
+/// taken from [`OpenAIPassthroughConfig`]:
+/// - [`OpenAIPassthroughConfig::api_url`] — used when the request bears an
+///   OpenAI Platform project key (`Authorization: Bearer sk-proj-…`).
+/// - [`OpenAIPassthroughConfig::chatgpt_url`] — used in every other case
+///   (Codex CLI's default path).
+///
+/// To pin all traffic to one endpoint, set both fields to the same URL on the
+/// supplied config.
 ///
 /// This is one of the two "distinct Tower `Service` implementations" for
 /// passthrough described in the spec (§6 Milestone 1).
+#[derive(Clone, bon::Builder)]
 pub struct OpenAIPassthroughService {
+    #[builder(into)]
     client: Arc<dyn HttpClient>,
-    config: ProviderConfig,
+    #[builder(default)]
+    config: OpenAIPassthroughConfig,
 }
 
 impl OpenAIPassthroughService {
-    pub fn new(client: Arc<dyn HttpClient>, config: ProviderConfig) -> Self {
+    pub fn new(client: Arc<dyn HttpClient>, config: OpenAIPassthroughConfig) -> Self {
         Self { client, config }
     }
 
-    fn target_uri(&self, headers: &[(String, String)]) -> String {
-        // If an explicit override is set, use it directly.
-        if let Some(base) = &self.config.base_url {
-            return format!("{base}/v1/responses");
-        }
-
-        // Otherwise select by key prefix (matching reference gateway behaviour).
+    fn target_uri(&self, headers: &http::HeaderMap) -> &str {
         let is_proj_key = headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
-            .map(|(_, v)| v.starts_with("sk-proj-") || v.starts_with("Bearer sk-proj-"))
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.starts_with("sk-proj-") || v.starts_with("Bearer sk-proj-"))
             .unwrap_or(false);
 
         if is_proj_key {
-            OPENAI_API_RESPONSES_URL.to_owned()
+            &self.config.api_url
         } else {
-            OPENAI_CHATGPT_RESPONSES_URL.to_owned()
+            &self.config.chatgpt_url
         }
     }
 }
@@ -78,54 +77,102 @@ impl Service<PassthroughRequest> for OpenAIPassthroughService {
 
     fn call(&mut self, req: PassthroughRequest) -> Self::Future {
         let client = self.client.clone();
-        let uri = self.target_uri(&req.headers);
+        let uri = self.target_uri(&req.headers).to_owned();
+        let span = tracing::debug_span!("passthrough.openai", url = %uri);
 
-        Box::pin(async move {
-            let mut builder = Request::builder().method(http::Method::POST).uri(&uri);
+        Box::pin(
+            async move {
+                tracing::debug!(url = %uri, "forwarding to OpenAI");
 
-            for (key, value) in &req.headers {
-                builder = builder.header(key.as_str(), value.as_str());
+                let mut builder = Request::builder().method(http::Method::POST).uri(&uri);
+
+                for (key, value) in &req.headers {
+                    builder = builder.header(key, value);
+                }
+
+                let body_bytes = serde_json::to_vec(&req.body)
+                    .map_err(|e| Error::RequestBuild(e.to_string()))?;
+                let forwarded = builder
+                    .body(Body::from(body_bytes))
+                    .map_err(|e| Error::RequestBuild(e.to_string()))?;
+
+                client.send(forwarded).await
             }
-
-            let forwarded = builder
-                .body(Body::from(req.body))
-                .map_err(|e| Error::RequestBuild(e.to_string()))?;
-
-            client.send(forwarded).await
-        })
+            .instrument(span),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ProviderConfig;
+    use crate::config::OpenAIPassthroughConfig;
 
-    fn make_svc(base_url: Option<&str>) -> OpenAIPassthroughService {
-        let mut config = ProviderConfig::new("key");
-        if let Some(u) = base_url {
-            config = config.with_base_url(u);
-        }
+    fn make_svc(config: OpenAIPassthroughConfig) -> OpenAIPassthroughService {
         OpenAIPassthroughService::new(Arc::new(crate::testing::StubClient), config)
     }
 
     #[test]
     fn routes_proj_key_to_api_openai() {
-        let svc = make_svc(None);
-        let headers = vec![("authorization".into(), "Bearer sk-proj-abc123".into())];
-        assert_eq!(svc.target_uri(&headers), OPENAI_API_RESPONSES_URL);
+        let svc = make_svc(OpenAIPassthroughConfig::default());
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            "Bearer sk-proj-abc123".parse().unwrap(),
+        );
+        assert_eq!(
+            svc.target_uri(&headers),
+            OpenAIPassthroughConfig::DEFAULT_API_URL
+        );
     }
 
     #[test]
     fn routes_non_proj_key_to_chatgpt() {
-        let svc = make_svc(None);
-        let headers = vec![("authorization".into(), "Bearer sk-abc123".into())];
-        assert_eq!(svc.target_uri(&headers), OPENAI_CHATGPT_RESPONSES_URL);
+        let svc = make_svc(OpenAIPassthroughConfig::default());
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            "Bearer sk-abc123".parse().unwrap(),
+        );
+        assert_eq!(
+            svc.target_uri(&headers),
+            OpenAIPassthroughConfig::DEFAULT_CHATGPT_URL
+        );
     }
 
     #[test]
-    fn custom_base_url_overrides_selection() {
-        let svc = make_svc(Some("http://localhost:4000"));
-        assert_eq!(svc.target_uri(&[]), "http://localhost:4000/v1/responses");
+    fn routes_no_auth_to_chatgpt() {
+        let svc = make_svc(OpenAIPassthroughConfig::default());
+        assert_eq!(
+            svc.target_uri(&http::HeaderMap::new()),
+            OpenAIPassthroughConfig::DEFAULT_CHATGPT_URL
+        );
+    }
+
+    #[test]
+    fn custom_api_url_used_for_proj_key() {
+        let svc = make_svc(
+            OpenAIPassthroughConfig::default().with_api_url("http://localhost:4000/v1/responses"),
+        );
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            "Bearer sk-proj-abc123".parse().unwrap(),
+        );
+        assert_eq!(
+            svc.target_uri(&headers),
+            "http://localhost:4000/v1/responses"
+        );
+    }
+
+    #[test]
+    fn custom_chatgpt_url_used_for_default_path() {
+        let svc = make_svc(
+            OpenAIPassthroughConfig::default().with_chatgpt_url("http://localhost:5000/responses"),
+        );
+        assert_eq!(
+            svc.target_uri(&http::HeaderMap::new()),
+            "http://localhost:5000/responses"
+        );
     }
 }

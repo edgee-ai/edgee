@@ -1,0 +1,28 @@
+[package]
+name = "edgee-gateway-http"
+version = "0.1.0"
+edition = "2024"
+description = "HTTP server layer for the Edgee AI Gateway"
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Workspace crates
+edgee-gateway-core.workspace = true
+
+# External dependencies
+axum-core.workspace = true
+bon.workspace = true
+bytes.workspace = true
+futures.workspace = true
+headers.workspace = true
+http-body-util.workspace = true
+http-body.workspace = true
+http.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tower = { workspace = true, features = ["full"] }
+tower-http = { workspace = true, features = ["full"] }
+tracing.workspace = true

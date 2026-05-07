@@ -2,6 +2,7 @@ use std::task::{Context, Poll};
 
 use futures::future::BoxFuture;
 use tower::Service;
+use tracing::Instrument as _;
 
 use crate::{
     error::{Error, Result},
@@ -44,12 +45,12 @@ use crate::{
 ///     openai_config,
 /// );
 /// ```
+#[derive(Clone, Default)]
 pub struct ProviderDispatchService {}
 
 impl ProviderDispatchService {
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Self {}
+        Default::default()
     }
 }
 
@@ -63,11 +64,15 @@ impl Service<CompletionRequest> for ProviderDispatchService {
     }
 
     fn call(&mut self, _req: CompletionRequest) -> Self::Future {
-        Box::pin(async {
-            Err(Error::HttpClient(
-                "ProviderDispatchService: not yet implemented".into(),
-            ))
-        })
+        Box::pin(
+            async {
+                tracing::warn!("ProviderDispatchService not yet implemented");
+                Err(Error::HttpClient(
+                    "ProviderDispatchService: not yet implemented".into(),
+                ))
+            }
+            .instrument(tracing::info_span!("gateway.dispatch")),
+        )
     }
 }
 

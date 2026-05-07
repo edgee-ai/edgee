@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 /// Which agent's tool-name conventions to use when dispatching compressors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentType {
@@ -12,13 +10,48 @@ pub enum AgentType {
 }
 
 /// Configuration for the compression layer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct CompressionConfig {
     pub agent: AgentType,
 }
 
-impl CompressionConfig {
-    pub fn new(agent: AgentType) -> Arc<Self> {
-        Arc::new(Self { agent })
+const _: () = {
+    use compression_config_builder::*;
+
+    impl CompressionConfig {
+        pub fn claude() -> CompressionConfigBuilder<SetAgent> {
+            Self::builder().claude()
+        }
+
+        pub fn codex() -> CompressionConfigBuilder<SetAgent> {
+            Self::builder().codex()
+        }
+
+        pub fn opencode() -> CompressionConfigBuilder<SetAgent> {
+            Self::builder().opencode()
+        }
     }
-}
+
+    impl<S: State> CompressionConfigBuilder<S> {
+        pub fn claude(self) -> CompressionConfigBuilder<SetAgent<S>>
+        where
+            S::Agent: IsUnset,
+        {
+            self.agent(AgentType::Claude)
+        }
+
+        pub fn codex(self) -> CompressionConfigBuilder<SetAgent<S>>
+        where
+            S::Agent: IsUnset,
+        {
+            self.agent(AgentType::Codex)
+        }
+
+        pub fn opencode(self) -> CompressionConfigBuilder<SetAgent<S>>
+        where
+            S::Agent: IsUnset,
+        {
+            self.agent(AgentType::OpenCode)
+        }
+    }
+};

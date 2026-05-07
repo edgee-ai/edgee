@@ -8,6 +8,7 @@ homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
+# External dependencies
 serde     = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 regex    .workspace = true
