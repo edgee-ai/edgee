@@ -6,14 +6,29 @@ use http::HeaderMap;
 /// ([`crate::passthrough::anthropic::AnthropicPassthroughService`],
 /// [`crate::passthrough::openai::OpenAIPassthroughService`]).
 ///
+/// # Crate boundary
+///
+/// `PassthroughRequest` lives in `gateway-core` because it is a
+/// **pipeline-level** value: it carries the request after the HTTP framing
+/// has been resolved (body buffered and parsed, headers materialised). The
+/// network boundary — receiving raw [`http_body::Body`] streams, applying
+/// per-frame size limits, and decoding the wire body — belongs to a separate
+/// crate (today: `gateway-http`).
+///
+/// HTTP metadata types such as [`http::HeaderMap`] are intentionally allowed
+/// here: the `http` crate is `no_std`-compatible so it does not compromise
+/// the portability story (WASM/Fastly), and using a real header map preserves
+/// multi-valued headers and avoids ad-hoc string pairs at every call site.
+/// What `gateway-core` deliberately avoids is the *transport* surface: bodies
+/// as byte streams, async runtime types, server abstractions.
+///
+/// # Caller responsibilities
+///
 /// The HTTP boundary layer above `gateway-core` is responsible for:
 /// - Reading the raw request body into [`serde_json::Value`].
-/// - Stripping gateway-internal headers (see [`crate::passthrough::SKIP_HEADERS`]).
+/// - Stripping gateway-internal and hop-by-hop headers
+///   (see [`crate::passthrough::SKIP_HEADERS`]).
 /// - Constructing this type before handing the request to the pipeline.
-///
-/// `http` types are used *internally* by the passthrough service implementations
-/// only when building the outbound HTTP call to the provider — never in this
-/// public interface.
 #[derive(Debug, Clone)]
 pub struct PassthroughRequest {
     /// The raw request body, parsed as JSON.
