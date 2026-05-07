@@ -1,6 +1,8 @@
 #[macro_use]
 mod macros;
 
+pub mod claude_settings;
+
 setup_commands! {
     /// Install shell aliases for Edgee launch commands
     Alias(alias),
@@ -13,6 +15,8 @@ setup_commands! {
     /// Show stored session stats
     #[command(visible_alias = "report")]
     Stats(stats),
+    /// Render the Edgee statusline and manage agent statusline integrations
+    Statusline(statusline),
     /// Reset Edgee credentials and connection mode
     Reset(reset),
     [cfg(feature = "self-update")]
