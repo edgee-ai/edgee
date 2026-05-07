@@ -7,6 +7,8 @@ pub enum AgentType {
     Claude,
     /// Codex CLI — tool names: `shell_command`, `read_file`, `grep`, `list_directory`
     Codex,
+    /// Cursor — tool names: `Shell`, `read_file`, `grep_search`, `list_dir`
+    Cursor,
     /// OpenCode — tool names: `bash`, `read`, `grep`, `glob`
     OpenCode,
 }
