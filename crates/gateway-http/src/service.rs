@@ -30,8 +30,8 @@ impl Service<Request<Body>> for GatewayService {
     type Error = Error;
     type Future = BoxFuture<'static, Result<Self::Response, Error>>;
 
-    fn poll_ready(&mut self, _cx: &mut task::Context<'_>) -> Poll<Result<(), Error>> {
-        Poll::Ready(Ok(()))
+    fn poll_ready(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<(), Error>> {
+        self.dispatch.poll_ready(cx).map_err(Into::into)
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
