@@ -1,5 +1,6 @@
 pub mod compress;
 pub mod config;
+mod dispatch;
 pub mod layer;
 pub mod passthrough;
 pub mod service;

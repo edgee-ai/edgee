@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::config::{AgentType, CompressionConfig};
+use crate::config::CompressionConfig;
 
 /// Compress tool-result content in a provider-native Anthropic Messages API body.
 ///
@@ -79,7 +79,9 @@ pub fn compress_passthrough_body(config: &CompressionConfig, body: &mut serde_js
                 Some(c @ serde_json::Value::String(_)) => {
                     let text = c.as_str().unwrap().to_owned();
                     bytes_before += text.len();
-                    if let Some(compressed) = compress_with_config(config, name, arguments, &text) {
+                    if let Some(compressed) =
+                        crate::dispatch::compress_with_agent(config, name, arguments, &text)
+                    {
                         bytes_after += compressed.len();
                         tools_compressed += 1;
                         *c = serde_json::Value::String(compressed);
@@ -98,7 +100,7 @@ pub fn compress_passthrough_body(config: &CompressionConfig, body: &mut serde_js
                         let text = tv.as_str().unwrap_or_default().to_owned();
                         bytes_before += text.len();
                         if let Some(compressed) =
-                            compress_with_config(config, name, arguments, &text)
+                            crate::dispatch::compress_with_agent(config, name, arguments, &text)
                         {
                             bytes_after += compressed.len();
                             tools_compressed += 1;
@@ -121,23 +123,6 @@ pub fn compress_passthrough_body(config: &CompressionConfig, body: &mut serde_js
             bytes_after,
             "compression complete",
         );
-    }
-}
-
-fn compress_with_config(
-    config: &CompressionConfig,
-    name: &str,
-    arguments: &str,
-    text: &str,
-) -> Option<String> {
-    match config.agent {
-        AgentType::Claude => edgee_compressor::claude_compressor_for(name).and_then(|c| {
-            edgee_compressor::compress_claude_tool_with_segment_protection(c, arguments, text)
-        }),
-        AgentType::Codex => edgee_compressor::compress_codex_tool_output(name, arguments, text),
-        AgentType::OpenCode => edgee_compressor::opencode_compressor_for(name).and_then(|c| {
-            edgee_compressor::compress_claude_tool_with_segment_protection(c, arguments, text)
-        }),
     }
 }
 

@@ -5,7 +5,7 @@ use edgee_gateway_core::{
     types::{Message, MessageContent},
 };
 
-use crate::config::{AgentType, CompressionConfig};
+use crate::config::CompressionConfig;
 
 /// Walk `req.messages`, compressing tool-result content in-place.
 ///
@@ -49,27 +49,7 @@ pub fn compress_request(
             tools_checked += 1;
             bytes_before += text.len();
 
-            // Each agent type has different tool-name conventions and output
-            // formats. Codex outputs include a header ("Exit code: …\nOutput:\n")
-            // that must be stripped before compression, so it uses a dedicated
-            // pipeline that handles header stripping + segment protection.
-            let compressed = match config.agent {
-                AgentType::Codex => {
-                    edgee_compressor::compress_codex_tool_output(name, arguments, &text)
-                }
-                AgentType::Claude => edgee_compressor::claude_compressor_for(name).and_then(|c| {
-                    edgee_compressor::compress_claude_tool_with_segment_protection(
-                        c, arguments, &text,
-                    )
-                }),
-                AgentType::OpenCode => {
-                    edgee_compressor::opencode_compressor_for(name).and_then(|c| {
-                        edgee_compressor::compress_claude_tool_with_segment_protection(
-                            c, arguments, &text,
-                        )
-                    })
-                }
-            };
+            let compressed = crate::dispatch::compress_with_agent(config, name, arguments, &text);
 
             if let Some(compressed) = compressed {
                 bytes_after += compressed.len();
