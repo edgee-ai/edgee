@@ -201,6 +201,11 @@ pub async fn run(opts: Options) -> Result<()> {
     let api_key = &opencode.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
     crate::commands::launch::spawn_cli_version_report(&creds, &session_id);
+
+    // First-run: install the persistent user-level statusline integration
+    // exactly once (Claude Code-targeted; honors the disable marker).
+    crate::commands::launch::ensure_first_run_installed().await;
+
     let gateway_url = crate::config::gateway_base_url();
 
     let mut config = find_user_config().unwrap_or_else(|| {

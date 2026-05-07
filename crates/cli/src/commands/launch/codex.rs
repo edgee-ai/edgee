@@ -38,6 +38,14 @@ pub async fn run(opts: Options) -> Result<()> {
     let api_key = &codex.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
     crate::commands::launch::spawn_cli_version_report(&creds, &session_id);
+
+    // First-run: install the persistent user-level statusline integration
+    // exactly once. Codex itself doesn't render an Edgee statusline today,
+    // but users typically also use Claude Code in the same shell — running
+    // the installer on the first `edgee launch` of any agent matches the
+    // "set it up once" flow we want.
+    crate::commands::launch::ensure_first_run_installed().await;
+
     let repo_entry = crate::git::detect_origin()
         .map(|url| format!(",\"x-edgee-repo\"=\"{}\"", url))
         .unwrap_or_default();

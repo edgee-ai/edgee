@@ -1,5 +1,5 @@
-//! `edgee doctor` — diagnose Claude Code statusLine conflicts in the
-//! current project.
+//! `edgee statusline claude doctor` — diagnose Claude Code statusLine
+//! conflicts in the current project.
 //!
 //! Read-only. Walks up from the current working directory looking for
 //! `.claude/settings.json` and `.claude/settings.local.json`, computes the
