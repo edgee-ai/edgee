@@ -19,10 +19,10 @@ use std::{
 use anyhow::{Context, Result};
 use axum::Router;
 use axum_core::response::IntoResponse;
-use edgee_compression_layer::{AgentType, CompressionConfig, PassthroughCompressionLayer};
+use edgee_compression_layer::{CompressionConfig, CompressionLayer};
 use edgee_gateway_core::{
-    AnthropicPassthroughConfig, HttpClient, OpenAIPassthroughConfig, ReqwestHttpClient,
     passthrough::{anthropic::AnthropicPassthroughService, openai::OpenAIPassthroughService},
+    HttpClient, ReqwestHttpClient,
 };
 use edgee_gateway_http::{Error, PassthroughLayer};
 use tower::ServiceBuilder;
@@ -74,26 +74,24 @@ pub async fn run(opts: Options) -> Result<()> {
             |e: Error| async move { e.into_response() },
         ))
         .layer(PassthroughLayer::new())
-        .layer(PassthroughCompressionLayer::new(CompressionConfig::new(
-            AgentType::Claude,
-        )))
-        .service(AnthropicPassthroughService::new(
-            http_client.clone(),
-            AnthropicPassthroughConfig::default(),
-        ));
+        .layer(CompressionLayer::new(CompressionConfig::claude().build()))
+        .service(
+            AnthropicPassthroughService::builder()
+                .client(http_client.clone())
+                .build(),
+        );
 
     let openai = ServiceBuilder::new()
         .layer(axum::error_handling::HandleErrorLayer::new(
             |e: Error| async move { e.into_response() },
         ))
         .layer(PassthroughLayer::new())
-        .layer(PassthroughCompressionLayer::new(CompressionConfig::new(
-            AgentType::Codex,
-        )))
-        .service(OpenAIPassthroughService::new(
-            http_client.clone(),
-            OpenAIPassthroughConfig::default(),
-        ));
+        .layer(CompressionLayer::new(CompressionConfig::codex().build()))
+        .service(
+            OpenAIPassthroughService::builder()
+                .client(http_client.clone())
+                .build(),
+        );
 
     let app = Router::new()
         .route_service("/v1/messages", anthropic)

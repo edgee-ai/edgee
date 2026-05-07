@@ -1,3 +1,6 @@
+mod dispatch;
+pub(crate) mod passthrough;
+
 use std::collections::HashMap;
 
 use edgee_gateway_core::{
@@ -49,7 +52,7 @@ pub fn compress_request(
             tools_checked += 1;
             bytes_before += text.len();
 
-            let compressed = crate::dispatch::compress_with_agent(config, name, arguments, &text);
+            let compressed = dispatch::compress_with_agent(config, name, arguments, &text);
 
             if let Some(compressed) = compressed {
                 bytes_after += compressed.len();

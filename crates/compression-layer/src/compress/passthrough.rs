@@ -80,7 +80,7 @@ pub fn compress_passthrough_body(config: &CompressionConfig, body: &mut serde_js
                     let text = c.as_str().unwrap().to_owned();
                     bytes_before += text.len();
                     if let Some(compressed) =
-                        crate::dispatch::compress_with_agent(config, name, arguments, &text)
+                        super::dispatch::compress_with_agent(config, name, arguments, &text)
                     {
                         bytes_after += compressed.len();
                         tools_compressed += 1;
@@ -100,7 +100,7 @@ pub fn compress_passthrough_body(config: &CompressionConfig, body: &mut serde_js
                         let text = tv.as_str().unwrap_or_default().to_owned();
                         bytes_before += text.len();
                         if let Some(compressed) =
-                            crate::dispatch::compress_with_agent(config, name, arguments, &text)
+                            super::dispatch::compress_with_agent(config, name, arguments, &text)
                         {
                             bytes_after += compressed.len();
                             tools_compressed += 1;

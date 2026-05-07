@@ -1,8 +1,3 @@
-//! Shared helper that routes a tool name + arguments + text to the right
-//! per-agent compressor. Lives in a standalone module so both compression
-//! paths (typed `CompletionRequest` and JSON passthrough) can call it without
-//! either path appearing to "own" the other.
-
 use crate::config::{AgentType, CompressionConfig};
 
 /// Dispatch to the per-agent compressor and return the compressed text, or
