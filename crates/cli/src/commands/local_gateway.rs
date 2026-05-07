@@ -43,6 +43,16 @@ pub async fn run(opts: Options) -> Result<()> {
 
     let addr = SocketAddr::new(opts.bind, opts.port);
 
+    if !opts.bind.is_loopback() {
+        eprintln!(
+            "WARNING: binding to non-loopback address {}: this gateway has no \
+             auth, no TLS, and no rate limiting. Anyone on the network can use \
+             it as an unauthenticated proxy and may be able to intercept the \
+             API keys it forwards.",
+            opts.bind
+        );
+    }
+
     let http_client: Arc<dyn HttpClient> = Arc::new(ReqwestHttpClient::new(reqwest::Client::new()));
 
     let anthropic = ServiceBuilder::new()
