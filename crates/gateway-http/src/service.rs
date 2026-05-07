@@ -5,13 +5,14 @@ use bytes::Bytes;
 use futures::{StreamExt as _, future::BoxFuture};
 use http::{Request, Response};
 use http_body::Frame;
-use http_body_util::{BodyExt as _, StreamBody};
+use http_body_util::{BodyExt as _, Limited, StreamBody};
 use tower::Service;
 use tracing::Instrument as _;
 
 use edgee_gateway_core::{CompletionRequest, GatewayResponse, ProviderDispatchService};
 
 use crate::error::Error;
+use crate::passthrough::MAX_BODY_BYTES;
 
 #[derive(Clone, Default)]
 pub struct GatewayService {
@@ -43,8 +44,7 @@ impl Service<Request<Body>> for GatewayService {
 
         Box::pin(
             async move {
-                let bytes = req
-                    .into_body()
+                let bytes = Limited::new(req.into_body(), MAX_BODY_BYTES)
                     .collect()
                     .await
                     .map_err(crate::error::body_read_error)?

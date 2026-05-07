@@ -114,8 +114,21 @@ pub enum ErrorType {
 
 // Pre-built error responses for common cases
 
-/// Create a 400 response for a failed body read.
-pub fn body_read_error(e: impl std::fmt::Display) -> Error {
+/// Create a `400 Bad Request` (or `413 Payload Too Large`, when the underlying
+/// error is a `http_body_util::LengthLimitError`) response for a failed body read.
+pub fn body_read_error(e: Box<dyn std::error::Error + Send + Sync>) -> Error {
+    if e.downcast_ref::<http_body_util::LengthLimitError>()
+        .is_some()
+    {
+        return Error::builder()
+            .status_code(StatusCode::PAYLOAD_TOO_LARGE)
+            .error_type(ErrorType::InvalidRequest)
+            .message(format!(
+                "request body exceeds {} bytes",
+                crate::passthrough::MAX_BODY_BYTES
+            ))
+            .build();
+    }
     Error::builder()
         .status_code(StatusCode::BAD_REQUEST)
         .error_type(ErrorType::InvalidRequest)

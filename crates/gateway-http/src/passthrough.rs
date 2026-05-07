@@ -8,13 +8,17 @@ use std::task::{Context, Poll};
 use axum_core::body::Body;
 use futures::future::BoxFuture;
 use http::{Request, Response};
-use http_body_util::BodyExt as _;
+use http_body_util::{BodyExt as _, Limited};
 use tower::Service;
 use tracing::Instrument as _;
 
 use edgee_gateway_core::PassthroughRequest;
 
 use crate::error::Error;
+
+/// Maximum accepted request body size, in bytes. Requests larger than this are
+/// rejected with HTTP 413 before the body is buffered into memory.
+pub const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 /// Tower service that converts an incoming [`Request<Body>`] into a [`PassthroughRequest`]
 /// and forwards it to an inner service.
@@ -58,7 +62,7 @@ where
             async move {
                 let (parts, body) = req.into_parts();
 
-                let bytes = body
+                let bytes = Limited::new(body, MAX_BODY_BYTES)
                     .collect()
                     .await
                     .map_err(crate::error::body_read_error)?
