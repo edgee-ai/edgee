@@ -13,6 +13,7 @@
 use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -26,6 +27,14 @@ use edgee_gateway_core::{
 use edgee_gateway_http::{Error, PassthroughLayer};
 use tower::ServiceBuilder;
 use tracing_subscriber::EnvFilter;
+
+/// Bound for the TCP/TLS handshake against the upstream provider.
+const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Per-read inactivity timeout against the upstream provider. Applied per
+/// chunk, so it bounds how long the provider can be silent without aborting
+/// long-lived streaming responses (SSE keepalives reset the timer).
+const UPSTREAM_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, clap::Parser)]
 pub struct Options {
@@ -53,7 +62,12 @@ pub async fn run(opts: Options) -> Result<()> {
         );
     }
 
-    let http_client: Arc<dyn HttpClient> = Arc::new(ReqwestHttpClient::new(reqwest::Client::new()));
+    let reqwest_client = reqwest::Client::builder()
+        .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
+        .read_timeout(UPSTREAM_READ_TIMEOUT)
+        .build()
+        .context("failed to build reqwest client")?;
+    let http_client: Arc<dyn HttpClient> = Arc::new(ReqwestHttpClient::new(reqwest_client));
 
     let anthropic = ServiceBuilder::new()
         .layer(axum::error_handling::HandleErrorLayer::new(
