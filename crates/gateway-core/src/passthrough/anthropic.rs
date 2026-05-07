@@ -26,9 +26,11 @@ use crate::{
 ///
 /// This is one of the two "distinct Tower `Service` implementations" for
 /// passthrough described in the spec (§6 Milestone 1).
-#[derive(Clone)]
+#[derive(Clone, bon::Builder)]
 pub struct AnthropicPassthroughService {
+    #[builder(into)]
     client: Arc<dyn HttpClient>,
+    #[builder(default)]
     config: AnthropicPassthroughConfig,
 }
 

@@ -11,16 +11,17 @@ tokio = ["dep:reqwest", "dep:tokio"]
 
 [dependencies]
 # External dependencies
-tower.workspace = true
-futures.workspace = true
 async-trait.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
-http.workspace = true
 axum-core.workspace = true
+bon.workspace = true
 bytes.workspace = true
+futures.workspace = true
+http.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+thiserror.workspace = true
+tower.workspace = true
+tracing.workspace = true
 
 # Runtime-specific — only compiled with the `tokio` feature
 reqwest = { workspace = true, default-features = false, features = ["stream"], optional = true }

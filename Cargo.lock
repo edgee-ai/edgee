@@ -606,6 +606,7 @@ dependencies = [
 name = "edgee-compression-layer"
 version = "0.1.0"
 dependencies = [
+ "bon",
  "edgee-compressor",
  "edgee-gateway-core",
  "serde_json",
@@ -629,6 +630,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum-core",
+ "bon",
  "bytes",
  "futures",
  "http",

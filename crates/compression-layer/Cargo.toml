@@ -10,6 +10,7 @@ edgee-gateway-core.workspace = true
 edgee-compressor.workspace   = true
 
 # External dependencies
+bon.workspace = true
 serde_json.workspace = true
 tower.workspace      = true
 tracing.workspace    = true
