@@ -13,12 +13,9 @@ use tracing::Instrument as _;
 use crate::{
     PassthroughRequest,
     backend::http::HttpClient,
-    config::ProviderConfig,
+    config::AnthropicPassthroughConfig,
     error::{Error, Result},
 };
-
-/// Default Anthropic Messages API endpoint.
-const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 
 /// Passthrough Tower service for the Anthropic Messages API.
 ///
@@ -32,17 +29,16 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 #[derive(Clone)]
 pub struct AnthropicPassthroughService {
     client: Arc<dyn HttpClient>,
-    config: ProviderConfig,
+    config: AnthropicPassthroughConfig,
 }
 
 impl AnthropicPassthroughService {
-    pub fn new(client: Arc<dyn HttpClient>, config: ProviderConfig) -> Self {
+    pub fn new(client: Arc<dyn HttpClient>, config: AnthropicPassthroughConfig) -> Self {
         Self { client, config }
     }
 
     fn target_uri(&self) -> String {
-        let base = self.config.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL);
-        format!("{base}/v1/messages")
+        format!("{}/v1/messages", self.config.base_url)
     }
 }
 
@@ -86,13 +82,13 @@ impl Service<PassthroughRequest> for AnthropicPassthroughService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ProviderConfig;
+    use crate::config::AnthropicPassthroughConfig;
 
     #[test]
     fn target_uri_default() {
         let svc = AnthropicPassthroughService::new(
             Arc::new(crate::testing::StubClient),
-            ProviderConfig::new("key"),
+            AnthropicPassthroughConfig::default(),
         );
         assert_eq!(svc.target_uri(), "https://api.anthropic.com/v1/messages");
     }
@@ -101,7 +97,7 @@ mod tests {
     fn target_uri_custom_base_url() {
         let svc = AnthropicPassthroughService::new(
             Arc::new(crate::testing::StubClient),
-            ProviderConfig::new("key").with_base_url("http://localhost:8080"),
+            AnthropicPassthroughConfig::default().with_base_url("http://localhost:8080"),
         );
         assert_eq!(svc.target_uri(), "http://localhost:8080/v1/messages");
     }
