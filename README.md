@@ -24,7 +24,8 @@ Edgee is a lightweight LLM gateway that sits between your application and AI pro
 
 Think of it as an open-source alternative to LiteLLM or OpenRouter, written in Rust for speed and low resource usage, with a built-in token compression engine that reduces your AI costs automatically.
 
-<img width="1997" height="807" alt="ai-gateway-horizontal-light" src="https://github.com/user-attachments/assets/09829f8f-cbf3-4afe-8947-bd4cd421667f" />
+<img width="1997" height="807" alt="ai-gateway-horizontal-light" src="https://github.com/user-attachments/assets/d68ff91d-a488-428e-b99d-f4e1c3ef9242" />
+
 
 ## Why Edgee
 
