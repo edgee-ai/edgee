@@ -10,16 +10,38 @@
 //! Codex tool outputs are prefixed with a header block:
 //!   Exit code: N\nWall time: N seconds\nOutput:\n
 //! This is stripped before compression so compressors see only the raw output.
+//! Non-zero exit codes are re-injected as a `[exit N]` prefix on the
+//! compressed result so the agent does not lose the failure signal.
 
 use super::ToolCompressor;
+use crate::util::COMPRESSION_MARKER;
 
 /// Compress a Codex tool output, stripping the Codex header before delegating
-/// to the appropriate compressor.
+/// to the appropriate compressor. Non-zero exit codes are preserved as a
+/// `[exit N]` prefix so the agent still sees that the command failed.
 pub fn compress(tool_name: &str, arguments: &str, output: &str) -> Option<String> {
     let compressor = compressor_for(tool_name)?;
+
+    // Capture the exit code from the header BEFORE stripping it.
+    let exit_code = parse_exit_code(output);
     let stripped = strip_header(output);
 
-    crate::util::compress_claude_tool_with_segment_protection(compressor, arguments, stripped)
+    let compressed =
+        crate::util::compress_claude_tool_with_segment_protection(compressor, arguments, stripped)?;
+
+    // Insert `[exit N] ` immediately after the version marker for non-zero
+    // exits. Placing it before the marker would break the idempotency check
+    // (`starts_with("<!--ec")`), causing the next pass to re-compress.
+    Some(match exit_code {
+        Some(code) if code != 0 => {
+            if let Some(rest) = compressed.strip_prefix(COMPRESSION_MARKER) {
+                format!("{COMPRESSION_MARKER}[exit {code}] {rest}")
+            } else {
+                format!("[exit {code}] {compressed}")
+            }
+        }
+        _ => compressed,
+    })
 }
 
 /// Strip the Codex shell output header, which always ends with "\nOutput:\n".
@@ -33,6 +55,32 @@ fn strip_header(output: &str) -> &str {
     } else {
         output
     }
+}
+
+/// Parse the exit code from the Codex header. Recognized forms:
+/// - `Exit code: N`
+/// - `Process exited with code N`
+///
+/// Returns `None` if no recognized line exists, the value isn't an integer,
+/// or there's no header at all.
+fn parse_exit_code(output: &str) -> Option<i32> {
+    let header = if let Some(end) = output.find("\nOutput:\n") {
+        &output[..end]
+    } else {
+        // No header marker — try the whole input anyway, the line scan is cheap.
+        output
+    };
+
+    for line in header.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Exit code:") {
+            return rest.trim().parse::<i32>().ok();
+        }
+        if let Some(rest) = trimmed.strip_prefix("Process exited with code") {
+            return rest.trim().parse::<i32>().ok();
+        }
+    }
+    None
 }
 
 /// Select the appropriate compressor for a Codex CLI tool name.
@@ -125,5 +173,77 @@ mod tests {
         let args = r#"{"command":"ls -la","workdir":"/tmp"}"#;
         let output = "Exit code: 0\nWall time: 0 seconds\nOutput:\ntotal 8\ndrwxr-xr-x 2 user staff 64 Jan 1 12:00 .\ndrwxr-xr-x 2 user staff 64 Jan 1 12:00 ..\n-rw-r--r-- 1 user staff 10 Jan 1 12:00 file.txt\n";
         assert!(compress("shell_command", args, output).is_some());
+    }
+
+    #[test]
+    fn parse_exit_code_classic_format() {
+        assert_eq!(parse_exit_code("Exit code: 0\nOutput:\nfoo"), Some(0));
+        assert_eq!(parse_exit_code("Exit code: 1\nOutput:\nfoo"), Some(1));
+        assert_eq!(parse_exit_code("Exit code: 137\nOutput:\nfoo"), Some(137));
+    }
+
+    #[test]
+    fn parse_exit_code_process_exited_format() {
+        let out = "Command: zsh\nProcess exited with code 2\nOutput:\nbody\n";
+        assert_eq!(parse_exit_code(out), Some(2));
+    }
+
+    #[test]
+    fn parse_exit_code_missing_returns_none() {
+        assert_eq!(parse_exit_code("plain output\n"), None);
+        assert_eq!(parse_exit_code("Wall time: 5s\nOutput:\nfoo"), None);
+    }
+
+    #[test]
+    fn nonzero_exit_is_reinjected_after_marker() {
+        // Big enough ls -la output so the compressor actually returns Some.
+        let args = r#"{"command":"ls -la","workdir":"/tmp"}"#;
+        let mut body = String::from("total 999\n");
+        for i in 0..40 {
+            body.push_str(&format!("-rw-r--r-- 1 u s 10 Jan 1 12:00 file{i}.txt\n"));
+        }
+        let output = format!("Exit code: 1\nWall time: 0 seconds\nOutput:\n{body}");
+
+        let result = compress("shell_command", args, &output).expect("should compress");
+        assert!(
+            result.starts_with(crate::util::COMPRESSION_MARKER),
+            "marker must lead so idempotency check still works"
+        );
+        assert!(
+            result.contains("[exit 1]"),
+            "non-zero exit code must be re-injected; got: {result}"
+        );
+    }
+
+    #[test]
+    fn zero_exit_is_not_injected() {
+        let args = r#"{"command":"ls -la","workdir":"/tmp"}"#;
+        let mut body = String::from("total 999\n");
+        for i in 0..40 {
+            body.push_str(&format!("-rw-r--r-- 1 u s 10 Jan 1 12:00 file{i}.txt\n"));
+        }
+        let output = format!("Exit code: 0\nWall time: 0 seconds\nOutput:\n{body}");
+
+        let result = compress("shell_command", args, &output).expect("should compress");
+        assert!(
+            !result.contains("[exit "),
+            "zero exit must not produce a prefix; got: {result}"
+        );
+    }
+
+    #[test]
+    fn idempotent_with_exit_prefix() {
+        // Re-running compress on its own output must short-circuit.
+        let args = r#"{"command":"ls -la","workdir":"/tmp"}"#;
+        let mut body = String::from("total 999\n");
+        for i in 0..40 {
+            body.push_str(&format!("-rw-r--r-- 1 u s 10 Jan 1 12:00 file{i}.txt\n"));
+        }
+        let output = format!("Exit code: 1\nWall time: 0 seconds\nOutput:\n{body}");
+
+        let first = compress("shell_command", args, &output).expect("first pass compresses");
+        // Second pass: feed the compressed output back through.
+        let second = compress("shell_command", args, &first);
+        assert!(second.is_none(), "second pass must short-circuit");
     }
 }

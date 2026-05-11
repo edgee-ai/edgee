@@ -24,6 +24,10 @@ use crate::strategy::claude::read::{
 /// Below this many content lines, don't compress at all.
 const SMALL_THRESHOLD: usize = 50;
 
+/// Minimum absolute byte savings to accept a compression result.
+/// Mirrors the threshold logic in [`crate::strategy::claude::read`].
+const MIN_BYTES_SAVED: usize = 200;
+
 pub struct ReadCompressor;
 
 impl ToolCompressor for ReadCompressor {
@@ -51,9 +55,11 @@ impl ToolCompressor for ReadCompressor {
 
         let compressed = format_numbered_lines(&filtered, fmt);
 
-        // Only return if we actually saved something meaningful (>10%)
-        let threshold = raw_content.len() * 9 / 10;
-        if compressed.len() >= threshold {
+        // Accept when EITHER the savings ratio crosses 10 % OR the absolute
+        // byte gain is large enough (whichever happens first).
+        let saved = raw_content.len().saturating_sub(compressed.len());
+        let pct_threshold = raw_content.len() / 10;
+        if saved < MIN_BYTES_SAVED && saved < pct_threshold {
             return None;
         }
 

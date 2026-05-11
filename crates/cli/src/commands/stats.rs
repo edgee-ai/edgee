@@ -1,10 +1,18 @@
+use std::collections::HashMap;
+
 use anyhow::{Result, bail};
 use console::style;
+
+use crate::api::ToolCompressionStat;
 
 setup_command! {
     /// Limit the number of sessions listed below the latest-session report
     #[arg(long)]
     pub limit: Option<usize>,
+
+    /// Print a per-tool compression breakdown aggregated across every session
+    #[arg(long)]
+    pub per_tool: bool,
 }
 
 fn fmt_tokens(n: u64) -> String {
@@ -149,5 +157,100 @@ pub async fn run(opts: Options) -> Result<()> {
     }
     println!();
 
+    if opts.per_tool {
+        render_per_tool_breakdown(&logs);
+    }
+
     Ok(())
+}
+
+/// Aggregate `tool_compression_stats` across every session log and print a
+/// per-tool table showing call count, before/after token totals, and the
+/// realised compression ratio. Tools without any stored stats (older log
+/// files) are silently skipped.
+fn render_per_tool_breakdown(
+    logs: &[crate::commands::launch::SessionLogEntry],
+) {
+    let mut totals: HashMap<String, ToolCompressionStat> = HashMap::new();
+    for entry in logs {
+        let Some(per_tool) = &entry.stats.tool_compression_stats else {
+            continue;
+        };
+        for (name, stat) in per_tool {
+            let agg = totals.entry(name.clone()).or_insert(ToolCompressionStat {
+                count: 0,
+                before: 0,
+                after: 0,
+            });
+            agg.count += stat.count;
+            agg.before += stat.before;
+            agg.after += stat.after;
+        }
+    }
+
+    if totals.is_empty() {
+        println!(
+            "  {}",
+            style("No per-tool compression data in the stored session logs").dim()
+        );
+        println!();
+        return;
+    }
+
+    // Sort by absolute savings descending so the biggest wins lead the table.
+    let mut rows: Vec<(String, ToolCompressionStat)> = totals.into_iter().collect();
+    rows.sort_by_key(|(_, s)| std::cmp::Reverse(s.before.saturating_sub(s.after)));
+
+    let tool_width = rows
+        .iter()
+        .map(|(n, _)| n.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let count_width = rows
+        .iter()
+        .map(|(_, s)| s.count.to_string().len())
+        .max()
+        .unwrap_or(5)
+        .max(5);
+    let before_width = rows
+        .iter()
+        .map(|(_, s)| fmt_tokens(s.before).len())
+        .max()
+        .unwrap_or(6)
+        .max(6);
+    let after_width = rows
+        .iter()
+        .map(|(_, s)| fmt_tokens(s.after).len())
+        .max()
+        .unwrap_or(5)
+        .max(5);
+
+    println!("  {}", style("Per-tool compression").bold());
+    println!();
+    println!(
+        "  {}  {}  {}  {}  {}",
+        style(format!("{:<tool_width$}", "tool")).dim().bold(),
+        style(format!("{:>count_width$}", "calls")).dim().bold(),
+        style(format!("{:>before_width$}", "before")).dim().bold(),
+        style(format!("{:>after_width$}", "after")).dim().bold(),
+        style(format!("{:<12}", "compression")).dim().bold(),
+    );
+
+    for (name, stat) in &rows {
+        let (cell, has) = fmt_compression_cell(stat.before, stat.after);
+        println!(
+            "  {}  {}  {}  {}  {}",
+            style(format!("{:<tool_width$}", name)).cyan(),
+            style(format!("{:>count_width$}", stat.count)).cyan(),
+            style(format!("{:>before_width$}", fmt_tokens(stat.before))).cyan(),
+            style(format!("{:>after_width$}", fmt_tokens(stat.after))).cyan(),
+            if has {
+                style(format!("{:<12}", cell)).green()
+            } else {
+                style(format!("{:<12}", cell)).dim()
+            },
+        );
+    }
+    println!();
 }

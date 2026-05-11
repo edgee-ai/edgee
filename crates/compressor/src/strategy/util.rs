@@ -20,6 +20,14 @@ pub enum TextSegment {
 ///
 /// The result always starts and ends with a `Compressible` segment (possibly empty).
 pub fn split_into_segments(text: &str) -> Vec<TextSegment> {
+    // Fast path: avoid the regex scan entirely when no opening tag is present.
+    // Real-world tool outputs almost never contain a `<system-reminder>` block,
+    // so the literal-substring check skips the (much more expensive) regex
+    // walk for the common case.
+    if !text.contains("<system-reminder>") {
+        return vec![TextSegment::Compressible(text.to_string())];
+    }
+
     let mut segments = Vec::new();
     let mut last_end = 0usize;
     for m in SYSTEM_REMINDER_RE.find_iter(text) {
