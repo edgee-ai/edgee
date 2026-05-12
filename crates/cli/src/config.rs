@@ -1,4 +1,5 @@
 use anyhow::Result;
+use etcetera::AppStrategy as _;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -87,22 +88,31 @@ pub fn local_config_dir() -> Option<PathBuf> {
     local_credentials_path().and_then(|p| p.parent().map(Path::to_path_buf))
 }
 
-/// Global Edgee config directory (`~/.config/edgee`, or `%APPDATA%\edgee` on Windows).
+fn app_strategy() -> impl etcetera::AppStrategy {
+    etcetera::choose_app_strategy(etcetera::AppStrategyArgs {
+        top_level_domain: "ai".to_string(),
+        author: "edgee".to_string(),
+        app_name: "edgee".to_string(),
+    })
+    .expect("could not determine home directory")
+}
+
+/// Global Edgee config directory (platform-appropriate via etcetera).
+/// Linux/macOS: `~/.config/edgee`  |  Windows: `%APPDATA%\Roaming\edgee\edgee`
 pub fn global_config_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        let appdata = std::env::var("APPDATA")
-            .or_else(|_| std::env::var("USERPROFILE").map(|p| format!("{p}\\AppData\\Roaming")))
-            .expect("APPDATA or USERPROFILE not set");
-        PathBuf::from(appdata).join("edgee")
-    }
-    #[cfg(not(windows))]
-    {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .expect("HOME or USERPROFILE not set");
-        PathBuf::from(home).join(".config/edgee")
-    }
+    app_strategy().config_dir()
+}
+
+/// Global Edgee data directory (platform-appropriate via etcetera).
+/// Linux/macOS: `~/.local/share/edgee`  |  Windows: `%APPDATA%\Roaming\edgee\edgee`
+pub fn global_data_dir() -> PathBuf {
+    app_strategy().data_dir()
+}
+
+/// Path for the local gateway log file.
+/// Linux/macOS: `~/.local/share/edgee/local-gateway.log`
+pub fn local_gateway_log_path() -> PathBuf {
+    global_data_dir().join("local-gateway.log")
 }
 
 /// Global credentials file path (`~/.config/edgee/credentials.toml`, etc.).

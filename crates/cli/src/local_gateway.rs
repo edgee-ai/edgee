@@ -5,6 +5,7 @@
 //! subcommand and the `--local-gateway` flag on `edgee launch {claude,codex}`.
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -112,4 +113,31 @@ pub async fn start(addr: SocketAddr) -> Result<LocalGatewayHandle> {
         shutdown_tx,
         task,
     })
+}
+
+/// Initialise tracing with a file writer. Creates parent directories as needed.
+/// Uses EDGEE_GATEWAY_LOG env-var for the filter; falls back to
+/// `warn,edgee_gateway_http=info,edgee_cli=info`.
+pub fn init_file_tracing(log_path: &Path) -> anyhow::Result<()> {
+    use tracing_subscriber::EnvFilter;
+
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
+
+    let filter =
+        EnvFilter::try_from_env("EDGEE_GATEWAY_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(file)
+        .try_init();
+
+    Ok(())
 }

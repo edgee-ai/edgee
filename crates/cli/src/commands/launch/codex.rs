@@ -107,6 +107,10 @@ pub async fn run(opts: Options) -> Result<()> {
 async fn run_with_local_gateway(args: Vec<String>) -> Result<()> {
     use std::net::Ipv4Addr;
 
+    let log_path = crate::config::local_gateway_log_path();
+    crate::local_gateway::init_file_tracing(&log_path)?;
+    eprintln!("edgee: gateway logs -> {}", log_path.display());
+
     let gateway = crate::local_gateway::start((Ipv4Addr::LOCALHOST, 0).into()).await?;
     let addr = gateway.addr;
 
