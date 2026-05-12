@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+use super::util;
+
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
@@ -58,19 +60,19 @@ pub async fn run(opts: Options) -> Result<()> {
     // but users typically also use Claude Code in the same shell — running
     // the installer on the first `edgee launch` of any agent matches the
     // "set it up once" flow we want.
-    super::ensure_first_run_installed().await;
+    util::ensure_first_run_installed().await;
 
     if opts.local_gateway {
         return run_with_local_gateway(opts.args).await;
     }
 
-    super::spawn_cli_version_report(&creds, &session_id);
+    util::spawn_cli_version_report(&creds, &session_id);
 
     let repo_entry = crate::git::detect_origin()
         .map(|url| format!(",\"x-edgee-repo\"=\"{url}\""))
         .unwrap_or_default();
     let base_url = format!("{}/v1", crate::config::gateway_base_url());
-    let mut cmd = std::process::Command::new(super::resolve_binary("codex"));
+    let mut cmd = std::process::Command::new(util::resolve_binary("codex"));
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.args([
         "-c", "model_provider=\"edgee-cli\"",
@@ -109,7 +111,7 @@ async fn run_with_local_gateway(args: Vec<String>) -> Result<()> {
     let addr = gateway.addr;
 
     let base_url = format!("http://{addr}/v1");
-    let mut cmd = tokio::process::Command::new(super::resolve_binary("codex"));
+    let mut cmd = tokio::process::Command::new(util::resolve_binary("codex"));
     cmd.args([
         "-c",
         "model_provider=\"edgee-cli\"",
@@ -122,7 +124,7 @@ async fn run_with_local_gateway(args: Vec<String>) -> Result<()> {
     ]);
     cmd.args(&args);
 
-    super::run_with_gateway(
+    util::run_with_gateway(
         gateway,
         cmd,
         "Codex CLI is not installed. Install it from https://developers.openai.com/codex/cli",

@@ -2,6 +2,7 @@
 mod macros;
 
 pub mod claude_settings;
+pub(crate) mod util;
 
 setup_commands! {
     /// Install shell aliases for Edgee launch commands

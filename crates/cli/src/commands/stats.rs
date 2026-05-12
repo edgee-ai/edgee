@@ -1,22 +1,12 @@
 use anyhow::{Result, bail};
 use console::style;
 
+use super::util;
+
 setup_command! {
     /// Limit the number of sessions listed below the latest-session report
     #[arg(long)]
     pub limit: Option<usize>,
-}
-
-fn fmt_tokens(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out.chars().rev().collect()
 }
 
 fn fmt_compression_cell(before: u64, after: u64) -> (String, bool) {
@@ -31,11 +21,11 @@ fn fmt_compression_cell(before: u64, after: u64) -> (String, bool) {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    let logs = crate::commands::launch::read_all_session_logs()?;
+    let logs = util::read_all_session_logs()?;
     if logs.is_empty() {
         bail!(
             "No stored session stats found in {}",
-            crate::commands::launch::session_logs_dir().display()
+            util::session_logs_dir().display()
         );
     }
 
@@ -60,9 +50,9 @@ pub async fn run(opts: Options) -> Result<()> {
     println!(
         "  {}     {}    {}  {}    {}  {}",
         style("In").bold().underlined(),
-        style(fmt_tokens(total_input_tokens)).cyan(),
+        style(util::fmt_tokens(total_input_tokens)).cyan(),
         style("Out").bold().underlined(),
-        style(fmt_tokens(total_output_tokens)).cyan(),
+        style(util::fmt_tokens(total_output_tokens)).cyan(),
         style("Errors").bold().underlined(),
         if total_errors > 0 {
             style(total_errors.to_string()).red()
@@ -72,7 +62,7 @@ pub async fn run(opts: Options) -> Result<()> {
     );
 
     println!();
-    crate::commands::launch::render_session_stats(latest, Some("Latest session"));
+    util::render_session_stats(latest, Some("Latest session"));
 
     println!("  {}", style("All sessions").bold());
     println!();
@@ -92,13 +82,13 @@ pub async fn run(opts: Options) -> Result<()> {
         .max(3);
     let in_width = visible_logs
         .iter()
-        .map(|entry| fmt_tokens(entry.stats.total_input_tokens).len())
+        .map(|entry| util::fmt_tokens(entry.stats.total_input_tokens).len())
         .max()
         .unwrap_or(2)
         .max(2);
     let out_width = visible_logs
         .iter()
-        .map(|entry| fmt_tokens(entry.stats.total_output_tokens).len())
+        .map(|entry| util::fmt_tokens(entry.stats.total_output_tokens).len())
         .max()
         .unwrap_or(3)
         .max(3);
@@ -130,11 +120,11 @@ pub async fn run(opts: Options) -> Result<()> {
 
         println!(
             "  {}  {}  {}  {}  {}  {}  {}",
-            style(crate::commands::launch::fmt_timestamp(&entry.ended_at)).dim(),
+            style(util::fmt_timestamp(&entry.ended_at)).dim(),
             style(format!("{:<tool_width$}", entry.tool_name)).cyan(),
             style(format!("{:>req_width$}", stats.total_requests)).cyan(),
-            style(format!("{:>in_width$}", fmt_tokens(stats.total_input_tokens))).cyan(),
-            style(format!("{:>out_width$}", fmt_tokens(stats.total_output_tokens))).cyan(),
+            style(format!("{:>in_width$}", util::fmt_tokens(stats.total_input_tokens))).cyan(),
+            style(format!("{:>out_width$}", util::fmt_tokens(stats.total_output_tokens))).cyan(),
             if has_compression {
                 style(format!("{:<12}", compression)).green()
             } else {

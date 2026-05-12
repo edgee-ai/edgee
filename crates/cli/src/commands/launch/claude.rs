@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+use super::util;
+
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
@@ -64,15 +66,15 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // First-run: install the persistent user-level statusline integration
     // exactly once (honors the disable marker).
-    super::ensure_first_run_installed().await;
+    util::ensure_first_run_installed().await;
 
     if opts.local_gateway {
         return run_with_local_gateway(opts.args).await;
     }
 
-    super::spawn_cli_version_report(&creds, &session_id);
+    util::spawn_cli_version_report(&creds, &session_id);
 
-    let mut cmd = std::process::Command::new(super::resolve_binary("claude"));
+    let mut cmd = std::process::Command::new(util::resolve_binary("claude"));
     cmd.env("ANTHROPIC_BASE_URL", crate::config::gateway_base_url());
     cmd.env(
         "ANTHROPIC_CUSTOM_HEADERS",
@@ -128,11 +130,11 @@ async fn run_with_local_gateway(args: Vec<String>) -> Result<()> {
     let gateway = crate::local_gateway::start((Ipv4Addr::LOCALHOST, 0).into()).await?;
     let addr = gateway.addr;
 
-    let mut cmd = tokio::process::Command::new(super::resolve_binary("claude"));
+    let mut cmd = tokio::process::Command::new(util::resolve_binary("claude"));
     cmd.env("ANTHROPIC_BASE_URL", format!("http://{addr}"));
     cmd.args(&args);
 
-    super::run_with_gateway(
+    util::run_with_gateway(
         gateway,
         cmd,
         "Claude Code is not installed. Install it from https://code.claude.com/docs/en/quickstart",
