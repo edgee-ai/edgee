@@ -3,6 +3,11 @@ use anyhow::Result;
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
+    /// Route traffic through a local gateway instead of the hosted Edgee service.
+    /// Session tracking and MCP integration are disabled in this mode.
+    #[arg(long)]
+    pub local_gateway: bool,
+
     /// Extra args passed through to the claude CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
@@ -21,13 +26,23 @@ pub async fn run(opts: Options) -> Result<()> {
     creds = crate::config::read()?;
 
     // Step 2: ensure we have an api_key for Claude
-    if creds.claude.as_ref().map(|c| c.api_key.is_empty()).unwrap_or(true) {
+    if creds
+        .claude
+        .as_ref()
+        .map(|c| c.api_key.is_empty())
+        .unwrap_or(true)
+    {
         crate::commands::auth::login::ensure_provider_key("claude").await?;
         creds = crate::config::read()?;
     }
 
     // Step 3: ensure we have a connection choice (default to "plan")
-    if creds.claude.as_ref().and_then(|c| c.connection.as_deref()).is_none() {
+    if creds
+        .claude
+        .as_ref()
+        .and_then(|c| c.connection.as_deref())
+        .is_none()
+    {
         let provider = creds.claude.get_or_insert_with(Default::default);
         provider.connection = Some("plan".to_string());
         crate::config::write(&creds)?;
@@ -41,34 +56,45 @@ pub async fn run(opts: Options) -> Result<()> {
     let claude = creds.claude.as_ref().unwrap();
     let api_key = &claude.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
-    crate::commands::launch::spawn_cli_version_report(&creds, &session_id);
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
         .as_ref()
-        .map(|url| format!("\nx-edgee-repo: {}", url))
+        .map(|url| format!("\nx-edgee-repo: {url}"))
         .unwrap_or_default();
 
     // First-run: install the persistent user-level statusline integration
     // exactly once (honors the disable marker).
-    crate::commands::launch::ensure_first_run_installed().await;
+    super::ensure_first_run_installed().await;
 
-    let mut cmd = std::process::Command::new(crate::commands::launch::resolve_binary("claude"));
+    if opts.local_gateway {
+        return run_with_local_gateway(opts.args).await;
+    }
 
+    super::spawn_cli_version_report(&creds, &session_id);
+
+    let mut cmd = std::process::Command::new(super::resolve_binary("claude"));
     cmd.env("ANTHROPIC_BASE_URL", crate::config::gateway_base_url());
     cmd.env(
         "ANTHROPIC_CUSTOM_HEADERS",
-        format!("x-edgee-api-key: {}\nx-edgee-session-id: {}{}", api_key, session_id, repo_header),
+        format!("x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}"),
     );
     cmd.env("EDGEE_SESSION_ID", &session_id);
-    cmd.env("EDGEE_CONSOLE_API_URL", crate::config::console_api_base_url());
+    cmd.env(
+        "EDGEE_CONSOLE_API_URL",
+        crate::config::console_api_base_url(),
+    );
 
     // Step 5: conditionally set up MCP integration
     let use_mcp = creds.enable_mcp.unwrap_or(false);
     if use_mcp {
         let mcp_config_path = write_mcp_config(&creds)?;
         cmd.arg("--mcp-config").arg(&mcp_config_path);
-        let session_url = format!("{}/session/{}", crate::config::console_base_url(), session_id);
-        cmd.arg("--append-system-prompt").arg(system_prompt(&session_id, repo_origin.as_deref(), &session_url));
+        let session_url = format!("{}/session/{session_id}", crate::config::console_base_url());
+        cmd.arg("--append-system-prompt").arg(system_prompt(
+            &session_id,
+            repo_origin.as_deref(),
+            &session_url,
+        ));
         cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitHubRepo");
     }
 
@@ -84,13 +110,34 @@ pub async fn run(opts: Options) -> Result<()> {
         }
     })?;
 
-    crate::commands::launch::print_session_stats(&creds, &session_id, "Claude").await;
+    super::print_session_stats(&creds, &session_id, "Claude").await;
 
     if let Some(code) = status.code() {
         std::process::exit(code);
     }
 
     Ok(())
+}
+
+/// Launch Claude Code routed through a local gateway. Session tracking,
+/// MCP integration, and version reporting are all skipped — the backend never
+/// sees this traffic.
+async fn run_with_local_gateway(args: Vec<String>) -> Result<()> {
+    use std::net::Ipv4Addr;
+
+    let gateway = crate::local_gateway::start((Ipv4Addr::LOCALHOST, 0).into()).await?;
+    let addr = gateway.addr;
+
+    let mut cmd = tokio::process::Command::new(super::resolve_binary("claude"));
+    cmd.env("ANTHROPIC_BASE_URL", format!("http://{addr}"));
+    cmd.args(&args);
+
+    super::run_with_gateway(
+        gateway,
+        cmd,
+        "Claude Code is not installed. Install it from https://code.claude.com/docs/en/quickstart",
+    )
+    .await
 }
 
 /// Writes an MCP config file to the Edgee config directory with the user's auth token.
@@ -103,7 +150,7 @@ fn write_mcp_config(creds: &crate::config::Credentials) -> Result<std::path::Pat
                 "type": "http",
                 "url": crate::config::mcp_base_url(),
                 "headers": {
-                    "Authorization": format!("Bearer {}", token)
+                    "Authorization": format!("Bearer {token}")
                 }
             }
         }

@@ -7,8 +7,8 @@ use console::style;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 /// Resolve a CLI tool binary, using the `which` crate on Windows
 /// with an npm global prefix fallback.
@@ -124,7 +124,7 @@ fn pad_right(s: &str, width: usize) -> String {
     format!("{s:<width$}")
 }
 
-pub fn fmt_bar(pct: u64, width: usize) -> String {
+fn fmt_bar(pct: u64, width: usize) -> String {
     let filled = (pct as usize * width / 100).min(width);
     let empty = width - filled;
     format!(
@@ -142,7 +142,7 @@ fn session_log_path(session_id: &str) -> PathBuf {
     session_logs_dir().join(format!("{session_id}.json"))
 }
 
-pub fn logs_url_for_session(creds: &crate::config::Credentials, session_id: &str) -> String {
+fn logs_url_for_session(creds: &crate::config::Credentials, session_id: &str) -> String {
     match creds.org_slug.as_deref() {
         Some(slug) if !slug.is_empty() => format!(
             "{}/~/{}/sessions/{}",
@@ -344,7 +344,7 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
     println!();
 }
 
-pub async fn print_session_stats(
+async fn print_session_stats(
     creds: &crate::config::Credentials,
     session_id: &str,
     tool_name: &str,
@@ -418,7 +418,7 @@ async fn fetch_stats(
 /// - If the installed marker exists, do nothing (already ran once).
 /// - Otherwise run the installer and create the installed marker.
 /// - Any error is logged and swallowed; never blocks the launch.
-pub async fn ensure_first_run_installed() {
+async fn ensure_first_run_installed() {
     use crate::commands::statusline::claude::{install, toggle};
 
     if toggle::is_disabled() {
@@ -451,12 +451,53 @@ pub async fn ensure_first_run_installed() {
     let _ = fs::write(&marker, b"");
 }
 
+/// Run an agent command routed through a local gateway, racing the child
+/// process against the gateway task. If the gateway crashes before the agent
+/// exits, the child is killed and an error is printed to stderr.
+async fn run_with_gateway(
+    gateway: crate::local_gateway::LocalGatewayHandle,
+    mut cmd: tokio::process::Command,
+    not_found_msg: &'static str,
+) -> anyhow::Result<()> {
+    let mut gw_task = gateway.task;
+    let gw_shutdown = gateway.shutdown_tx;
+
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!("{not_found_msg}")
+        } else {
+            anyhow::anyhow!(e)
+        }
+    })?;
+
+    let status = tokio::select! {
+        result = child.wait() => {
+            let _ = gw_shutdown.send(());
+            result?
+        }
+        result = &mut gw_task => {
+            let _ = child.kill().await;
+            match result {
+                Ok(Ok(())) => eprintln!("error: local gateway stopped unexpectedly"),
+                Ok(Err(e)) => eprintln!("error: local gateway crashed: {e:#}"),
+                Err(e) => eprintln!("error: local gateway task panicked: {e}"),
+            }
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(code) = status.code() {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
 /// Fire-and-forget: record the running CLI version on the session metadata.
 ///
 /// No-op when the active profile has no user token or no selected org. All
 /// errors are swallowed — this is best-effort telemetry and must never block
 /// the launch flow or surface output to the user.
-pub fn spawn_cli_version_report(creds: &crate::config::Credentials, session_id: &str) {
+fn spawn_cli_version_report(creds: &crate::config::Credentials, session_id: &str) {
     let token = creds
         .user_token
         .as_deref()
