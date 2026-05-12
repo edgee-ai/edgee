@@ -10,7 +10,7 @@ use crate::{
 ///
 /// Implementations translate from the canonical [`CompletionRequest`] (OpenAI
 /// Chat Completions format) into the provider's native API format, make the
-/// HTTP call via the injected [`crate::http_client::HttpClient`], and parse
+/// HTTP call via the injected [`crate::HttpClient`], and parse
 /// the response back into the canonical types.
 ///
 /// # Dyn compatibility

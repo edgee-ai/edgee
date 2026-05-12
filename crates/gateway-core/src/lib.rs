@@ -53,7 +53,7 @@ pub mod types;
 pub use backend::http::HttpClient;
 #[cfg(feature = "tokio")]
 pub use backend::http::ReqwestHttpClient;
-pub use config::ProviderConfig;
+pub use config::{AnthropicPassthroughConfig, OpenAIPassthroughConfig, ProviderConfig};
 pub use error::{Error, Result};
 pub use provider::Provider;
 pub use service::ProviderDispatchService;

@@ -5,6 +5,7 @@ mod api;
 mod commands;
 mod config;
 mod git;
+mod local_gateway;
 
 #[derive(Debug, Parser)]
 #[command(name = "edgee", about = "Edgee CLI", version)]

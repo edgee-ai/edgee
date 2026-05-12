@@ -1,11 +1,14 @@
+mod dispatch;
+pub(crate) mod passthrough;
+
 use std::collections::HashMap;
 
-use edgee_ai_gateway_core::{
+use edgee_gateway_core::{
     CompletionRequest,
     types::{Message, MessageContent},
 };
 
-use crate::config::{AgentType, CompressionConfig};
+use crate::config::CompressionConfig;
 
 /// Walk `req.messages`, compressing tool-result content in-place.
 ///
@@ -33,6 +36,11 @@ pub fn compress_request(
     }
 
     // Sweep 2 — compress ToolMessage content
+    let mut tools_checked: u32 = 0;
+    let mut tools_compressed: u32 = 0;
+    let mut bytes_before: usize = 0;
+    let mut bytes_after: usize = 0;
+
     for msg in &mut req.messages {
         if let Message::Tool(tool_msg) = msg {
             let Some((name, arguments)) = call_index.get(&tool_msg.tool_call_id) else {
@@ -41,32 +49,29 @@ pub fn compress_request(
 
             let text = tool_msg.content.as_text();
 
-            // Each agent type has different tool-name conventions and output
-            // formats. Codex outputs include a header ("Exit code: …\nOutput:\n")
-            // that must be stripped before compression, so it uses a dedicated
-            // pipeline that handles header stripping + segment protection.
-            let compressed = match config.agent {
-                AgentType::Codex => {
-                    edgee_compressor::compress_codex_tool_output(name, arguments, &text)
-                }
-                AgentType::Claude => edgee_compressor::claude_compressor_for(name).and_then(|c| {
-                    edgee_compressor::compress_claude_tool_with_segment_protection(
-                        c, arguments, &text,
-                    )
-                }),
-                AgentType::OpenCode => {
-                    edgee_compressor::opencode_compressor_for(name).and_then(|c| {
-                        edgee_compressor::compress_claude_tool_with_segment_protection(
-                            c, arguments, &text,
-                        )
-                    })
-                }
-            };
+            tools_checked += 1;
+            bytes_before += text.len();
+
+            let compressed = dispatch::compress_with_agent(config, name, arguments, &text);
 
             if let Some(compressed) = compressed {
+                bytes_after += compressed.len();
+                tools_compressed += 1;
                 tool_msg.content = MessageContent::Text(compressed);
+            } else {
+                bytes_after += text.len();
             }
         }
+    }
+
+    if tools_checked > 0 {
+        tracing::debug!(
+            tools_checked,
+            tools_compressed,
+            bytes_before,
+            bytes_after,
+            "compression complete",
+        );
     }
 
     req
@@ -74,7 +79,7 @@ pub fn compress_request(
 
 #[cfg(test)]
 mod tests {
-    use edgee_ai_gateway_core::{
+    use edgee_gateway_core::{
         CompletionRequest,
         types::{
             AssistantMessage, FunctionCall, Message, MessageContent, ToolCall, ToolMessage,
