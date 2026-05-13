@@ -17,14 +17,27 @@ pub use heuristic::HeuristicToolSetCompressor;
 ///
 /// The borrows are short-lived: the caller (compression-layer) builds this
 /// from the in-flight `CompletionRequest` and discards it after a single call.
+///
+/// Two text inputs separate **stable** scoring (cache-safe) from **pivot
+/// detection** (rare reset that buys back a missing MCP):
+///
+/// - `stable_text` — system prompts concatenated with the **first** user
+///   message. Byte-identical on every turn of the same conversation, so a
+///   kept-set derived from it produces a byte-identical `tools` array and
+///   keeps Anthropic's prompt cache warm.
+/// - `pivot_signal_text` — the **latest** user message (when distinct from
+///   the first). Only used to decide whether to restore a tool that the
+///   stable signal had pruned. On turn 1, this equals `stable_text` so it
+///   adds nothing; on later turns it may trigger a one-time cache reset to
+///   serve a freshly mentioned MCP.
 pub struct PruneContext<'a> {
     /// All tool definitions on the request (in original order).
     pub tools: &'a [ToolView<'a>],
-    /// Latest user-message text, if any.
-    pub latest_user_text: Option<&'a str>,
-    /// Names of every tool the assistant has already invoked in this conversation.
-    /// Tools whose name is in this set are kept (sticky).
-    pub prior_tool_call_names: &'a [&'a str],
+    /// Cache-safe scoring signal: system prompts + first user message.
+    pub stable_text: &'a str,
+    /// Latest user-message text, used for restore-on-pivot. May equal
+    /// `stable_text` on the first turn (in which case it has no effect).
+    pub pivot_signal_text: Option<&'a str>,
     /// The list of "core" tool names that must always be kept regardless of score.
     pub core_tools: &'a [&'a str],
 }

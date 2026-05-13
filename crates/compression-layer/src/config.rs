@@ -83,7 +83,7 @@ impl Default for ToolPruningConfig {
         Self {
             enabled: true,
             threshold_bytes: 4096,
-            min_kept: 3,
+            min_kept: 5,
             min_score: 1,
         }
     }
