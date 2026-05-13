@@ -9,7 +9,7 @@ use edgee_compressor::{HeuristicToolSetCompressor, PruneContext, ToolSetCompress
 use crate::config::{AgentType, CompressionConfig};
 
 /// Walk `req.messages`, compressing tool-result content in-place, then
-/// optionally prune the `tools` array down to a relevant subset.
+/// optionally prune the `tools` array down to a cache-stable subset.
 ///
 /// Two sweeps over messages:
 ///   1. Build `tool_call_id → (name, arguments)` from every AssistantMessage.
@@ -18,8 +18,12 @@ use crate::config::{AgentType, CompressionConfig};
 ///
 /// Then, if `config.tool_pruning.enabled` and the request's tool definitions
 /// exceed the configured threshold, drop MCP tools unlikely to be needed for
-/// the current turn. Core (agent-builtin) and previously invoked tools are
-/// always retained.
+/// the current turn. The scoring signal is the **stable** portion of the
+/// request (system prompts + first user message) so the pruned `tools`
+/// array is byte-identical across every turn of the same conversation,
+/// keeping the upstream prompt cache warm. The latest user message is fed
+/// in as a **pivot signal** that can restore a previously-pruned MCP — a
+/// one-time cache reset in exchange for serving the freshly mentioned tool.
 pub fn compress_request(
     config: &CompressionConfig,
     mut req: CompletionRequest,
@@ -78,17 +82,13 @@ pub fn compress_request(
 
     // Sweep 3 — prune the request's tool definitions if oversized.
     if config.tool_pruning.enabled {
-        prune_tool_definitions(config, &mut req, &call_index);
+        prune_tool_definitions(config, &mut req);
     }
 
     req
 }
 
-fn prune_tool_definitions(
-    config: &CompressionConfig,
-    req: &mut CompletionRequest,
-    call_index: &HashMap<String, (String, String)>,
-) {
+fn prune_tool_definitions(config: &CompressionConfig, req: &mut CompletionRequest) {
     if req.tools.is_empty() {
         return;
     }
@@ -130,21 +130,47 @@ fn prune_tool_definitions(
         })
         .collect();
 
-    // Latest user message text (most recent UserMessage).
+    // Stable signal — concatenation of every System message content with the
+    // text of the **first** UserMessage. Both are byte-identical on every
+    // turn of the same conversation, so the kept-set is identical too.
+    let mut stable_parts: Vec<String> = Vec::new();
+    for msg in &req.messages {
+        match msg {
+            Message::System(s) => stable_parts.push(s.content.as_text()),
+            Message::Developer(d) => stable_parts.push(d.content.as_text()),
+            _ => {}
+        }
+    }
+    if let Some(first_user) = req.messages.iter().find_map(|m| match m {
+        Message::User(u) => Some(u.content.as_text()),
+        _ => None,
+    }) {
+        stable_parts.push(first_user);
+    }
+    let stable_text = stable_parts.join("\n");
+
+    // Pivot signal — the latest UserMessage, only if distinct from the first.
+    // Used by the heuristic to restore a previously-pruned MCP when the user
+    // explicitly pivots to it.
+    let first_user_text = req.messages.iter().find_map(|m| match m {
+        Message::User(u) => Some(u.content.as_text()),
+        _ => None,
+    });
     let latest_user_text = req.messages.iter().rev().find_map(|m| match m {
         Message::User(u) => Some(u.content.as_text()),
         _ => None,
     });
-
-    // Tools the assistant has already invoked in this conversation.
-    let prior_names: Vec<&str> = call_index.values().map(|(n, _)| n.as_str()).collect();
+    let pivot_signal: Option<String> = match (first_user_text, latest_user_text) {
+        (Some(first), Some(latest)) if first != latest => Some(latest),
+        _ => None,
+    };
 
     let core_tools = config.agent.core_tools();
 
     let ctx = PruneContext {
         tools: &views,
-        latest_user_text: latest_user_text.as_deref(),
-        prior_tool_call_names: &prior_names,
+        stable_text: &stable_text,
+        pivot_signal_text: pivot_signal.as_deref(),
         core_tools,
     };
 
@@ -441,44 +467,190 @@ mod tests {
     }
 
     #[test]
-    fn sticky_rule_keeps_previously_invoked_mcp() {
+    fn pivot_restores_previously_pruned_mcp() {
+        // Turn 1's user message mentions only Linear → GitHub is pruned.
+        // Turn 4's user message mentions GitHub → restored on that turn.
         let req = CompletionRequest {
             model: "claude-3-5-sonnet".into(),
             messages: vec![
                 Message::User(UserMessage {
                     name: None,
-                    content: MessageContent::Text("write the report".into()),
+                    content: MessageContent::Text("find the linear ticket about payments".into()),
                     cache_control: None,
                 }),
                 Message::Assistant(AssistantMessage {
                     name: None,
-                    content: None,
+                    content: Some(MessageContent::Text("done".into())),
                     refusal: None,
                     cache_control: None,
-                    tool_calls: Some(vec![ToolCall {
-                        id: "call_prev".into(),
-                        tool_type: "function".into(),
-                        function: FunctionCall {
-                            name: "mcp__notion__search".into(),
-                            arguments: "{}".into(),
-                        },
-                    }]),
-                }),
-                Message::Tool(ToolMessage {
-                    tool_call_id: "call_prev".into(),
-                    content: MessageContent::Text("ok".into()),
+                    tool_calls: None,
                 }),
                 Message::User(UserMessage {
                     name: None,
-                    content: MessageContent::Text("now write it up".into()),
+                    content: MessageContent::Text("now check github for related prs".into()),
                     cache_control: None,
                 }),
             ],
             max_tokens: None,
             stream: false,
             tools: vec![
+                mcp_tool("mcp__linear-server__list_issues", "List Linear issues"),
+                mcp_tool("mcp__github__create_pr", "Open a pull request"),
                 mcp_tool("mcp__notion__search", "Search Notion pages"),
-                mcp_tool("mcp__github__create_pr", "Open a PR"),
+            ],
+            tool_choice: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let config = CompressionConfig {
+            agent: AgentType::Claude,
+            tool_pruning: ToolPruningConfig {
+                enabled: true,
+                threshold_bytes: 0,
+                min_kept: 0,
+                min_score: 1,
+            },
+        };
+        let result = compress_request(&config, req);
+        let names: Vec<&str> = result
+            .tools
+            .iter()
+            .filter_map(|t| match t {
+                Tool::Function { function } => Some(function.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            names.contains(&"mcp__linear-server__list_issues"),
+            "stable-kept Linear: {names:?}"
+        );
+        assert!(
+            names.contains(&"mcp__github__create_pr"),
+            "pivot should restore GitHub: {names:?}"
+        );
+        assert!(
+            !names.contains(&"mcp__notion__search"),
+            "unrelated Notion still pruned: {names:?}"
+        );
+    }
+
+    #[test]
+    fn tools_array_is_byte_identical_across_turns() {
+        // Cache-safety property: the serialized `tools` field of two
+        // requests sharing the same system prompt + first user message
+        // (but with different later messages and different latest user
+        // messages that don't mention a pruned tool) must be identical.
+        fn build_req(extra_user_msgs: Vec<&str>) -> CompletionRequest {
+            let mut messages = vec![Message::User(UserMessage {
+                name: None,
+                content: MessageContent::Text(
+                    "list the linear issues for the payments project".into(),
+                ),
+                cache_control: None,
+            })];
+            for m in extra_user_msgs {
+                messages.push(Message::Assistant(AssistantMessage {
+                    name: None,
+                    content: Some(MessageContent::Text("ok".into())),
+                    refusal: None,
+                    cache_control: None,
+                    tool_calls: None,
+                }));
+                messages.push(Message::User(UserMessage {
+                    name: None,
+                    content: MessageContent::Text(m.into()),
+                    cache_control: None,
+                }));
+            }
+            CompletionRequest {
+                model: "claude-3-5-sonnet".into(),
+                messages,
+                max_tokens: None,
+                stream: false,
+                tools: vec![
+                    core_tool("Bash"),
+                    mcp_tool("mcp__linear-server__list_issues", "List Linear issues"),
+                    mcp_tool("mcp__github__create_pr", "Open a pull request"),
+                    mcp_tool("mcp__notion__search", "Search Notion pages"),
+                ],
+                tool_choice: None,
+                temperature: None,
+                top_p: None,
+            }
+        }
+
+        let config = CompressionConfig {
+            agent: AgentType::Claude,
+            tool_pruning: ToolPruningConfig {
+                enabled: true,
+                threshold_bytes: 0,
+                min_kept: 0,
+                min_score: 1,
+            },
+        };
+
+        let turn1 = compress_request(&config, build_req(vec![]));
+        let turn5 = compress_request(
+            &config,
+            build_req(vec!["and the next one", "and the one after that"]),
+        );
+        let turn20 = compress_request(&config, build_req(vec!["summarize so far", "tell me more"]));
+
+        let names = |r: &CompletionRequest| {
+            r.tools
+                .iter()
+                .filter_map(|t| match t {
+                    Tool::Function { function } => Some(function.name.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(names(&turn1), names(&turn5), "turn1 == turn5");
+        assert_eq!(names(&turn5), names(&turn20), "turn5 == turn20");
+
+        // And the actual JSON bytes of the tools array — the property the
+        // upstream prompt cache actually checks.
+        let bytes = |r: &CompletionRequest| serde_json::to_vec(&r.tools).unwrap();
+        assert_eq!(bytes(&turn1), bytes(&turn5));
+        assert_eq!(bytes(&turn5), bytes(&turn20));
+    }
+
+    #[test]
+    fn edgee_mcp_tools_never_pruned() {
+        // Even when the user's stable text shares nothing with edgee's
+        // session-instrumentation tools, they must survive — they're
+        // gateway-internal and required on every request.
+        let req = CompletionRequest {
+            model: "claude-opus-4-7".into(),
+            messages: vec![Message::User(UserMessage {
+                name: None,
+                content: MessageContent::Text("write a poem about cats".into()),
+                cache_control: None,
+            })],
+            max_tokens: None,
+            stream: false,
+            tools: vec![
+                core_tool("Bash"),
+                mcp_tool(
+                    "mcp__edgee__setSessionName",
+                    "Set a human-readable display name for an AI Gateway session",
+                ),
+                mcp_tool(
+                    "mcp__edgee__addSessionPullRequest",
+                    "Associate a pull request with an AI Gateway session",
+                ),
+                mcp_tool(
+                    "mcp__edgee__setSessionGitHubRepo",
+                    "Set the GitHub repository associated with an AI Gateway session",
+                ),
+                mcp_tool(
+                    "mcp__edgee__addSessionCommit",
+                    "Associate a commit with an AI Gateway session",
+                ),
+                mcp_tool("mcp__github__create_pr", "Open a pull request"),
             ],
             tool_choice: None,
             temperature: None,
@@ -504,9 +676,91 @@ mod tests {
             })
             .collect();
 
+        for edgee in [
+            "mcp__edgee__setSessionName",
+            "mcp__edgee__addSessionPullRequest",
+            "mcp__edgee__setSessionGitHubRepo",
+            "mcp__edgee__addSessionCommit",
+        ] {
+            assert!(
+                names.contains(&edgee),
+                "{edgee} must be kept regardless of score; got {names:?}"
+            );
+        }
         assert!(
-            names.contains(&"mcp__notion__search"),
-            "sticky-kept: {names:?}"
+            !names.contains(&"mcp__github__create_pr"),
+            "unrelated MCP still pruned: {names:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_claude_code_injected_blocks_in_first_user_message() {
+        // Faithful to the real Claude Code request shape: first user message is
+        // a multi-part content with a stack of <system-reminder> blocks
+        // mentioning every connected MCP server in skill descriptions, plus a
+        // tiny actual user input at the end. Without scrubbing, the lexical
+        // scorer matches every MCP and keeps 100% of them.
+        let injected = "<system-reminder>\n# MCP Server Instructions\n\nThe following MCP servers have provided instructions:\n## linear-server\nWhen passing strings, send content directly.\n</system-reminder>\n\n<system-reminder>\nThe following skills are available:\n- figma:figma-implement-design: translates Figma designs into code\n- figma:figma-use: prerequisite for use_figma tool calls\n- frontend-design: build web components\n- mobile-ios-design: SwiftUI patterns for iOS\n- content-creator: SEO content for blog posts and social media\n</system-reminder>\n\n<local-command-caveat>caveat text</local-command-caveat>\n\n<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>\n<local-command-stdout></local-command-stdout>\n\nCan you tell me more about this ?";
+
+        let req = CompletionRequest {
+            model: "claude-opus-4-7".into(),
+            messages: vec![Message::User(UserMessage {
+                name: None,
+                content: MessageContent::Text(injected.into()),
+                cache_control: None,
+            })],
+            max_tokens: None,
+            stream: false,
+            tools: vec![
+                core_tool("Bash"),
+                mcp_tool("mcp__linear-server__list_issues", "List Linear issues"),
+                mcp_tool("mcp__plugin_figma_figma__authenticate", "Figma auth"),
+                mcp_tool("mcp__claude_ai_Gmail__authenticate", "Gmail auth"),
+                mcp_tool(
+                    "mcp__claude_ai_Google_Calendar__authenticate",
+                    "Calendar auth",
+                ),
+                mcp_tool("mcp__claude_ai_Google_Drive__authenticate", "Drive auth"),
+            ],
+            tool_choice: None,
+            temperature: None,
+            top_p: None,
+        };
+        let original_mcp_count = req
+            .tools
+            .iter()
+            .filter(|t| match t {
+                Tool::Function { function } => function.name.starts_with("mcp__"),
+                _ => false,
+            })
+            .count();
+
+        let config = CompressionConfig {
+            agent: AgentType::Claude,
+            tool_pruning: ToolPruningConfig {
+                enabled: true,
+                threshold_bytes: 0,
+                min_kept: 0,
+                min_score: 1,
+            },
+        };
+        let result = compress_request(&config, req);
+        let kept_mcps: Vec<&str> = result
+            .tools
+            .iter()
+            .filter_map(|t| match t {
+                Tool::Function { function } if function.name.starts_with("mcp__") => {
+                    Some(function.name.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            kept_mcps.len() < original_mcp_count,
+            "expected some MCPs pruned despite skill-list pollution; got all {} kept: {:?}",
+            kept_mcps.len(),
+            kept_mcps
         );
     }
 }

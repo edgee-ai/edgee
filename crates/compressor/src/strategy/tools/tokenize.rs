@@ -1,8 +1,12 @@
 //! Lightweight tokenization helpers for tool-set pruning.
 //!
-//! Pure character-based; no regex compilation on the hot path.
+//! Pure character-based; no regex compilation on the hot path apart from the
+//! single combined pattern used by [`strip_injected_tags`].
 
 use std::collections::HashSet;
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 const STOPWORDS: &[&str] = &[
     "a", "an", "the", "and", "or", "but", "of", "in", "on", "at", "to", "from", "for", "by",
@@ -97,6 +101,44 @@ pub fn is_mcp_tool_name(name: &str) -> bool {
     mcp_server_segment(name).is_some()
 }
 
+/// MCP servers whose tools must never be pruned by the tool-set compressor.
+///
+/// The gateway's own `edgee` MCP server (session naming, PR/commit linking,
+/// repo association) is injected by the CLI into every request. Dropping any
+/// of its tools silently breaks session instrumentation the system prompt
+/// requires the agent to call, so we keep the entire server unconditionally.
+pub fn is_protected_mcp_server(server: &str) -> bool {
+    server == "edgee"
+}
+
+/// Remove Claude-Code-injected tag blocks from a user-message string so the
+/// pruning heuristic only scores against actual user-typed content.
+///
+/// Claude Code wraps the first user message of every conversation with a stack
+/// of `<system-reminder>` blocks (skill list, project CLAUDE.md, memory pointers,
+/// MCP-server instructions) and `<local-command-*>` / `<command-*>` blocks for
+/// slash-command invocations. These blocks are stable across turns *and*
+/// mention every MCP server by name in their descriptions, so when scored
+/// lexically every MCP looks "relevant" — leaving the pruner with nothing to
+/// drop. Stripping them isolates the user's actual intent.
+pub fn strip_injected_tags(text: &str) -> String {
+    let stripped = INJECTED_TAG_RE.replace_all(text, "");
+    stripped.trim().to_string()
+}
+
+static INJECTED_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?s)",
+        r"<system-reminder\b[^>]*>.*?</system-reminder>",
+        r"|<local-command-[\w-]+\b[^>]*>.*?</local-command-[\w-]+>",
+        r"|<command-name\b[^>]*>.*?</command-name>",
+        r"|<command-message\b[^>]*>.*?</command-message>",
+        r"|<command-args\b[^>]*>.*?</command-args>",
+        r"|<user-prompt-[\w-]+\b[^>]*>.*?</user-prompt-[\w-]+>",
+    ))
+    .expect("valid injected-tag regex")
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +187,30 @@ mod tests {
         assert!(is_mcp_tool_name("mcp__notion__search"));
         assert!(!is_mcp_tool_name("Read"));
         assert!(!is_mcp_tool_name("read_file"));
+    }
+
+    #[test]
+    fn strip_removes_system_reminders() {
+        let polluted = "<system-reminder>\n# MCP Server Instructions\nlinear-server figma notion\n</system-reminder>\n\nfind the bug";
+        assert_eq!(strip_injected_tags(polluted), "find the bug");
+    }
+
+    #[test]
+    fn strip_removes_multiple_and_nested_block_types() {
+        let polluted = "<system-reminder>skills: figma, linear, notion</system-reminder>\n<local-command-caveat>caveat text</local-command-caveat>\n<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>\n<local-command-stdout></local-command-stdout>\nWhat is this?";
+        assert_eq!(strip_injected_tags(polluted), "What is this?");
+    }
+
+    #[test]
+    fn strip_leaves_plain_text_untouched() {
+        let plain = "now check github for related PRs";
+        assert_eq!(strip_injected_tags(plain), plain);
+    }
+
+    #[test]
+    fn strip_handles_empty_user_content() {
+        // If everything was injected, the result is empty.
+        let only_tags = "<system-reminder>foo</system-reminder>";
+        assert_eq!(strip_injected_tags(only_tags), "");
     }
 }
