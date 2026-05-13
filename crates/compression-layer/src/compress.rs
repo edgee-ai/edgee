@@ -2,17 +2,24 @@ use std::collections::HashMap;
 
 use edgee_ai_gateway_core::{
     CompletionRequest,
-    types::{Message, MessageContent},
+    types::{Message, MessageContent, Tool},
 };
+use edgee_compressor::{HeuristicToolSetCompressor, PruneContext, ToolSetCompressor, ToolView};
 
 use crate::config::{AgentType, CompressionConfig};
 
-/// Walk `req.messages`, compressing tool-result content in-place.
+/// Walk `req.messages`, compressing tool-result content in-place, then
+/// optionally prune the `tools` array down to a relevant subset.
 ///
-/// Two sweeps:
+/// Two sweeps over messages:
 ///   1. Build `tool_call_id → (name, arguments)` from every AssistantMessage.
 ///   2. For each ToolMessage, look up the tool name + arguments, compress the
 ///      content, and replace it if the compressor produced a shorter result.
+///
+/// Then, if `config.tool_pruning.enabled` and the request's tool definitions
+/// exceed the configured threshold, drop MCP tools unlikely to be needed for
+/// the current turn. Core (agent-builtin) and previously invoked tools are
+/// always retained.
 pub fn compress_request(
     config: &CompressionConfig,
     mut req: CompletionRequest,
@@ -69,7 +76,108 @@ pub fn compress_request(
         }
     }
 
+    // Sweep 3 — prune the request's tool definitions if oversized.
+    if config.tool_pruning.enabled {
+        prune_tool_definitions(config, &mut req, &call_index);
+    }
+
     req
+}
+
+fn prune_tool_definitions(
+    config: &CompressionConfig,
+    req: &mut CompletionRequest,
+    call_index: &HashMap<String, (String, String)>,
+) {
+    if req.tools.is_empty() {
+        return;
+    }
+
+    // Pre-compute serialized sizes once.
+    let sizes: Vec<usize> = req
+        .tools
+        .iter()
+        .map(|t| serde_json::to_string(t).map(|s| s.len()).unwrap_or(0))
+        .collect();
+    let total_size: usize = sizes.iter().sum();
+
+    if total_size < config.tool_pruning.threshold_bytes {
+        return;
+    }
+
+    let names: Vec<Option<&str>> = req
+        .tools
+        .iter()
+        .map(|t| match t {
+            Tool::Function { function } => Some(function.name.as_str()),
+            Tool::Unknown(_) => None,
+        })
+        .collect();
+    let descriptions: Vec<Option<&str>> = req
+        .tools
+        .iter()
+        .map(|t| match t {
+            Tool::Function { function } => function.description.as_deref(),
+            Tool::Unknown(_) => None,
+        })
+        .collect();
+
+    let views: Vec<ToolView<'_>> = (0..req.tools.len())
+        .map(|i| ToolView {
+            name: names[i],
+            description: descriptions[i],
+            size_bytes: sizes[i],
+        })
+        .collect();
+
+    // Latest user message text (most recent UserMessage).
+    let latest_user_text = req.messages.iter().rev().find_map(|m| match m {
+        Message::User(u) => Some(u.content.as_text()),
+        _ => None,
+    });
+
+    // Tools the assistant has already invoked in this conversation.
+    let prior_names: Vec<&str> = call_index.values().map(|(n, _)| n.as_str()).collect();
+
+    let core_tools = config.agent.core_tools();
+
+    let ctx = PruneContext {
+        tools: &views,
+        latest_user_text: latest_user_text.as_deref(),
+        prior_tool_call_names: &prior_names,
+        core_tools,
+    };
+
+    let compressor = HeuristicToolSetCompressor {
+        min_score: config.tool_pruning.min_score,
+        min_kept: config.tool_pruning.min_kept,
+    };
+    let decision = compressor.prune(&ctx);
+
+    if decision.dropped == 0 {
+        return;
+    }
+
+    let before_tools = views.len();
+    drop(views);
+
+    let keep: std::collections::HashSet<usize> = decision.keep_indices.iter().copied().collect();
+    let mut idx = 0usize;
+    req.tools.retain(|_| {
+        let keep_it = keep.contains(&idx);
+        idx += 1;
+        keep_it
+    });
+
+    tracing::info!(
+        target: "edgee::compression::tool_pruning",
+        before_tools,
+        after_tools = req.tools.len(),
+        dropped = decision.dropped,
+        bytes_before = decision.bytes_before,
+        bytes_after = decision.bytes_after,
+        "pruned MCP tool definitions"
+    );
 }
 
 #[cfg(test)]
@@ -77,12 +185,12 @@ mod tests {
     use edgee_ai_gateway_core::{
         CompletionRequest,
         types::{
-            AssistantMessage, FunctionCall, Message, MessageContent, ToolCall, ToolMessage,
-            UserMessage,
+            AssistantMessage, FunctionCall, FunctionDefinition, Message, MessageContent, Tool,
+            ToolCall, ToolMessage, UserMessage,
         },
     };
 
-    use crate::config::{AgentType, CompressionConfig};
+    use crate::config::{AgentType, CompressionConfig, ToolPruningConfig};
 
     use super::compress_request;
 
@@ -132,6 +240,7 @@ mod tests {
 
         let config = CompressionConfig {
             agent: AgentType::Claude,
+            tool_pruning: ToolPruningConfig::default(),
         };
         let compressed = compress_request(&config, req);
 
@@ -162,6 +271,7 @@ mod tests {
 
         let config = CompressionConfig {
             agent: AgentType::Claude,
+            tool_pruning: ToolPruningConfig::default(),
         };
         let result = compress_request(&config, req);
 
@@ -174,5 +284,229 @@ mod tests {
             }
         });
         assert_eq!(tool_msg.unwrap().content.as_text(), "some output");
+    }
+
+    fn mcp_tool(name: &str, description: &str) -> Tool {
+        // Pad the parameters schema so each MCP tool comfortably contributes
+        // to the byte threshold without us having to hand-roll a huge schema.
+        let padded_desc = format!("{description} — {}", "extended description ".repeat(20));
+        Tool::Function {
+            function: FunctionDefinition {
+                name: name.to_string(),
+                description: Some(padded_desc),
+                parameters: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer"}
+                    }
+                })),
+            },
+        }
+    }
+
+    fn core_tool(name: &str) -> Tool {
+        Tool::Function {
+            function: FunctionDefinition {
+                name: name.to_string(),
+                description: Some("core agent tool".to_string()),
+                parameters: Some(serde_json::json!({"type": "object"})),
+            },
+        }
+    }
+
+    #[test]
+    fn prunes_irrelevant_mcp_tools_when_oversized() {
+        let req = CompletionRequest {
+            model: "claude-3-5-sonnet".into(),
+            messages: vec![Message::User(UserMessage {
+                name: None,
+                content: MessageContent::Text("please find the linear issue about payments".into()),
+                cache_control: None,
+            })],
+            max_tokens: None,
+            stream: false,
+            tools: vec![
+                core_tool("Bash"),
+                mcp_tool("mcp__linear-server__list_issues", "List Linear issues"),
+                mcp_tool("mcp__github__create_pr", "Open a pull request"),
+                mcp_tool("mcp__notion__search", "Search Notion pages"),
+            ],
+            tool_choice: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let config = CompressionConfig {
+            agent: AgentType::Claude,
+            tool_pruning: ToolPruningConfig {
+                enabled: true,
+                threshold_bytes: 0, // force pruning
+                min_kept: 1,
+                min_score: 1,
+            },
+        };
+        let result = compress_request(&config, req);
+
+        let names: Vec<&str> = result
+            .tools
+            .iter()
+            .filter_map(|t| match t {
+                Tool::Function { function } => Some(function.name.as_str()),
+                Tool::Unknown(_) => None,
+            })
+            .collect();
+
+        assert!(names.contains(&"Bash"), "core kept: {names:?}");
+        assert!(
+            names.contains(&"mcp__linear-server__list_issues"),
+            "linear kept: {names:?}"
+        );
+        assert!(
+            !names.contains(&"mcp__github__create_pr"),
+            "github should be dropped: {names:?}"
+        );
+    }
+
+    #[test]
+    fn pruning_skipped_below_threshold() {
+        let req = CompletionRequest {
+            model: "claude-3-5-sonnet".into(),
+            messages: vec![Message::User(UserMessage {
+                name: None,
+                content: MessageContent::Text("hello".into()),
+                cache_control: None,
+            })],
+            max_tokens: None,
+            stream: false,
+            tools: vec![
+                core_tool("Bash"),
+                mcp_tool("mcp__notion__search", "Search Notion"),
+            ],
+            tool_choice: None,
+            temperature: None,
+            top_p: None,
+        };
+        let original_count = req.tools.len();
+
+        let config = CompressionConfig {
+            agent: AgentType::Claude,
+            tool_pruning: ToolPruningConfig {
+                enabled: true,
+                threshold_bytes: usize::MAX,
+                min_kept: 0,
+                min_score: 1,
+            },
+        };
+        let result = compress_request(&config, req);
+        assert_eq!(
+            result.tools.len(),
+            original_count,
+            "below threshold → untouched"
+        );
+    }
+
+    #[test]
+    fn pruning_disabled_keeps_everything() {
+        let req = CompletionRequest {
+            model: "claude-3-5-sonnet".into(),
+            messages: vec![Message::User(UserMessage {
+                name: None,
+                content: MessageContent::Text("anything".into()),
+                cache_control: None,
+            })],
+            max_tokens: None,
+            stream: false,
+            tools: vec![
+                mcp_tool("mcp__a__x", "first"),
+                mcp_tool("mcp__b__y", "second"),
+            ],
+            tool_choice: None,
+            temperature: None,
+            top_p: None,
+        };
+        let original_count = req.tools.len();
+
+        let config = CompressionConfig {
+            agent: AgentType::Claude,
+            tool_pruning: ToolPruningConfig {
+                enabled: false,
+                threshold_bytes: 0,
+                min_kept: 0,
+                min_score: 99,
+            },
+        };
+        let result = compress_request(&config, req);
+        assert_eq!(result.tools.len(), original_count);
+    }
+
+    #[test]
+    fn sticky_rule_keeps_previously_invoked_mcp() {
+        let req = CompletionRequest {
+            model: "claude-3-5-sonnet".into(),
+            messages: vec![
+                Message::User(UserMessage {
+                    name: None,
+                    content: MessageContent::Text("write the report".into()),
+                    cache_control: None,
+                }),
+                Message::Assistant(AssistantMessage {
+                    name: None,
+                    content: None,
+                    refusal: None,
+                    cache_control: None,
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_prev".into(),
+                        tool_type: "function".into(),
+                        function: FunctionCall {
+                            name: "mcp__notion__search".into(),
+                            arguments: "{}".into(),
+                        },
+                    }]),
+                }),
+                Message::Tool(ToolMessage {
+                    tool_call_id: "call_prev".into(),
+                    content: MessageContent::Text("ok".into()),
+                }),
+                Message::User(UserMessage {
+                    name: None,
+                    content: MessageContent::Text("now write it up".into()),
+                    cache_control: None,
+                }),
+            ],
+            max_tokens: None,
+            stream: false,
+            tools: vec![
+                mcp_tool("mcp__notion__search", "Search Notion pages"),
+                mcp_tool("mcp__github__create_pr", "Open a PR"),
+            ],
+            tool_choice: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let config = CompressionConfig {
+            agent: AgentType::Claude,
+            tool_pruning: ToolPruningConfig {
+                enabled: true,
+                threshold_bytes: 0,
+                min_kept: 0,
+                min_score: 99,
+            },
+        };
+        let result = compress_request(&config, req);
+        let names: Vec<&str> = result
+            .tools
+            .iter()
+            .filter_map(|t| match t {
+                Tool::Function { function } => Some(function.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            names.contains(&"mcp__notion__search"),
+            "sticky-kept: {names:?}"
+        );
     }
 }

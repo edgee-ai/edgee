@@ -425,7 +425,9 @@ version = "0.1.0"
 dependencies = [
  "edgee-ai-gateway-core",
  "edgee-compressor",
+ "serde_json",
  "tower",
+ "tracing",
 ]
 
 [[package]]

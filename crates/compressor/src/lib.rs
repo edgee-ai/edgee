@@ -10,6 +10,9 @@ pub mod util;
 // Re-export key traits
 pub use strategy::ToolCompressor;
 pub use strategy::bash::BashCompressor;
+pub use strategy::tools::{
+    HeuristicToolSetCompressor, PruneContext, PruneDecision, ToolSetCompressor, ToolView,
+};
 
 // Re-export compressor lookup functions
 pub use strategy::bash::compressor_for as bash_compressor_for;

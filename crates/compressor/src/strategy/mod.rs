@@ -2,6 +2,7 @@ pub mod bash;
 pub mod claude;
 pub mod codex;
 pub mod opencode;
+pub mod tools;
 pub mod util;
 
 /// Trait for compressing the output of a specific tool.
