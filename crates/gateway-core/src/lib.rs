@@ -46,6 +46,7 @@ pub mod config;
 pub mod error;
 pub mod passthrough;
 pub mod provider;
+pub mod region;
 pub mod service;
 pub mod types;
 
@@ -56,6 +57,7 @@ pub use backend::http::ReqwestHttpClient;
 pub use config::{AnthropicPassthroughConfig, OpenAIPassthroughConfig, ProviderConfig};
 pub use error::{Error, Result};
 pub use provider::Provider;
+pub use region::Region;
 pub use service::ProviderDispatchService;
 pub use types::{
     CompletionChunk, CompletionRequest, CompletionResponse, GatewayResponse, Message,

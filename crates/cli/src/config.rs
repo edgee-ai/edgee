@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use edgee_gateway_core::Region;
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct ProviderConfig {
     pub api_key: String,
@@ -32,6 +34,9 @@ pub struct Profile {
     /// Whether to enable Edgee MCP integration (GitHub repo detection, session naming, PR tracking).
     /// When false, no MCP config or system prompt is injected into the coding assistant.
     pub enable_mcp: Option<bool>,
+    /// Data residency region for the hosted gateway (us, eu, apac).
+    /// When set, traffic is routed through region-specific Fastly POPs.
+    pub region: Option<Region>,
     pub claude: Option<ProviderConfig>,
     pub codex: Option<ProviderConfig>,
     pub opencode: Option<ProviderConfig>,
@@ -284,7 +289,36 @@ pub fn gateway_base_url() -> String {
     read()
         .ok()
         .and_then(|p| p.gateway_url)
-        .unwrap_or_else(|| "https://api.edgee.ai".to_string())
+        .unwrap_or_else(|| default_gateway_url())
+}
+
+/// Resolve the active data residency region.
+///
+/// Precedence: `EDGEE_REGION` env var > profile > default (US).
+pub fn region() -> Region {
+    if let Ok(v) = std::env::var("EDGEE_REGION") {
+        if let Some(r) = Region::parse(&v) {
+            return r;
+        }
+    }
+    read().ok().and_then(|p| p.region).unwrap_or_default()
+}
+
+/// Build the default gateway URL for the active region.
+///
+/// For the US region this is `https://api.edgee.ai`.
+/// For EU it is `https://eu.api.edgee.ai`.
+/// For APAC it is `https://apac.api.edgee.ai`.
+///
+/// This is separate from [`gateway_base_url`] because `gateway_base_url`
+/// gives precedence to explicit overrides (`EDGEE_API_URL`, profile gateway_url);
+/// this function is the fallback when no override is set.
+pub fn default_gateway_url() -> String {
+    let region = region();
+    match region {
+        Region::Us => "https://api.edgee.ai".to_string(),
+        other => format!("https://{}api.edgee.ai", other.gateway_subdomain()),
+    }
 }
 
 pub fn mcp_base_url() -> String {
