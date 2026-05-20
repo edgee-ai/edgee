@@ -131,9 +131,9 @@ Both `gateway-http` and `gateway-core` strip a shared list of headers (`SKIP_HEA
 
 ## LLM router (provider dispatch path)
 
-The LLM router is the second Tower chain. Where the passthrough path forwards a raw body to a single hard-wired endpoint, the router accepts a canonical `CompletionRequest`, resolves which provider(s) are configured for the requested model, and dispatches through them in order, retrying on transient errors and falling back to the next provider on failure.
+> **Status: not yet implemented.** `ProviderDispatchService` (`crates/gateway-core/src/service.rs`) currently returns `"not yet implemented"`. Everything below describes the intended design, not existing behavior.
 
-`ProviderDispatchService` in `crates/gateway-core/src/service.rs` is currently a stub. The sections below describe the intended design.
+The LLM router is the second Tower chain. Where the passthrough path forwards a raw body to a single hard-wired endpoint, the router accepts a canonical `CompletionRequest`, resolves which provider(s) are configured for the requested model, and dispatches through them in order, retrying on transient errors and falling back to the next provider on failure.
 
 ### Service chain
 

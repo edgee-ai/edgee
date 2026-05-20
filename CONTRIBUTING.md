@@ -4,7 +4,7 @@ Thank you for considering a contribution. Edgee is Apache 2.0 licensed and we we
 
 ## Prerequisites
 
-- **Rust** stable toolchain (1.75 or later). Install via [rustup](https://rustup.rs).
+- **Rust** stable toolchain (1.85 or later). Install via [rustup](https://rustup.rs).
 - **cargo** is bundled with Rust.
 - On Linux you may need `pkg-config` and `libssl-dev` (or equivalent) for the TLS backend.
 
@@ -100,18 +100,7 @@ Steps to add a new compressor:
 
 ## Repository layout
 
-```text
-crates/
-  cli/                 # edgee binary (auth, launch, stats)
-  gateway-core/        # canonical types, Provider trait, passthrough services
-  compressor/          # pure compression library, no I/O
-  compression-layer/   # Tower Layer/Service applying compression to requests
-  gateway-http/        # Axum HTTP boundary
-doc/
-  architecture.md      # Tower service chain design document
-```
-
-See [`doc/architecture.md`](doc/architecture.md) for a detailed explanation of how the crates fit together.
+See the [Repository layout](../README.md#repository-layout) section in the README for the crate tree and purpose table, and [`doc/architecture.md`](doc/architecture.md) for the Tower service chain design and full request flow.
 
 ## License
 
