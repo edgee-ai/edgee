@@ -73,7 +73,7 @@ cargo fmt --all && cargo clippy --all-targets && cargo test --all
 1. Fork the repo and create a branch from `main`. Use the naming scheme `feat/<topic>`, `fix/<topic>`, or `chore/<topic>`.
 2. Make your changes and ensure the pre-commit gate passes locally.
 3. Open a PR against `main` with a concise, imperative title (e.g. `Add OpenAI streaming support`).
-4. Reference the relevant issue in the PR description (e.g. `Closes EDGEE-1234`).
+4. Reference the relevant GitHub issue in the PR description (e.g. `Closes #42`).
 5. A maintainer will review within a few business days. Small, focused PRs get reviewed fastest.
 
 For significant new features or architectural changes, open an issue first so we can discuss the approach before you invest time building.
