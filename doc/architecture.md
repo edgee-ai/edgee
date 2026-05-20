@@ -58,7 +58,7 @@ Claude Code issues a `POST /v1/messages` (routed through `ANTHROPIC_BASE_URL` po
 }
 ```
 
-### 2. gateway-http — HTTP boundary
+### 2. gateway-http: HTTP boundary
 
 `PassthroughService` receives the raw `Request<Body>`, reads it into memory (up to 4 MB), strips hop-by-hop and gateway-internal headers, and wraps the body in a `PassthroughRequest`:
 
@@ -70,20 +70,20 @@ PassthroughRequest {
 }
 ```
 
-### 3. compression-layer — tool result compression
+### 3. compression-layer: tool result compression
 
 `CompressionService` deserializes the body, walks the `messages` array, and for each `tool_result` whose `tool_use_id` maps to a registered compressor (here: `Read`), replaces `content` with the compressed form:
 
 ```
 Before  →  "1: use std::sync::Arc;\n2: \n3: pub fn compress_tool_output(…\n… (600 more lines)"
-After   →  "[ Read: src/lib.rs — showing 18 of 602 lines ]\nuse std::sync::Arc;\n…"
+After   →  "[ Read: src/lib.rs, showing 18 of 602 lines ]\nuse std::sync::Arc;\n…"
 ```
 
 All other message fields and any `<system-reminder>` blocks within the content are preserved verbatim. The body is then re-serialized and stored back into the `PassthroughRequest`.
 
-### 4. gateway-core — forward to provider
+### 4. gateway-core: forward to provider
 
-`AnthropicPassthroughService` appends the provider auth header and forwards the (now-smaller) body to `https://api.anthropic.com/v1/messages`. The response — streaming or complete — is returned as-is to the agent.
+`AnthropicPassthroughService` appends the provider auth header and forwards the (now-smaller) body to `https://api.anthropic.com/v1/messages`. The response (streaming or complete) is returned as-is to the agent.
 
 ### Tower service chain
 
@@ -126,12 +126,12 @@ coding agent
 Both `gateway-http` and `gateway-core` strip a shared list of headers (`SKIP_HEADERS` in `crates/gateway-core/src/passthrough/mod.rs`) before forwarding. This list covers:
 
 - Hop-by-hop headers (`Connection`, `Transfer-Encoding`, `Keep-Alive`, ...)
-- Framing headers (`Content-Length`, `Content-Encoding`) — recalculated after body mutation
+- Framing headers (`Content-Length`, `Content-Encoding`): recalculated after body mutation
 - Gateway-internal headers added by the CLI (`X-Edgee-*`)
 
 ## LLM router (provider dispatch path)
 
-The LLM router is the second Tower chain. Where the passthrough path forwards a raw body to a single hard-wired endpoint, the router accepts a canonical `CompletionRequest`, resolves which provider(s) are configured for the requested model, and dispatches through them in order — retrying on transient errors and falling back to the next provider on failure.
+The LLM router is the second Tower chain. Where the passthrough path forwards a raw body to a single hard-wired endpoint, the router accepts a canonical `CompletionRequest`, resolves which provider(s) are configured for the requested model, and dispatches through them in order, retrying on transient errors and falling back to the next provider on failure.
 
 `ProviderDispatchService` in `crates/gateway-core/src/service.rs` is currently a stub. The sections below describe the intended design.
 

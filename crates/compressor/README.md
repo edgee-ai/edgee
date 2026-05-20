@@ -116,5 +116,5 @@ The `Bash` tool compressor parses the command name from the tool arguments and d
 
 ## See also
 
-- [`edgee-compression-layer`](../compression-layer/) — Tower middleware that calls this crate
-- [`CONTRIBUTING.md`](../../CONTRIBUTING.md#adding-a-compression-strategy) — full contribution guide
+- [`edgee-compression-layer`](../compression-layer/): Tower middleware that calls this crate
+- [`CONTRIBUTING.md`](../../CONTRIBUTING.md#adding-a-compression-strategy): full contribution guide

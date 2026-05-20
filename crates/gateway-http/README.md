@@ -56,6 +56,6 @@ let svc = ServiceBuilder::new()
 
 ## See also
 
-- [`edgee-gateway-core`](../gateway-core/) — defines `PassthroughRequest` and the inner passthrough services
-- [`edgee-compression-layer`](../compression-layer/) — sits between this crate and `gateway-core`
-- [`doc/architecture.md`](../../doc/architecture.md) — full request-flow design document
+- [`edgee-gateway-core`](../gateway-core/): defines `PassthroughRequest` and the inner passthrough services
+- [`edgee-compression-layer`](../compression-layer/): sits between this crate and `gateway-core`
+- [`doc/architecture.md`](../../doc/architecture.md): full request-flow design document

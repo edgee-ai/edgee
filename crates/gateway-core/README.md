@@ -62,7 +62,7 @@ let mut svc = AnthropicPassthroughService::new(client, config);
 
 ## See also
 
-- [`edgee-compressor`](../compressor/) — pure compression library
-- [`edgee-compression-layer`](../compression-layer/) — Tower layer wrapping this crate's services
-- [`edgee-gateway-http`](../gateway-http/) — HTTP boundary that feeds requests into this crate
-- [`doc/architecture.md`](../../doc/architecture.md) — full request-flow design document
+- [`edgee-compressor`](../compressor/): pure compression library
+- [`edgee-compression-layer`](../compression-layer/): Tower layer wrapping this crate's services
+- [`edgee-gateway-http`](../gateway-http/): HTTP boundary that feeds requests into this crate
+- [`doc/architecture.md`](../../doc/architecture.md): full request-flow design document

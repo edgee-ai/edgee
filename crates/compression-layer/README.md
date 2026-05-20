@@ -42,6 +42,6 @@ The layer works in both typed-dispatch and passthrough Tower chains since `Compr
 
 ## See also
 
-- [`edgee-compressor`](../compressor/) — the underlying compression library
-- [`edgee-gateway-core`](../gateway-core/) — provides `CompletionRequest`, `PassthroughRequest`, and the inner services
-- [`doc/architecture.md`](../../doc/architecture.md) — full Tower chain diagram and design notes
+- [`edgee-compressor`](../compressor/): the underlying compression library
+- [`edgee-gateway-core`](../gateway-core/): provides `CompletionRequest`, `PassthroughRequest`, and the inner services
+- [`doc/architecture.md`](../../doc/architecture.md): full Tower chain diagram and design notes
