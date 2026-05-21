@@ -5,14 +5,17 @@ use console::style;
 
 const MARKER_START: &str = "# >>> edgee launch aliases >>>";
 const MARKER_END: &str = "# <<< edgee launch aliases <<<";
-const CLAUDE_ALIAS: [AliasSpec; 1] = [AliasSpec::new("claude", "edgee launch claude")];
-const CODEX_ALIAS: [AliasSpec; 1] = [AliasSpec::new("codex", "edgee launch codex")];
-const OPENCODE_ALIAS: [AliasSpec; 1] = [AliasSpec::new("opencode", "edgee launch opencode")];
-const ALL_ALIASES: [AliasSpec; 3] = [
-    AliasSpec::new("claude", "edgee launch claude"),
-    AliasSpec::new("codex", "edgee launch codex"),
-    AliasSpec::new("opencode", "edgee launch opencode"),
-];
+
+const SHIM_DIR_REL: &str = ".edgee/bin";
+
+const CLAUDE_ALIAS: AliasSpec = AliasSpec::new("claude", "edgee launch claude");
+const CODEX_ALIAS: AliasSpec = AliasSpec::new("codex", "edgee launch codex");
+const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch opencode");
+
+const ALL_ALIASES: [AliasSpec; 3] = [CLAUDE_ALIAS, CODEX_ALIAS, OPENCODE_ALIAS];
+
+const PATH_EXPORT_POSIX: &str = "case \":$PATH:\" in\n  *\":$HOME/.edgee/bin:\"*) ;;\n  *) export PATH=\"$HOME/.edgee/bin:$PATH\" ;;\nesac\n";
+const PATH_EXPORT_FISH: &str = "fish_add_path -p \"$HOME/.edgee/bin\"\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum Agent {
@@ -25,9 +28,9 @@ pub enum Agent {
 impl Agent {
     fn aliases(self) -> &'static [AliasSpec] {
         match self {
-            Self::Claude => &CLAUDE_ALIAS,
-            Self::Codex => &CODEX_ALIAS,
-            Self::Opencode => &OPENCODE_ALIAS,
+            Self::Claude => std::slice::from_ref(&CLAUDE_ALIAS),
+            Self::Codex => std::slice::from_ref(&CODEX_ALIAS),
+            Self::Opencode => std::slice::from_ref(&OPENCODE_ALIAS),
             Self::All => &ALL_ALIASES,
         }
     }
@@ -86,6 +89,8 @@ impl Action {
 
 fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
     let home = home_dir()?;
+    let shim_dir = home.join(SHIM_DIR_REL);
+
     let targets = [
         ShellConfig::new("bash", home.join(".bashrc"), ShellSyntax::Posix),
         ShellConfig::new("zsh", home.join(".zshrc"), ShellSyntax::Posix),
@@ -97,14 +102,35 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
     ];
 
     println!();
+
+    match action {
+        Action::Install => {
+            write_shims(&shim_dir, agent.aliases())?;
+            println!(
+                "  {} {} ({})",
+                style("updated").green(),
+                shim_dir.display(),
+                style("shims").dim()
+            );
+        }
+        Action::Remove => {
+            remove_shims(&shim_dir, agent.aliases())?;
+            println!(
+                "  {} {} ({})",
+                style("updated").green(),
+                shim_dir.display(),
+                style("shims").dim()
+            );
+        }
+    }
+
     for target in targets {
         let changed = match action {
             Action::Install => {
-                upsert_managed_block(&target.path, &render_block(agent, target.syntax))?
+                let block = render_block(agent.aliases(), target.syntax);
+                upsert_managed_block(&target.path, &block)?
             }
-            Action::Remove => {
-                remove_managed_block(&target.path, &render_block(agent, target.syntax))?
-            }
+            Action::Remove => remove_aliases_from_file(&target.path, agent.aliases(), target.syntax)?,
         };
         let status = if changed {
             style("updated").green()
@@ -124,6 +150,14 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
         style(format!("Aliases {}.", action.verb())).bold().green(),
         style(format!("Affected: {}.", agent.label())).dim()
     );
+
+    if matches!(action, Action::Install) {
+        println!();
+        println!(
+            "  {} Reopen your terminal (or `exec $SHELL -l`) so `$HOME/.edgee/bin` lands on PATH.",
+            style("Note:").bold()
+        );
+    }
     println!();
 
     Ok(())
@@ -169,10 +203,19 @@ fn home_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("Could not determine your home directory from $HOME"))
 }
 
-fn render_block(agent: Agent, syntax: ShellSyntax) -> String {
+fn render_block(aliases: &[AliasSpec], syntax: ShellSyntax) -> String {
     let mut block = String::from(MARKER_START);
     block.push('\n');
-    for alias in agent.aliases() {
+
+    if !aliases.is_empty() {
+        let path_snippet = match syntax {
+            ShellSyntax::Posix => PATH_EXPORT_POSIX,
+            ShellSyntax::Fish => PATH_EXPORT_FISH,
+        };
+        block.push_str(path_snippet);
+    }
+
+    for alias in aliases {
         match syntax {
             ShellSyntax::Posix => {
                 block.push_str("alias ");
@@ -216,14 +259,18 @@ fn upsert_managed_block(path: &Path, block: &str) -> Result<bool> {
     Ok(true)
 }
 
-fn remove_managed_block(path: &Path, block: &str) -> Result<bool> {
+fn remove_aliases_from_file(
+    path: &Path,
+    removing: &[AliasSpec],
+    syntax: ShellSyntax,
+) -> Result<bool> {
     let existing = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => return Err(err).with_context(|| format!("Failed to read {}", path.display())),
     };
 
-    let updated = remove_from_block(&existing, block)?;
+    let updated = subtract_aliases_from_text(&existing, removing, syntax)?;
     if updated == existing {
         return Ok(false);
     }
@@ -262,15 +309,37 @@ fn replace_or_append_block(existing: &str, block: &str) -> Result<String> {
     }
 }
 
-fn remove_from_block(existing: &str, block: &str) -> Result<String> {
+fn subtract_aliases_from_text(
+    existing: &str,
+    removing: &[AliasSpec],
+    syntax: ShellSyntax,
+) -> Result<String> {
     match (existing.find(MARKER_START), existing.find(MARKER_END)) {
         (Some(start), Some(end)) if start <= end => {
             let after_end = end + MARKER_END.len();
             let suffix = existing[after_end..]
                 .strip_prefix('\n')
                 .unwrap_or(&existing[after_end..]);
-            let current_block = &existing[start..after_end + usize::from(existing[after_end..].starts_with('\n'))];
-            let next_block = subtract_block(current_block, block);
+
+            let current_block_end = after_end + usize::from(existing[after_end..].starts_with('\n'));
+            let current_block = &existing[start..current_block_end];
+
+            let present_specs: Vec<AliasSpec> = ALL_ALIASES
+                .iter()
+                .copied()
+                .filter(|spec| block_contains_alias(current_block, spec.name))
+                .collect();
+
+            let remaining: Vec<AliasSpec> = present_specs
+                .into_iter()
+                .filter(|spec| !removing.iter().any(|r| r.name == spec.name))
+                .collect();
+
+            let next_block = if remaining.is_empty() {
+                String::new()
+            } else {
+                render_block(&remaining, syntax)
+            };
 
             let mut updated = String::new();
             updated.push_str(&existing[..start]);
@@ -285,53 +354,129 @@ fn remove_from_block(existing: &str, block: &str) -> Result<String> {
     }
 }
 
-fn subtract_block(current: &str, to_remove: &str) -> String {
-    let current_aliases = parse_alias_lines(current);
-    let to_remove_aliases = parse_alias_lines(to_remove);
-    let kept: Vec<&str> = current_aliases
-        .into_iter()
-        .filter(|line| !to_remove_aliases.contains(line))
-        .collect();
-
-    if kept.is_empty() {
-        return String::new();
-    }
-
-    let mut updated = String::from(MARKER_START);
-    updated.push('\n');
-    for line in kept {
-        updated.push_str(line);
-        updated.push('\n');
-    }
-    updated.push_str(MARKER_END);
-    updated.push('\n');
-    updated
+fn block_contains_alias(block: &str, name: &str) -> bool {
+    let posix = format!("alias {name}=");
+    let fish = format!("alias {name} ");
+    block.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with(&posix) || trimmed.starts_with(&fish)
+    })
 }
 
-fn parse_alias_lines(block: &str) -> Vec<&str> {
-    block
-        .lines()
-        .filter(|line| !line.is_empty() && *line != MARKER_START && *line != MARKER_END)
-        .collect()
+#[cfg(unix)]
+fn write_shims(shim_dir: &Path, aliases: &[AliasSpec]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::create_dir_all(shim_dir)
+        .with_context(|| format!("Failed to create {}", shim_dir.display()))?;
+
+    for alias in aliases {
+        let path = shim_dir.join(alias.name);
+        let body = render_shim_script(alias.command);
+
+        let tmp = path.with_extension("tmp");
+        {
+            let mut f = std::fs::File::create(&tmp)
+                .with_context(|| format!("Failed to create {}", tmp.display()))?;
+            f.write_all(body.as_bytes())
+                .with_context(|| format!("Failed to write {}", tmp.display()))?;
+            f.set_permissions(std::fs::Permissions::from_mode(0o755))
+                .with_context(|| format!("Failed to chmod {}", tmp.display()))?;
+        }
+        std::fs::rename(&tmp, &path)
+            .with_context(|| format!("Failed to install shim at {}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_shims(_shim_dir: &Path, _aliases: &[AliasSpec]) -> Result<()> {
+    // PATH shims are POSIX-only for now; shell aliases remain available.
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_shims(shim_dir: &Path, aliases: &[AliasSpec]) -> Result<()> {
+    for alias in aliases {
+        let path = shim_dir.join(alias.name);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("Failed to remove shim at {}", path.display()))
+            }
+        }
+    }
+    // Best-effort: prune empty shim dir.
+    let _ = std::fs::remove_dir(shim_dir);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn remove_shims(_shim_dir: &Path, _aliases: &[AliasSpec]) -> Result<()> {
+    Ok(())
+}
+
+fn render_shim_script(launch_command: &str) -> String {
+    format!(
+        "#!/usr/bin/env bash\n\
+# Edgee shim — routes this binary through the Edgee Gateway.\n\
+# Managed by `edgee alias`. Do not edit by hand.\n\
+PATH=$(printf ':%s:' \"$PATH\" | sed -e \"s|:$HOME/.edgee/bin:|:|g\" -e \"s|^:||\" -e \"s|:$||\")\n\
+export PATH\n\
+exec {launch_command} \"$@\"\n"
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        remove_from_block, render_block, replace_or_append_block, Agent, ShellSyntax, MARKER_END,
-        MARKER_START,
-    };
+    use super::*;
+
+    fn claude_only() -> Vec<AliasSpec> {
+        vec![CLAUDE_ALIAS]
+    }
+
+    fn codex_only() -> Vec<AliasSpec> {
+        vec![CODEX_ALIAS]
+    }
 
     #[test]
     fn installs_single_alias_into_empty_file() {
-        let block = render_block(Agent::Claude, ShellSyntax::Posix);
+        let block = render_block(&claude_only(), ShellSyntax::Posix);
         let updated = replace_or_append_block("", &block).unwrap();
         assert_eq!(updated, block);
     }
 
     #[test]
+    fn render_block_includes_path_export_posix() {
+        let block = render_block(&claude_only(), ShellSyntax::Posix);
+        assert!(block.contains("case \":$PATH:\" in"));
+        assert!(block.contains("$HOME/.edgee/bin:$PATH"));
+        assert!(block.contains("alias claude='edgee launch claude'"));
+    }
+
+    #[test]
+    fn render_block_includes_path_export_fish() {
+        let block = render_block(&ALL_ALIASES, ShellSyntax::Fish);
+        assert!(block.contains("fish_add_path -p \"$HOME/.edgee/bin\""));
+        assert!(block.contains("alias claude 'edgee launch claude'"));
+        assert!(block.contains("alias codex 'edgee launch codex'"));
+        assert!(block.contains("alias opencode 'edgee launch opencode'"));
+    }
+
+    #[test]
+    fn render_block_empty_when_no_aliases() {
+        let block = render_block(&[], ShellSyntax::Posix);
+        assert!(!block.contains("$HOME/.edgee/bin"));
+        assert!(block.contains(MARKER_START));
+        assert!(block.contains(MARKER_END));
+    }
+
+    #[test]
     fn appends_block_after_existing_content() {
-        let block = render_block(Agent::Opencode, ShellSyntax::Fish);
+        let block = render_block(&[OPENCODE_ALIAS], ShellSyntax::Fish);
         let updated = replace_or_append_block("set -gx EDITOR vim\n", &block).unwrap();
         assert_eq!(updated, format!("set -gx EDITOR vim\n\n{block}"));
     }
@@ -339,35 +484,96 @@ mod tests {
     #[test]
     fn replaces_existing_block() {
         let old = format!("{MARKER_START}\nalias claude='old value'\n{MARKER_END}\n");
-        let updated = replace_or_append_block(
-            &format!("export PATH=x\n\n{old}"),
-            &render_block(Agent::All, ShellSyntax::Posix),
-        )
-        .unwrap();
-        assert!(updated.contains("alias codex='edgee launch codex'"));
-    }
-
-    #[test]
-    fn removes_single_alias_from_multi_alias_block() {
-        let all = render_block(Agent::All, ShellSyntax::Posix);
+        let new_block = render_block(&ALL_ALIASES, ShellSyntax::Posix);
         let updated =
-            remove_from_block(&all, &render_block(Agent::Codex, ShellSyntax::Posix)).unwrap();
-        assert!(updated.contains("alias claude='edgee launch claude'"));
-        assert!(!updated.contains("alias codex='edgee launch codex'"));
-        assert!(updated.contains("alias opencode='edgee launch opencode'"));
+            replace_or_append_block(&format!("export PATH=x\n\n{old}"), &new_block).unwrap();
+        assert!(updated.contains("alias codex='edgee launch codex'"));
+        assert!(updated.contains("$HOME/.edgee/bin"));
     }
 
     #[test]
-    fn removes_entire_block_when_last_alias_removed() {
-        let block = render_block(Agent::Claude, ShellSyntax::Posix);
-        let updated = remove_from_block(&block, &block).unwrap();
-        assert_eq!(updated, "");
+    fn removing_one_agent_preserves_path_export_and_other_aliases() {
+        let initial = render_block(&ALL_ALIASES, ShellSyntax::Posix);
+        let updated =
+            subtract_aliases_from_text(&initial, &codex_only(), ShellSyntax::Posix).unwrap();
+        assert!(updated.contains("alias claude='edgee launch claude'"));
+        assert!(updated.contains("alias opencode='edgee launch opencode'"));
+        assert!(!updated.contains("alias codex='edgee launch codex'"));
+        assert!(updated.contains("$HOME/.edgee/bin:$PATH"));
+    }
+
+    #[test]
+    fn removing_last_agent_drops_entire_block() {
+        let initial = render_block(&claude_only(), ShellSyntax::Posix);
+        let updated =
+            subtract_aliases_from_text(&initial, &claude_only(), ShellSyntax::Posix).unwrap();
+        assert!(!updated.contains(MARKER_START));
+        assert!(!updated.contains(MARKER_END));
+        assert!(!updated.contains("$HOME/.edgee/bin"));
+    }
+
+    #[test]
+    fn removing_from_absent_block_is_noop() {
+        let updated =
+            subtract_aliases_from_text("export PATH=x\n", &claude_only(), ShellSyntax::Posix)
+                .unwrap();
+        assert_eq!(updated, "export PATH=x\n");
     }
 
     #[test]
     fn errors_on_partial_block() {
-        let block = render_block(Agent::All, ShellSyntax::Posix);
+        let block = render_block(&ALL_ALIASES, ShellSyntax::Posix);
         let err = replace_or_append_block(MARKER_START, &block).unwrap_err();
         assert!(err.to_string().contains("partial Edgee alias block"));
+    }
+
+    #[test]
+    fn shim_script_strips_shim_dir_from_path_then_exec_launch() {
+        let body = render_shim_script("edgee launch claude");
+        assert!(body.starts_with("#!/usr/bin/env bash\n"));
+        assert!(body.contains("sed -e \"s|:$HOME/.edgee/bin:|:|g\""));
+        assert!(body.contains("exec edgee launch claude \"$@\""));
+    }
+
+    #[test]
+    fn block_contains_alias_detects_posix_and_fish() {
+        let posix = "alias claude='edgee launch claude'\n";
+        let fish = "alias claude 'edgee launch claude'\n";
+        assert!(block_contains_alias(posix, "claude"));
+        assert!(block_contains_alias(fish, "claude"));
+        assert!(!block_contains_alias(posix, "codex"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_shims_creates_executable_file_with_expected_body() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("bin");
+        write_shims(&dir, &claude_only()).unwrap();
+
+        let shim = dir.join("claude");
+        let body = std::fs::read_to_string(&shim).unwrap();
+        assert!(body.contains("exec edgee launch claude \"$@\""));
+
+        let mode = std::fs::metadata(&shim).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_shims_deletes_only_targeted_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("bin");
+        write_shims(&dir, &ALL_ALIASES).unwrap();
+        assert!(dir.join("claude").exists());
+        assert!(dir.join("codex").exists());
+        assert!(dir.join("opencode").exists());
+
+        remove_shims(&dir, &codex_only()).unwrap();
+        assert!(dir.join("claude").exists());
+        assert!(!dir.join("codex").exists());
+        assert!(dir.join("opencode").exists());
     }
 }

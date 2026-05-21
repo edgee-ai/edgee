@@ -1,7 +1,10 @@
 use anyhow::Result;
 use serde_json::Value;
 
+use super::util;
+
 #[derive(Debug, clap::Parser)]
+#[command(disable_help_flag = true)]
 pub struct Options {
     /// Extra args passed through to the opencode CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -199,6 +202,12 @@ pub async fn run(opts: Options) -> Result<()> {
     let opencode = creds.opencode.as_ref().unwrap();
     let api_key = &opencode.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
+    util::spawn_cli_version_report(&creds, &session_id);
+
+    // First-run: install the persistent user-level statusline integration
+    // exactly once (Claude Code-targeted; honors the disable marker).
+    util::ensure_first_run_installed().await;
+
     let gateway_url = crate::config::gateway_base_url();
 
     let mut config = find_user_config().unwrap_or_else(|| {
@@ -231,7 +240,7 @@ pub async fn run(opts: Options) -> Result<()> {
     std::fs::write(&config_path, &config_content)?;
 
     // Step 5: launch opencode with the correct env vars
-    let mut cmd = std::process::Command::new(crate::commands::launch::resolve_binary("opencode"));
+    let mut cmd = std::process::Command::new(util::resolve_binary("opencode"));
     cmd.env("OPENCODE_CONFIG", &config_path);
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.args(&opts.args);
@@ -249,7 +258,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // Clean up the temporary config file
     let _ = std::fs::remove_file(&config_path);
 
-    crate::commands::launch::print_session_stats(&creds, &session_id, "OpenCode").await;
+    super::print_session_stats(&creds, &session_id, "OpenCode").await;
 
     if let Some(code) = status.code() {
         std::process::exit(code);

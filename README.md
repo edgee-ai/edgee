@@ -24,14 +24,15 @@ Edgee is a lightweight LLM gateway that sits between your application and AI pro
 
 Think of it as an open-source alternative to LiteLLM or OpenRouter, written in Rust for speed and low resource usage, with a built-in token compression engine that reduces your AI costs automatically.
 
-<img width="1997" height="807" alt="ai-gateway-horizontal-light" src="https://github.com/user-attachments/assets/09829f8f-cbf3-4afe-8947-bd4cd421667f" />
+<img width="1997" height="807" alt="ai-gateway-horizontal-light" src="https://github.com/user-attachments/assets/d68ff91d-a488-428e-b99d-f4e1c3ef9242" />
+
 
 ## Why Edgee
 
-- **One gateway, any provider** — Unified API for Anthropic, OpenAI, and other LLM providers. Switch models without touching your app code.
-- **Token compression** — Edgee analyzes request context and strips redundancy before it reaches the model. Same output, fewer tokens, lower bill.
-- **Real-time observability** — See exactly how many tokens you're sending, how many you're saving, and what it costs.
-- **Rust-native** — Fast startup, minimal memory footprint, no runtime dependencies. Runs anywhere Docker runs.
+- **One gateway, any provider:** Unified API for Anthropic, OpenAI, and other LLM providers. Switch models without touching your app code.
+- **Token compression:** Edgee analyzes request context and strips redundancy before it reaches the model. Same output, fewer tokens, lower bill.
+- **Real-time observability:** See exactly how many tokens you're sending, how many you're saving, and what it costs.
+- **Rust-native:** Fast startup, minimal memory footprint, no runtime dependencies. Runs anywhere Docker runs.
 
 ---
 
@@ -84,6 +85,20 @@ edgee launch codex resume         # resume the last Codex session
 edgee launch opencode -c          # continue the last OpenCode session
 ```
 
+### Route plain `claude` / `codex` / `opencode` through Edgee
+
+If you'd rather type `claude` (or have another tool spawn `claude` for you), install Edgee's shims:
+
+```bash
+edgee alias            # installs all three; pass `claude`, `codex`, `opencode` to scope
+edgee alias remove     # to undo
+```
+
+This does two things:
+
+1. Adds a shell alias to `~/.bashrc`, `~/.zshrc`, and `~/.config/fish/config.fish` (`alias claude='edgee launch claude'`, etc.) so interactive shells route through Edgee.
+2. Writes executable shim scripts to `~/.edgee/bin/{claude,codex,opencode}` and prepends `~/.edgee/bin` to `PATH` in the same rc block. This means **non-interactive** shells, including `bash -c '...'`, scripts, and tools that spawn Claude Code via `exec`, also get routed through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
+
 ### Use as a standalone gateway
 
 Point any OpenAI-compatible client at Edgee:
@@ -102,7 +117,7 @@ export OPENAI_BASE_URL=http://localhost:1207/v1
 
 ### Token compression
 
-Edgee's compression engine analyzes tool outputs (file listings, git logs, build output, test results) and removes noise before they enter the LLM context. The compression is lossless from the model's perspective — responses are identical, but prompts are leaner.
+Edgee's compression engine analyzes tool outputs (file listings, git logs, build output, test results) and removes noise before they enter the LLM context. The compression is lossless from the model's perspective: responses are identical, but prompts are leaner.
 
 ### Multi-provider routing
 
@@ -111,6 +126,62 @@ Route requests across Anthropic, OpenAI, and other providers through a single en
 ### Usage tracking
 
 Real-time visibility into token consumption, compression savings, and cost per request.
+
+---
+
+## Statusline
+
+When you run `edgee launch claude`, Claude Code shows a live statusline with the current session's token usage and compression savings. **No setup required:** the first launch auto-installs the integration into `~/.claude/settings.json`, and subsequent launches reuse it.
+
+### Manage it
+
+```bash
+edgee statusline claude install   # run the install manually (idempotent)
+edgee statusline claude disable   # turn it off
+edgee statusline claude enable    # turn it back on
+edgee statusline claude doctor    # diagnose project-level conflicts
+edgee statusline claude fix       # overlay Edgee on a conflicting project
+```
+
+The install writes two things to `~/.claude/settings.json`:
+
+- `statusLine.command = "edgee statusline render"`: only if you don't already have a statusLine; we never overwrite yours. (Older Edgee versions wrote `edgee statusline` without the explicit subcommand; that form now prints help, and is auto-migrated to `edgee statusline render` on next launch.)
+- A `SessionStart` hook running `edgee statusline claude doctor --warn-only`, which prints a one-line warning when you open a project that shadows Edgee.
+
+State is tracked with two empty marker files in `~/.config/edgee/`:
+
+- `statusline-claude.installed`: set after the first auto-install; gates repeats.
+- `statusline-claude.disabled`: set by `disable`; tells the launch flow to skip auto-install too.
+
+### Coexistence with project-level statuslines
+
+Claude Code only renders **one** `statusLine`, picked by strict precedence: enterprise > project `.claude/settings.local.json` > project `.claude/settings.json` > user `~/.claude/settings.json`. Any project that defines its own `statusLine` (via project hooks, in-house scripts, or third-party statusline tools) will completely shadow Edgee's user-level statusline.
+
+Edgee ships a generic merge wrapper so the two can coexist:
+
+```bash
+# In any project where Edgee is shadowed by a project-level statusLine:
+edgee statusline claude doctor   # report: NONE / WRAPPED / SHADOWED
+edgee statusline claude fix      # write .claude/settings.local.json with an Edgee overlay
+```
+
+`edgee statusline claude fix` writes a `statusLine.command` of the form `edgee statusline wrap '<original>'` into `.claude/settings.local.json` (per-user, gitignored). The shared `.claude/settings.json` is **never** touched. Each Claude Code refresh then runs Edgee's renderer and the wrapped command in parallel and merges their outputs into a single line.
+
+**Precedence guarantee:** Edgee's segment is always emitted and is never the one that gets truncated. The wrapped command's output is truncated with `…` to fit the remaining `COLUMNS` budget, ANSI- and Unicode-aware (CJK and emoji are correctly counted as wide). If the wrapped command times out, errors, or returns nothing, only Edgee's segment renders.
+
+The `SessionStart` hook installed by `edgee statusline claude install` (or by the auto-install on first launch) prints a single warning line whenever the current project's statusLine shadows Edgee, and stays silent otherwise.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EDGEE_STATUSLINE_TIMEOUT_MS` | `2000` | Total timeout for the wrap merge (Edgee + wrapped command). |
+| `EDGEE_STATUSLINE_SEPARATOR` | `" │ "` | String inserted between Edgee's segment and the wrapped output. |
+| `EDGEE_STATUSLINE_POSITION` | `left` | Either `left` (Edgee on the left, wrapped truncated on the right; recommended) or `right`. |
+| `EDGEE_STATUSLINE_PASS_STDERR` | unset | Set to `1` to forward the wrapped command's stderr to the terminal (off by default). |
+| `EDGEE_STATUSLINE_MIN_WRAPPED_WIDTH` | `10` | When the wrapped budget falls below this many cells, drop the wrapped output rather than show a stub. |
+| `EDGEE_NO_AUTO_OVERLAY` | unset | Set to `1` to make `edgee statusline claude fix` print the suggested overlay instead of writing it (for users who manage `.claude` via dotfiles). |
+| `EDGEE_SILENCE_CONFLICT_WARNING` | unset | Set to `1` to silence the `SessionStart` warning. Per-user via shell env, or per-project via `.claude/settings.local.json`'s `env` block. |
 
 ---
 
@@ -136,6 +207,31 @@ If you're looking for a local-first compression tool, [check out RTK directly](h
 
 ---
 
+## Repository layout
+
+```
+crates/
+  cli/                 # edgee binary (auth, launch, stats, alias)
+  gateway-core/        # canonical types, Provider trait, passthrough services
+  compressor/          # pure compression library, no I/O
+  compression-layer/   # Tower Layer/Service applying compression in-flight
+  gateway-http/        # Axum HTTP boundary
+doc/
+  architecture.md      # Tower service chain design document
+```
+
+| Crate | Purpose |
+|---|---|
+| `edgee-cli` | `edgee` binary; launches coding agents, manages auth and stats |
+| `edgee-ai-gateway-core` | Canonical types, `Provider` trait, Anthropic and OpenAI passthrough services |
+| `edgee-compressor` | Pure compression library; per-tool and per-command strategies |
+| `edgee-compression-layer` | Tower `Layer`/`Service` that applies compression to in-flight requests |
+| `edgee-gateway-http` | axum-core HTTP boundary; converts raw HTTP into the internal `PassthroughRequest` type |
+
+See [`doc/architecture.md`](doc/architecture.md) for the full Tower service chain design and request flow.
+
+---
+
 ## Contributing
 
 Edgee is Apache 2.0 licensed and we genuinely want your contributions.
@@ -152,6 +248,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide. For bigger changes, o
 
 ## Community
 
-- [Discord](https://www.edgee.ai/discord) — fastest way to get help
-- [GitHub Issues](https://github.com/edgee-ai/edgee/issues) — bugs and feature requests
-- [Twitter / X](https://twitter.com/edgee_ai) — updates and releases
+- [Discord](https://www.edgee.ai/discord): fastest way to get help
+- [GitHub Issues](https://github.com/edgee-ai/edgee/issues): bugs and feature requests
+- [Twitter / X](https://twitter.com/edgee_ai): updates and releases

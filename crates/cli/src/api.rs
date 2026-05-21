@@ -105,6 +105,28 @@ impl ApiClient {
         resp.json().await.context("Invalid API key response")
     }
 
+    pub async fn set_session_cli_version(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        version: &str,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/v1/organizations/{}/sessions/{}/cli-version",
+            self.base_url, org_id, session_id
+        );
+        let body = serde_json::json!({ "version": version });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to report CLI version")?;
+        check_status(&resp, "report CLI version")?;
+        Ok(())
+    }
+
     pub async fn get_session_stats(&self, org_id: &str, session_id: &str) -> Result<SessionStats> {
         let url = format!(
             "{}/v1/organizations/{}/sessions/{}/end",
