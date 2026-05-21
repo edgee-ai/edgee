@@ -1,4 +1,10 @@
-//! Core LLM request→response pipeline for the Edgee AI Gateway.
+//! Core LLM request/response pipeline for the Edgee AI Gateway.
+//!
+//! # Canonical format
+//!
+//! All types use the **OpenAI Chat Completions** schema as the canonical interchange
+//! format. [`types::request::CompletionRequest`] also accepts the `input` alias for
+//! `messages`, making it compatible with the OpenAI Responses API.
 //!
 //! # Architecture
 //!
@@ -26,11 +32,16 @@
 //!
 //! # Passthrough
 //!
-//! Two additional Tower services handle the passthrough path, where requests
-//! arrive in provider-native format and are forwarded without translation:
+//! Two Tower services handle the passthrough path, where requests arrive in
+//! provider-native format and are forwarded without format translation. Both
+//! strip hop-by-hop and gateway-internal headers before forwarding (see
+//! [`passthrough::SKIP_HEADERS`]).
 //!
 //! - [`passthrough::anthropic::AnthropicPassthroughService`]  — `POST /v1/messages`
 //! - [`passthrough::openai::OpenAIPassthroughService`]        — `POST /v1/responses`
+//!
+//! > **Note:** [`service::ProviderDispatchService`] is currently a stub.
+//! > The working request path today is the passthrough path above.
 //!
 //! # Platform compatibility
 //!
