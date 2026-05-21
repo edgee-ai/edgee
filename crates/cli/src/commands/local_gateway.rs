@@ -14,6 +14,8 @@ use std::net::IpAddr;
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
 
+use edgee_gateway_core::Region;
+
 #[derive(Debug, clap::Parser)]
 pub struct Options {
     /// Port to bind
@@ -23,6 +25,24 @@ pub struct Options {
     /// Address to bind
     #[arg(long, default_value = "127.0.0.1")]
     pub bind: IpAddr,
+
+    /// Data residency region for hosted gateway traffic routing.
+    /// Values: us, eu, apac. Defaults to us.
+    #[arg(long, value_parser = parse_region)]
+    pub region: Option<Region>,
+}
+
+fn parse_region(s: &str) -> Result<Region, String> {
+    Region::parse(s).ok_or_else(|| {
+        format!(
+            "invalid region '{s}'. Supported regions: {}",
+            Region::ALL
+                .iter()
+                .map(|r| r.short_code())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -38,9 +58,13 @@ pub async fn run(opts: Options) -> Result<()> {
         );
     }
 
+    let region = opts.region.unwrap_or_default();
+    tracing::info!(%region, "starting local gateway");
+
     let handle = crate::local_gateway::start((opts.bind, opts.port).into()).await?;
     let addr = handle.addr;
     eprintln!("edgee local-gateway listening on http://{addr}");
+    eprintln!("Region: {region}");
     eprintln!("Press Ctrl+C to stop.");
 
     tokio::signal::ctrl_c().await?;
