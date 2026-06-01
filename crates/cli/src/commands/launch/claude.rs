@@ -97,7 +97,7 @@ pub async fn run(opts: Options) -> Result<()> {
             repo_origin.as_deref(),
             &session_url,
         ));
-        cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitHubRepo");
+        cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitRepo");
     }
 
     cmd.args(&opts.args);
@@ -191,7 +191,7 @@ You MUST use the following Edgee MCP tools during this session:
 
     if let Some(repo) = repo {
         prompt.push_str(&format!(
-            "\n\n3. `setSessionGitHubRepo` — call this EXACTLY ONCE at the start of the session, together with (or right after) `setSessionName`. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
+            "\n\n3. `setSessionGitRepo` — call this EXACTLY ONCE at the start of the session, together with (or right after) `setSessionName`. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
         ));
     }
 
