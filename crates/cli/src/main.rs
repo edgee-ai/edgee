@@ -6,6 +6,8 @@ mod commands;
 mod config;
 mod git;
 mod local_gateway;
+#[cfg(feature = "self-update")]
+mod version_check;
 
 #[derive(Debug, Parser)]
 #[command(name = "edgee", about = "Edgee CLI", version)]
@@ -33,6 +35,12 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "default".to_string());
 
     config::set_active_profile(profile);
+
+    // Nudge about newer releases, except when the user is already updating.
+    #[cfg(feature = "self-update")]
+    if !matches!(opts.command, commands::Command::SelfUpdate(_)) {
+        version_check::maybe_notify().await;
+    }
 
     commands::run(opts.command).await
 }
