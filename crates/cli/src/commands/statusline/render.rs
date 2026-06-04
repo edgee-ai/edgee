@@ -3,9 +3,11 @@
 //! Reads the Claude Code session JSON from stdin (currently ignored — we use
 //! `EDGEE_SESSION_ID` from the environment), fetches a per-session summary
 //! from the Edgee API (with an on-disk cache), and prints a single line of
-//! ANSI-colored text. When the session ID is missing, the network call fails,
-//! and no cached value is available, the renderer prints the bare Edgee
-//! marker. It must never crash and must always exit 0.
+//! ANSI-colored text. When `EDGEE_SESSION_ID` is missing — e.g. Claude was
+//! launched without `edgee launch` — the renderer emits no output so Claude
+//! Code hides the statusline entirely. When the session ID is present but the
+//! network call fails and no cached value is available, the bare Edgee marker
+//! is shown. The renderer must never crash and must always exit 0.
 
 use std::fs;
 use std::io::Read;
@@ -38,7 +40,9 @@ pub async fn run() -> anyhow::Result<()> {
     let _ = drain_stdin();
 
     let line = render_with_separator(env_separator()).await;
-    println!("{line}");
+    if !line.is_empty() {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -55,7 +59,9 @@ pub async fn render_line() -> String {
 async fn render_with_separator(prefix: &str) -> String {
     let session_id = std::env::var("EDGEE_SESSION_ID").unwrap_or_default();
     if session_id.is_empty() {
-        return format!("{prefix}{PURPLE}三 Edgee{RESET}");
+        // No Edgee session in scope (Claude launched outside `edgee launch`).
+        // Emit nothing so Claude Code hides the statusline entirely.
+        return String::new();
     }
 
     let stats = fetch_or_cache(&session_id).await;
@@ -169,6 +175,7 @@ fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
 
@@ -208,5 +215,18 @@ mod tests {
     fn format_with_separator_prefix() {
         let s = format_line("| ", None);
         assert!(s.starts_with("| "));
+    }
+
+    #[tokio::test]
+    async fn render_without_session_id_is_empty() {
+        let _lock = crate::commands::claude_settings::env_test_lock();
+        unsafe {
+            std::env::remove_var("EDGEE_SESSION_ID");
+        }
+        let s = render_with_separator("").await;
+        assert!(
+            s.is_empty(),
+            "expected empty render with no session, got {s:?}"
+        );
     }
 }

@@ -331,7 +331,11 @@ mod tests {
         // Make sure unrelated env vars don't leak between tests.
         unsafe {
             std::env::remove_var("EDGEE_NO_AUTO_OVERLAY");
-            std::env::remove_var("EDGEE_SESSION_ID");
+            // A session ID is required for Edgee to render anything; pair it
+            // with an unreachable API so the network probe fails fast and the
+            // renderer falls back to the bare marker.
+            std::env::set_var("EDGEE_SESSION_ID", "test-session");
+            std::env::set_var("EDGEE_CONSOLE_API_URL", "http://127.0.0.1:1");
             std::env::remove_var("EDGEE_HAS_EXISTING_STATUSLINE");
             std::env::remove_var("EDGEE_STATUSLINE_TIMEOUT_MS");
             std::env::set_var("COLUMNS", "200");
@@ -376,6 +380,8 @@ mod tests {
         unsafe {
             std::env::remove_var("COLUMNS");
             std::env::remove_var("EDGEE_STATUSLINE_SEPARATOR");
+            std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::remove_var("EDGEE_CONSOLE_API_URL");
         }
     }
 

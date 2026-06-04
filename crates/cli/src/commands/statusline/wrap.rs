@@ -45,7 +45,9 @@ impl Position {
 pub async fn run(command: String) -> Result<()> {
     let stdin = read_stdin();
     let line = run_merge(command, stdin).await;
-    println!("{line}");
+    if !line.is_empty() {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -210,6 +212,12 @@ pub(crate) fn merge_outputs(input: MergeInputs<'_>) -> String {
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned);
 
+    // When Edgee is silent (no session in scope), defer entirely to the
+    // wrapped statusline — no orphan separator, no stray blank line.
+    if edgee.is_empty() {
+        return wrapped.unwrap_or_default();
+    }
+
     // Edgee precedence guarantee: when wrapped is missing or empty, render
     // Edgee alone with no orphan separator.
     let Some(wrapped) = wrapped else {
@@ -244,8 +252,10 @@ pub(crate) fn merge_outputs(input: MergeInputs<'_>) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
+    use crate::commands::claude_settings::env_test_lock as env_lock;
 
     fn inputs<'a>(
         edgee: &str,
@@ -405,18 +415,26 @@ mod tests {
 
     #[tokio::test]
     async fn run_merge_falls_back_to_edgee_on_wrapped_failure() {
+        let _lock = env_lock();
         unsafe {
-            std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::set_var("EDGEE_SESSION_ID", "test-session");
+            std::env::set_var("EDGEE_CONSOLE_API_URL", "http://127.0.0.1:1");
         }
         let line = run_merge("exit 1".to_string(), Vec::new()).await;
         assert!(line.contains("Edgee"));
         assert!(!line.contains(" │ "));
+        unsafe {
+            std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::remove_var("EDGEE_CONSOLE_API_URL");
+        }
     }
 
     #[tokio::test]
     async fn run_merge_combines_when_both_succeed() {
+        let _lock = env_lock();
         unsafe {
-            std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::set_var("EDGEE_SESSION_ID", "test-session");
+            std::env::set_var("EDGEE_CONSOLE_API_URL", "http://127.0.0.1:1");
             std::env::set_var("COLUMNS", "200");
             std::env::set_var("EDGEE_STATUSLINE_SEPARATOR", " | ");
         }
@@ -424,19 +442,52 @@ mod tests {
         assert!(line.contains("Edgee"));
         assert!(line.contains("OTHER"));
         assert!(line.contains(" | "));
+        unsafe {
+            std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::remove_var("EDGEE_CONSOLE_API_URL");
+        }
     }
 
     #[tokio::test]
     async fn run_merge_times_out_wrapped_command() {
+        let _lock = env_lock();
         unsafe {
-            std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::set_var("EDGEE_SESSION_ID", "test-session");
+            std::env::set_var("EDGEE_CONSOLE_API_URL", "http://127.0.0.1:1");
             std::env::set_var("EDGEE_STATUSLINE_TIMEOUT_MS", "100");
         }
         let line = run_merge("sleep 2".to_string(), Vec::new()).await;
         // After timeout, Edgee should still render alone (no orphan separator).
         assert!(line.contains("Edgee"));
         unsafe {
+            std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::remove_var("EDGEE_CONSOLE_API_URL");
             std::env::remove_var("EDGEE_STATUSLINE_TIMEOUT_MS");
         }
+    }
+
+    #[tokio::test]
+    async fn run_merge_without_session_defers_to_wrapped() {
+        // No EDGEE_SESSION_ID → Edgee renders nothing; wrapped statusline
+        // takes over alone, with no orphan separator and no Edgee marker.
+        let _lock = env_lock();
+        unsafe {
+            std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::set_var("COLUMNS", "200");
+            std::env::set_var("EDGEE_STATUSLINE_SEPARATOR", " | ");
+        }
+        let line = run_merge("printf OTHER".to_string(), Vec::new()).await;
+        assert_eq!(line, "OTHER");
+    }
+
+    #[tokio::test]
+    async fn run_merge_without_session_and_wrapped_failure_is_empty() {
+        // No session AND wrapped command fails → nothing to render.
+        let _lock = env_lock();
+        unsafe {
+            std::env::remove_var("EDGEE_SESSION_ID");
+        }
+        let line = run_merge("exit 1".to_string(), Vec::new()).await;
+        assert!(line.is_empty());
     }
 }
