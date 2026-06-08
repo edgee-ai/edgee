@@ -182,7 +182,11 @@ pub async fn run(opts: Options) -> Result<()> {
         .map(|c| c.api_key.is_empty())
         .unwrap_or(true)
     {
-        crate::commands::auth::login::ensure_provider_key("opencode").await?;
+        let created = crate::commands::auth::login::ensure_provider_key("opencode").await?;
+        // First-run onboarding — only when the key was just created.
+        if created {
+            crate::commands::auth::login::ensure_onboarded("opencode").await?;
+        }
         creds = crate::config::read()?;
     }
 

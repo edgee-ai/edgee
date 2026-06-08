@@ -24,6 +24,20 @@ struct ListResponse<T> {
 pub struct ApiKeyItem {
     pub id: String,
     pub key: Option<String>,
+    /// True only when the get-or-create endpoint minted a new key (omitted/false
+    /// when an existing key was returned). Gates first-run onboarding.
+    #[serde(default)]
+    pub created: bool,
+}
+
+/// Compression techniques to apply to a coding-agent key. Each flag maps to a
+/// composable technique on the gateway; the wizard sets all three explicitly so
+/// the user's choice fully determines the key configuration.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Compression {
+    pub tool_result_trimming: bool,
+    pub tool_surface_reduction: bool,
+    pub output_brevity: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +117,29 @@ impl ApiClient {
             .context("Failed to get or create API key")?;
         check_status(&resp, "get or create API key")?;
         resp.json().await.context("Invalid API key response")
+    }
+
+    /// Applies the chosen compression techniques to an existing coding-agent key.
+    pub async fn update_key_compression(
+        &self,
+        org_id: &str,
+        key_id: &str,
+        compression: &Compression,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/v1/organizations/{}/api_keys/{}",
+            self.base_url, org_id, key_id
+        );
+        let body = serde_json::json!({ "compression": compression });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to update key compression")?;
+        check_status(&resp, "update key compression")?;
+        Ok(())
     }
 
     pub async fn set_session_cli_version(
