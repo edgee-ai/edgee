@@ -168,9 +168,150 @@ pub async fn ensure_mcp_preference() -> Result<()> {
     Ok(())
 }
 
+/// First-run onboarding: let the user pick which compression techniques to enable
+/// on this agent's key.
+///
+/// Only meaningful for a freshly created key — callers gate this on the `created`
+/// flag from [`ensure_provider_key`], so each agent (claude/codex/opencode) prompts
+/// once when its key is first minted. Best-effort: any API/IO error is reported but
+/// never blocks launching the coding agent.
+pub async fn ensure_onboarded(provider: &str) -> Result<()> {
+    let creds = crate::config::read()?;
+
+    let provider_cfg = match provider {
+        "claude" => creds.claude.as_ref(),
+        "codex" => creds.codex.as_ref(),
+        "opencode" => creds.opencode.as_ref(),
+        _ => anyhow::bail!("Unsupported provider `{provider}`"),
+    };
+
+    let user_token = match creds.user_token.as_deref().filter(|t| !t.is_empty()) {
+        Some(t) => t.to_string(),
+        None => return Ok(()),
+    };
+    let org_id = match creds.org_id.as_deref().filter(|o| !o.is_empty()) {
+        Some(o) => o.to_string(),
+        None => return Ok(()),
+    };
+    let key_id = match provider_cfg.and_then(|c| c.api_key_id.clone()) {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+
+    let compression = match run_compression_wizard(agent_label(provider))? {
+        Some(c) => c,
+        None => return Ok(()), // user aborted
+    };
+
+    let client = crate::api::ApiClient::new(&user_token)?;
+    if let Err(e) = client
+        .update_key_compression(&org_id, &key_id, &compression)
+        .await
+    {
+        eprintln!(
+            "  {} {}",
+            style("Could not apply compression settings:").yellow(),
+            style(e).dim()
+        );
+        return Ok(());
+    }
+
+    // No per-key deep link exists, so point at the org console root.
+    let console_url = match creds.org_slug.as_deref().filter(|s| !s.is_empty()) {
+        Some(slug) => format!("{}/~/{}", crate::config::console_base_url(), slug),
+        None => format!("{}/~/me", crate::config::console_base_url()),
+    };
+
+    println!();
+    println!(
+        "  {} {}",
+        style("✓").green().bold(),
+        style("Compression configured. You can fine-tune it per key anytime at").dim()
+    );
+    println!("  {}", style(console_url).cyan().underlined());
+    println!();
+
+    Ok(())
+}
+
+/// Display name for a provider, used in onboarding copy.
+fn agent_label(provider: &str) -> &'static str {
+    match provider {
+        "claude" => "Claude Code",
+        "codex" => "Codex",
+        "opencode" => "OpenCode",
+        _ => "your agent",
+    }
+}
+
+/// Renders the first-run welcome + compression multiselect for a given agent.
+/// Returns the chosen techniques, or `None` if the user aborts.
+fn run_compression_wizard(agent: &str) -> Result<Option<crate::api::Compression>> {
+    use dialoguer::MultiSelect;
+
+    println!();
+    println!(
+        "  {}",
+        style(format!("Set up compression for {agent} 🎉")).bold()
+    );
+    println!(
+        "{}",
+        style(
+            r#"  Edgee compresses the token-heavy traffic between your coding agent
+  and the LLM provider, on the fly.
+
+  Pick which techniques to enable for this key — you can combine them.
+"#
+        )
+        .dim()
+    );
+
+    // (label, default-on). Order is preserved in the returned selection indices.
+    let options: [(&str, bool); 3] = [
+        ("Tool results compression — trims verbose tool outputs (recommended)", true),
+        ("Tool surface reduction — shrinks tool/MCP definitions sent to the model", false),
+        ("Output brevity — nudges the model toward more concise responses", false),
+    ];
+    let items: Vec<&str> = options.iter().map(|(label, _)| *label).collect();
+    let defaults: Vec<bool> = options.iter().map(|(_, on)| *on).collect();
+
+    // The default ColorfulTheme uses a `⬚` glyph for unchecked items that renders
+    // as tofu/boxes in many terminals — use plain ASCII brackets instead.
+    let theme = ColorfulTheme {
+        checked_item_prefix: style("[x]".to_string()).for_stderr().green(),
+        unchecked_item_prefix: style("[ ]".to_string()).for_stderr().dim(),
+        ..ColorfulTheme::default()
+    };
+
+    let selected = MultiSelect::with_theme(&theme)
+        .with_prompt("Select compression (space to toggle, enter to confirm)")
+        .items(&items)
+        .defaults(&defaults)
+        .interact_opt()?;
+
+    let selected = match selected {
+        Some(s) => s,
+        None => return Ok(None), // user pressed Esc / aborted
+    };
+
+    Ok(Some(compression_from_selection(&selected)))
+}
+
+/// Maps multiselect indices (0/1/2) to the compression techniques they represent.
+fn compression_from_selection(selected: &[usize]) -> crate::api::Compression {
+    crate::api::Compression {
+        tool_result_trimming: selected.contains(&0),
+        tool_surface_reduction: selected.contains(&1),
+        output_brevity: selected.contains(&2),
+    }
+}
+
 /// Creates a gateway API key for the given provider if one doesn't exist yet.
 /// Requires that the user is already authenticated (user_token + org_id set).
-pub async fn ensure_provider_key(provider: &str) -> Result<()> {
+///
+/// Returns `true` when a brand-new key was minted (vs an existing one returned),
+/// so callers can run first-run onboarding only for freshly created keys.
+pub async fn ensure_provider_key(provider: &str) -> Result<bool> {
     let mut creds = crate::config::read()?;
 
     let user_token = creds.user_token.as_deref().filter(|t| !t.is_empty())
@@ -183,6 +324,7 @@ pub async fn ensure_provider_key(provider: &str) -> Result<()> {
     let client = crate::api::ApiClient::new(user_token)?;
     let key_item = client.get_or_create_key(org_id, assistant_name).await
         .context(format!("Failed to get or create {} API key", assistant_name))?;
+    let created = key_item.created;
     let api_key = key_item.key
         .ok_or_else(|| anyhow::anyhow!("API key response did not include a key value"))?;
 
@@ -194,7 +336,7 @@ pub async fn ensure_provider_key(provider: &str) -> Result<()> {
     provider_config_mut(&mut creds, provider)?.replace(provider_config);
     crate::config::write(&creds)?;
 
-    Ok(())
+    Ok(created)
 }
 
 fn coding_assistant_name(provider: &str) -> Result<&'static str> {
@@ -379,6 +521,24 @@ mod tests {
         assert_eq!(coding_assistant_name("codex").unwrap(), "codex");
         assert_eq!(coding_assistant_name("opencode").unwrap(), "opencode");
         assert!(coding_assistant_name("unknown").is_err());
+    }
+
+    #[test]
+    fn maps_multiselect_indices_to_compression() {
+        let none = compression_from_selection(&[]);
+        assert!(!none.tool_result_trimming);
+        assert!(!none.tool_surface_reduction);
+        assert!(!none.output_brevity);
+
+        let recommended = compression_from_selection(&[0]);
+        assert!(recommended.tool_result_trimming);
+        assert!(!recommended.tool_surface_reduction);
+        assert!(!recommended.output_brevity);
+
+        let all = compression_from_selection(&[0, 1, 2]);
+        assert!(all.tool_result_trimming);
+        assert!(all.tool_surface_reduction);
+        assert!(all.output_brevity);
     }
 
     #[test]
