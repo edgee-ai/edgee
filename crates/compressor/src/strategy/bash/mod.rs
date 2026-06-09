@@ -10,13 +10,20 @@ mod docker;
 mod env;
 mod eslint;
 mod find;
+mod gh;
+mod git;
 mod go;
+mod golangci_lint;
 mod grep;
+mod jest;
 mod ls;
+mod make;
+mod mypy;
 mod npm;
 mod psql;
 mod pytest;
 mod rg;
+mod ruff;
 mod tree;
 mod tsc;
 
@@ -36,7 +43,9 @@ pub fn compressor_for(base_command: &str) -> Option<&'static dyn BashCompressor>
         "find" => Some(&find::FindCompressor),
         "grep" => Some(&grep::GrepCompressor),
         "rg" => Some(&rg::RgCompressor),
-        "diff" | "git" => Some(&diff::DiffCompressor),
+        "diff" => Some(&diff::DiffCompressor),
+        "git" => Some(&git::GitCompressor),
+        "gh" => Some(&gh::GhCompressor),
         "cargo" => Some(&cargo::CargoCompressor),
         "docker" => Some(&docker::DockerCompressor),
         "env" | "printenv" => Some(&env::EnvCompressor),
@@ -47,6 +56,11 @@ pub fn compressor_for(base_command: &str) -> Option<&'static dyn BashCompressor>
         "eslint" => Some(&eslint::EslintCompressor),
         "go" => Some(&go::GoCompressor),
         "curl" => Some(&curl::CurlCompressor),
+        "jest" | "vitest" => Some(&jest::JestCompressor),
+        "ruff" => Some(&ruff::RuffCompressor),
+        "mypy" => Some(&mypy::MypyCompressor),
+        "golangci-lint" | "golangci_lint" => Some(&golangci_lint::GolangciLintCompressor),
+        "make" | "gmake" => Some(&make::MakeCompressor),
         _ => None,
     }
 }
