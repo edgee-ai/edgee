@@ -1,31 +1,21 @@
 //! Bash command output compressors.
 //!
-//! Each shell command that can be compressed gets its own module
-//! implementing the `BashCompressor` trait.
+//! Commands are grouped by ecosystem:
+//! - `fs`     — ls, find, tree, grep, rg
+//! - `vcs`    — diff, git, gh
+//! - `rust`   — cargo
+//! - `python` — pytest, mypy, ruff
+//! - `js`     — npm, jest, tsc, eslint
+//! - `go`     — go, golangci-lint
+//! - `sys`    — docker, env, curl, make, psql
 
-mod cargo;
-mod curl;
-mod diff;
-mod docker;
-mod env;
-mod eslint;
-mod find;
-mod gh;
-mod git;
+mod fs;
 mod go;
-mod golangci_lint;
-mod grep;
-mod jest;
-mod ls;
-mod make;
-mod mypy;
-mod npm;
-mod psql;
-mod pytest;
-mod rg;
-mod ruff;
-mod tree;
-mod tsc;
+mod js;
+mod python;
+mod rust;
+mod sys;
+mod vcs;
 
 /// Trait for compressing the output of a specific bash command.
 pub trait BashCompressor {
@@ -38,29 +28,29 @@ pub trait BashCompressor {
 /// Returns `None` for commands we don't compress.
 pub fn compressor_for(base_command: &str) -> Option<&'static dyn BashCompressor> {
     match base_command {
-        "ls" => Some(&ls::LsCompressor),
-        "tree" => Some(&tree::TreeCompressor),
-        "find" => Some(&find::FindCompressor),
-        "grep" => Some(&grep::GrepCompressor),
-        "rg" => Some(&rg::RgCompressor),
-        "diff" => Some(&diff::DiffCompressor),
-        "git" => Some(&git::GitCompressor),
-        "gh" => Some(&gh::GhCompressor),
-        "cargo" => Some(&cargo::CargoCompressor),
-        "docker" => Some(&docker::DockerCompressor),
-        "env" | "printenv" => Some(&env::EnvCompressor),
-        "npm" | "pnpm" | "npx" => Some(&npm::NpmCompressor),
-        "pytest" | "python" => Some(&pytest::PytestCompressor),
-        "psql" => Some(&psql::PsqlCompressor),
-        "tsc" => Some(&tsc::TscCompressor),
-        "eslint" => Some(&eslint::EslintCompressor),
+        "ls" => Some(&fs::LsCompressor),
+        "tree" => Some(&fs::TreeCompressor),
+        "find" => Some(&fs::FindCompressor),
+        "grep" => Some(&fs::GrepCompressor),
+        "rg" => Some(&fs::RgCompressor),
+        "diff" => Some(&vcs::DiffCompressor),
+        "git" => Some(&vcs::GitCompressor),
+        "gh" => Some(&vcs::GhCompressor),
+        "cargo" => Some(&rust::CargoCompressor),
+        "docker" => Some(&sys::DockerCompressor),
+        "env" | "printenv" => Some(&sys::EnvCompressor),
+        "npm" | "pnpm" | "npx" => Some(&js::NpmCompressor),
+        "pytest" | "python" => Some(&python::PytestCompressor),
+        "psql" => Some(&sys::PsqlCompressor),
+        "tsc" => Some(&js::TscCompressor),
+        "eslint" => Some(&js::EslintCompressor),
         "go" => Some(&go::GoCompressor),
-        "curl" => Some(&curl::CurlCompressor),
-        "jest" | "vitest" => Some(&jest::JestCompressor),
-        "ruff" => Some(&ruff::RuffCompressor),
-        "mypy" => Some(&mypy::MypyCompressor),
-        "golangci-lint" | "golangci_lint" => Some(&golangci_lint::GolangciLintCompressor),
-        "make" | "gmake" => Some(&make::MakeCompressor),
+        "curl" => Some(&sys::CurlCompressor),
+        "jest" | "vitest" => Some(&js::JestCompressor),
+        "ruff" => Some(&python::RuffCompressor),
+        "mypy" => Some(&python::MypyCompressor),
+        "golangci-lint" | "golangci_lint" => Some(&go::GolangciLintCompressor),
+        "make" | "gmake" => Some(&sys::MakeCompressor),
         _ => None,
     }
 }
