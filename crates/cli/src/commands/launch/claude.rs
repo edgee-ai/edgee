@@ -89,6 +89,7 @@ pub async fn run(opts: Options) -> Result<()> {
         "EDGEE_CONSOLE_API_URL",
         crate::config::console_api_base_url(),
     );
+    cmd.env("ENABLE_TOOL_SEARCH", "true");
 
     // Step 5: conditionally set up MCP integration
     let use_mcp = creds.enable_mcp.unwrap_or(false);
