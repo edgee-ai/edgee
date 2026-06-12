@@ -95,7 +95,12 @@ pub async fn run(opts: Options) -> Result<()> {
     if use_mcp {
         let mcp_config_path = write_mcp_config(&creds)?;
         cmd.arg("--mcp-config").arg(&mcp_config_path);
-        let session_url = format!("{}/session/{session_id}", crate::config::console_base_url());
+        let session_url = match creds.org_slug.as_deref() {
+            Some(slug) if !slug.is_empty() => {
+                format!("{}/sessions/{slug}/{session_id}", crate::config::console_base_url())
+            }
+            _ => format!("{}/sessions/{session_id}", crate::config::console_base_url()),
+        };
         cmd.arg("--append-system-prompt").arg(system_prompt(
             &session_id,
             repo_origin.as_deref(),
