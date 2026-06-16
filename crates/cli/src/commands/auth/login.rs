@@ -235,7 +235,7 @@ pub async fn ensure_onboarded(provider: &str) -> Result<()> {
 }
 
 /// Display name for a provider, used in onboarding copy.
-fn agent_label(provider: &str) -> &'static str {
+pub fn agent_label(provider: &str) -> &'static str {
     match provider {
         "claude" => "Claude Code",
         "codex" => "Codex",
@@ -312,6 +312,13 @@ fn compression_from_selection(selected: &[usize]) -> crate::api::Compression {
 /// Returns `true` when a brand-new key was minted (vs an existing one returned),
 /// so callers can run first-run onboarding only for freshly created keys.
 pub async fn ensure_provider_key(provider: &str) -> Result<bool> {
+    Ok(fetch_provider_key(provider).await?.created)
+}
+
+/// Like [`ensure_provider_key`] but returns the full key item, so callers can
+/// read the key's current server-side settings (compression/fallback/reroutes).
+/// Ensures the key exists and persists it into the active profile as a side effect.
+pub async fn fetch_provider_key(provider: &str) -> Result<crate::api::ApiKeyItem> {
     let mut creds = crate::config::read()?;
 
     let user_token = creds.user_token.as_deref().filter(|t| !t.is_empty())
@@ -324,19 +331,18 @@ pub async fn ensure_provider_key(provider: &str) -> Result<bool> {
     let client = crate::api::ApiClient::new(user_token)?;
     let key_item = client.get_or_create_key(org_id, assistant_name).await
         .context(format!("Failed to get or create {} API key", assistant_name))?;
-    let created = key_item.created;
-    let api_key = key_item.key
+    let api_key = key_item.key.clone()
         .ok_or_else(|| anyhow::anyhow!("API key response did not include a key value"))?;
 
     let provider_config = crate::config::ProviderConfig {
         api_key,
-        api_key_id: Some(key_item.id),
+        api_key_id: Some(key_item.id.clone()),
         connection: None,
     };
     provider_config_mut(&mut creds, provider)?.replace(provider_config);
     crate::config::write(&creds)?;
 
-    Ok(created)
+    Ok(key_item)
 }
 
 fn coding_assistant_name(provider: &str) -> Result<&'static str> {
