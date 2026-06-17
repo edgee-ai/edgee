@@ -74,6 +74,37 @@ pub struct ModelRoute {
     pub model: String,
 }
 
+/// A BYOK provider key (`GET /v1/organizations/{org}/provider-keys`). Only the
+/// fields needed to mark catalog models available via the user's own keys are read.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderKey {
+    pub provider: String,
+    #[serde(default)]
+    pub active: bool,
+}
+
+/// Subset of `GET /v1/organizations/{org}/billing` used to decide whether the org
+/// has paid access to AI Gateway routing (fallback/reroute).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OrgBilling {
+    #[serde(default)]
+    pub ai_gateway_plan: Option<String>,
+    #[serde(default)]
+    pub ai_gateway_subscription_status: Option<String>,
+}
+
+impl OrgBilling {
+    /// A non-free plan, or an active trial, grants routing access.
+    pub fn is_paying(&self) -> bool {
+        let paid_plan = matches!(
+            self.ai_gateway_plan.as_deref(),
+            Some("team") | Some("enterprise") | Some("custom")
+        );
+        let trialing = self.ai_gateway_subscription_status.as_deref() == Some("trial");
+        paid_plan || trialing
+    }
+}
+
 /// A model in the gateway catalog (`GET /v1/models`). Only the fields needed to
 /// derive a selectable routing identifier are deserialized.
 #[derive(Debug, Clone, Deserialize)]
@@ -88,6 +119,10 @@ pub struct GatewayModel {
     pub providers: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub active: bool,
+    /// Whether the model is covered by the user's plan for fallback/reroute.
+    /// Plan-covered models are offered first in the settings pickers.
+    #[serde(default)]
+    pub plan_fallback: bool,
 }
 
 impl GatewayModel {
@@ -185,7 +220,10 @@ impl ApiClient {
         Ok(body.data)
     }
 
-    /// Lists the gateway model catalog. Used to offer fallback/reroute targets.
+    /// Lists the gateway model catalog (with `plan_fallback`, `aliases`, etc.) used
+    /// to offer fallback/reroute targets. Served by the console API
+    /// (`console_api_base_url`, e.g. `api.edgee.app`) — not the gateway, whose
+    /// `/v1/models` is the stripped OpenAI listing.
     pub async fn list_models(&self) -> Result<Vec<GatewayModel>> {
         let url = format!("{}/v1/models", self.base_url);
         let resp = self
@@ -196,6 +234,39 @@ impl ApiClient {
             .context("Failed to list models")?;
         check_status(&resp, "list models")?;
         resp.json().await.context("Invalid models response")
+    }
+
+    /// Lists the org's BYOK provider keys. Used to flag catalog models reachable
+    /// through the user's own keys. Returns a raw array (no `{ data: [...] }` wrapper).
+    pub async fn list_provider_keys(&self, org_id: &str) -> Result<Vec<ProviderKey>> {
+        let url = format!(
+            "{}/v1/organizations/{}/provider-keys",
+            self.base_url, org_id
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to list provider keys")?;
+        check_status(&resp, "list provider keys")?;
+        resp.json().await.context("Invalid provider keys response")
+    }
+
+    /// Whether the org has a paid AI Gateway plan (or active trial), which is what
+    /// unlocks fallback/reroute. Mirrors the console's `useAIGatewayPaying`: a
+    /// non-free `ai_gateway_plan` or a `trial` subscription status counts as paying.
+    pub async fn org_is_paying(&self, org_id: &str) -> Result<bool> {
+        let url = format!("{}/v1/organizations/{}/billing", self.base_url, org_id);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch billing")?;
+        check_status(&resp, "fetch billing")?;
+        let billing: OrgBilling = resp.json().await.context("Invalid billing response")?;
+        Ok(billing.is_paying())
     }
 
     pub async fn get_or_create_key(
@@ -217,29 +288,6 @@ impl ApiClient {
             .context("Failed to get or create API key")?;
         check_status(&resp, "get or create API key")?;
         resp.json().await.context("Invalid API key response")
-    }
-
-    /// Applies the chosen compression techniques to an existing coding-agent key.
-    pub async fn update_key_compression(
-        &self,
-        org_id: &str,
-        key_id: &str,
-        compression: &Compression,
-    ) -> Result<()> {
-        let url = format!(
-            "{}/v1/organizations/{}/api_keys/{}",
-            self.base_url, org_id, key_id
-        );
-        let body = serde_json::json!({ "compression": compression });
-        let resp = self
-            .http
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to update key compression")?;
-        check_status(&resp, "update key compression")?;
-        Ok(())
     }
 
     /// Applies the full settings bundle (compression + fallback + reroutes) to an
@@ -363,5 +411,34 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
             anyhow::bail!("Not found while trying to {action}. The resource may have been deleted.")
         }
         _ => anyhow::bail!("Failed to {action}: HTTP {status}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn billing(plan: Option<&str>, status: Option<&str>) -> OrgBilling {
+        OrgBilling {
+            ai_gateway_plan: plan.map(str::to_string),
+            ai_gateway_subscription_status: status.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn is_paying_for_non_free_plans_and_trial() {
+        assert!(billing(Some("team"), None).is_paying());
+        assert!(billing(Some("enterprise"), None).is_paying());
+        assert!(billing(Some("custom"), None).is_paying());
+        // Trial counts even with a free/absent plan.
+        assert!(billing(Some("free"), Some("trial")).is_paying());
+        assert!(billing(None, Some("trial")).is_paying());
+    }
+
+    #[test]
+    fn not_paying_for_free_or_absent_plan() {
+        assert!(!billing(Some("free"), Some("active")).is_paying());
+        assert!(!billing(None, None).is_paying());
+        assert!(!billing(None, Some("cancelled")).is_paying());
     }
 }
