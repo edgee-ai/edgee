@@ -22,6 +22,8 @@ setup_commands! {
     ///
     /// Local dev only. No auth, no TLS, no rate limiting.
     LocalGateway(local_gateway),
+    /// Configure compression, fallback, and reroute settings for a coding-agent key
+    Settings(settings),
     /// Show stored session stats
     #[command(visible_alias = "report")]
     Stats(stats),
