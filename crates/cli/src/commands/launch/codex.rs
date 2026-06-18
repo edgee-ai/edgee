@@ -25,22 +25,14 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // Step 1b: ensure an org is selected (handles partial state after aborted login)
     crate::commands::auth::login::ensure_org_selected().await?;
-    creds = crate::config::read()?;
 
-    // Step 2: ensure we have an api_key for Codex
-    if creds
-        .codex
-        .as_ref()
-        .map(|c| c.api_key.is_empty())
-        .unwrap_or(true)
-    {
-        let created = crate::commands::auth::login::ensure_provider_key("codex").await?;
-        // First-run onboarding — only when the key was just created.
-        if created {
-            crate::commands::auth::login::ensure_onboarded("codex").await?;
-        }
-        creds = crate::config::read()?;
+    // Step 2: ensure we have a live api_key for Codex. Re-provisions if the
+    // cached key was deleted in the console; re-runs onboarding for a fresh key.
+    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("codex").await?;
+    if reprovisioned {
+        crate::commands::auth::login::ensure_onboarded("codex").await?;
     }
+    creds = crate::config::read()?;
 
     // Step 3: ensure we have a connection choice (default to "plan" for codex)
     if creds

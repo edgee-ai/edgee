@@ -330,17 +330,13 @@ impl ApiClient {
         }
     }
 
-    /// Reads whether tool-surface reduction is enabled on a key.
+    /// Fetches a single coding-agent key by id.
     ///
-    /// Returns `None` when the backend doesn't report the flag (older response
-    /// shape, missing `compression` block, etc.). The response is read loosely as
-    /// JSON so a differently-shaped `compression` value (e.g. a bare bool) degrades
-    /// to `None` rather than failing the whole launch.
-    pub async fn get_key_tool_surface_reduction(
-        &self,
-        org_id: &str,
-        key_id: &str,
-    ) -> Result<Option<bool>> {
+    /// `Ok(None)` means the key no longer exists (HTTP 404) — e.g. it was deleted
+    /// in the console — so the caller can re-provision it. `Err` is reserved for
+    /// transient/other failures (network, auth, 5xx) where the key's existence is
+    /// unknown and the caller must not assume it's gone.
+    pub async fn get_key_by_id(&self, org_id: &str, key_id: &str) -> Result<Option<ApiKeyItem>> {
         let url = format!(
             "{}/v1/organizations/{}/api_keys/{}",
             self.base_url, org_id, key_id
@@ -351,12 +347,14 @@ impl ApiClient {
             .send()
             .await
             .context("Failed to fetch API key")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
         check_status(&resp, "fetch API key")?;
-        let body: serde_json::Value = resp.json().await.context("Invalid API key response")?;
-        Ok(body
-            .get("compression")
-            .and_then(|c| c.get("tool_surface_reduction"))
-            .and_then(serde_json::Value::as_bool))
+        resp.json()
+            .await
+            .map(Some)
+            .context("Invalid API key response")
     }
 
     pub async fn set_session_cli_version(
