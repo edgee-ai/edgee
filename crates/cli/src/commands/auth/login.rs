@@ -171,10 +171,11 @@ pub async fn ensure_mcp_preference() -> Result<()> {
 /// First-run onboarding: let the user pick which compression techniques to enable
 /// on this agent's key.
 ///
-/// Only meaningful for a freshly created key — callers gate this on the `created`
-/// flag from [`ensure_provider_key`], so each agent (claude/codex/opencode) prompts
-/// once when its key is first minted. Best-effort: any API/IO error is reported but
-/// never blocks launching the coding agent.
+/// Only meaningful for a freshly minted key — callers gate this on the
+/// re-provision signal from [`ensure_valid_provider_key`], so each agent
+/// (claude/codex/opencode) prompts when its key is first created or recreated.
+/// Best-effort: any API/IO error is reported but never blocks launching the
+/// coding agent.
 pub async fn ensure_onboarded(provider: &str) -> Result<()> {
     let creds = crate::config::read()?;
 
@@ -209,17 +210,48 @@ pub fn agent_label(provider: &str) -> &'static str {
     }
 }
 
-/// Creates a gateway API key for the given provider if one doesn't exist yet.
-/// Requires that the user is already authenticated (user_token + org_id set).
+/// Ensures the active profile holds an API key that still exists server-side,
+/// re-provisioning it if the cached key was deleted in the console.
 ///
-/// Returns `true` when a brand-new key was minted (vs an existing one returned),
-/// so callers can run first-run onboarding only for freshly created keys.
-pub async fn ensure_provider_key(provider: &str) -> Result<bool> {
-    Ok(fetch_provider_key(provider).await?.created)
+/// Returns `true` when a fresh key was minted this launch — either because the
+/// cache was empty (first run for this agent) or because the cached key is gone
+/// — so callers can (re-)run first-run onboarding. A cached key is validated by
+/// id; only a definitive not-found triggers re-provisioning. Transient errors
+/// keep the existing key so a network blip never wipes a valid setup.
+pub async fn ensure_valid_provider_key(provider: &str) -> Result<bool> {
+    let creds = crate::config::read()?;
+
+    let cached = provider_config(&creds, provider)?;
+    let cached_key_present = cached.is_some_and(|c| !c.api_key.is_empty());
+    let cached_key_id = cached.and_then(|c| c.api_key_id.clone());
+
+    // No usable cached key → mint one (first run for this agent).
+    if !cached_key_present {
+        return Ok(fetch_provider_key(provider).await?.created);
+    }
+
+    // Validate the cached key still exists. Without a key id (older configs) we
+    // can't check, so we trust the cache rather than risk wiping a live key.
+    let (Some(token), Some(org_id), Some(key_id)) = (
+        creds.user_token.as_deref().filter(|t| !t.is_empty()),
+        creds.org_id.as_deref().filter(|o| !o.is_empty()),
+        cached_key_id.as_deref(),
+    ) else {
+        return Ok(false);
+    };
+
+    let client = crate::api::ApiClient::new(token)?;
+    match client.get_key_by_id(org_id, key_id).await {
+        // Key was deleted in the console → re-provision and signal the caller to
+        // re-run onboarding for the fresh key.
+        Ok(None) => Ok(fetch_provider_key(provider).await?.created),
+        // Key still exists, or the server was unreachable → keep the cached key.
+        Ok(Some(_)) | Err(_) => Ok(false),
+    }
 }
 
-/// Like [`ensure_provider_key`] but returns the full key item, so callers can
-/// read the key's current server-side settings (compression/fallback/reroutes).
+/// Gets-or-creates the provider key and returns the full key item, so callers
+/// can read the key's current server-side settings (compression/fallback/reroutes).
 /// Ensures the key exists and persists it into the active profile as a side effect.
 pub async fn fetch_provider_key(provider: &str) -> Result<crate::api::ApiKeyItem> {
     let mut creds = crate::config::read()?;
@@ -265,6 +297,18 @@ fn provider_config_mut<'a>(
         "claude" => Ok(&mut creds.claude),
         "codex" => Ok(&mut creds.codex),
         "opencode" => Ok(&mut creds.opencode),
+        _ => anyhow::bail!("Unsupported provider `{provider}`"),
+    }
+}
+
+fn provider_config<'a>(
+    creds: &'a crate::config::Credentials,
+    provider: &str,
+) -> Result<Option<&'a crate::config::ProviderConfig>> {
+    match provider {
+        "claude" => Ok(creds.claude.as_ref()),
+        "codex" => Ok(creds.codex.as_ref()),
+        "opencode" => Ok(creds.opencode.as_ref()),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
     }
 }
