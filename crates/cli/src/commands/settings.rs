@@ -336,7 +336,8 @@ fn run_settings_wizard(
         ),
         (
             "Output brevity — nudges the model toward more concise responses",
-            current.compression.output_brevity,
+            // Default ON for a fresh setup; preserve the saved choice when reconfiguring.
+            first_run || current.compression.output_brevity,
         ),
     ];
     let comp_items: Vec<&str> = comp_options.iter().map(|(l, _)| *l).collect();
