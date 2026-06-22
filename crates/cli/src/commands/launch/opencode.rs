@@ -131,8 +131,53 @@ fn find_user_config() -> Option<Value> {
     None
 }
 
-fn build_edgee_provider(api_key: &str, session_id: &str, gateway_url: &str) -> Value {
-    serde_json::json!({
+#[derive(serde::Deserialize)]
+struct GatewayModelList {
+    #[serde(default)]
+    data: Vec<GatewayModelEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct GatewayModelEntry {
+    id: String,
+}
+
+/// Fetches the gateway's OpenAI-style `/v1/models` listing so the OpenCode
+/// provider config can be populated with a concrete `models` map. The endpoint
+/// is public today; the api key is sent anyway to stay correct if it ever
+/// starts requiring auth. Returns an empty vec on any failure so launch falls
+/// back to a provider with no explicit `models` map.
+async fn fetch_gateway_models(gateway_url: &str, api_key: &str) -> Vec<String> {
+    let url = format!("{}/v1/models", gateway_url);
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let resp = match client.get(&url).header("x-edgee-api-key", api_key).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => return Vec::new(),
+    };
+    match resp.json::<GatewayModelList>().await {
+        Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn build_edgee_provider(
+    api_key: &str,
+    session_id: &str,
+    gateway_url: &str,
+    models: &[String],
+) -> Value {
+    // The provider is `@ai-sdk/openai-compatible` pointed at the gateway's
+    // `/v1`. We fill the `models` map from the gateway's `/v1/models` listing so
+    // OpenCode's picker is populated with the live catalog. The gateway `id`
+    // (e.g. `anthropic/claude-opus-4-8`) is already the routing identifier the
+    // gateway accepts, so it serves as both the map key and the display name.
+    let mut provider = serde_json::json!({
         "npm": "@ai-sdk/openai-compatible",
         "name": "Edgee",
         "options": {
@@ -142,25 +187,18 @@ fn build_edgee_provider(api_key: &str, session_id: &str, gateway_url: &str) -> V
                 "x-edgee-api-key": api_key,
                 "x-edgee-session-id": session_id,
             }
-        },
-        "models": {
-            "anthropic/claude-haiku-4-5": {
-                "name": "Claude Haiku 4.5 (via Edgee)"
-            },
-            "anthropic/claude-opus-4-6": {
-                "name": "Claude Opus 4.6 (via Edgee)"
-            },
-            "anthropic/claude-sonnet-4-6": {
-                "name": "Claude Sonnet 4.6 (via Edgee)"
-            },
-            "openai/gpt-5.4": {
-                "name": "GPT-5.4 (via Edgee)"
-            },
-            "openai/gpt-5.3-codex": {
-                "name": "GPT-5.3 Codex (via Edgee)"
-            },
         }
-    })
+    });
+
+    if !models.is_empty() {
+        let mut models_map = serde_json::Map::new();
+        for id in models {
+            models_map.insert(id.clone(), serde_json::json!({ "name": id }));
+        }
+        provider["models"] = Value::Object(models_map);
+    }
+
+    provider
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -212,7 +250,8 @@ pub async fn run(opts: Options) -> Result<()> {
         })
     });
 
-    let edgee_provider = build_edgee_provider(api_key, &session_id, &gateway_url);
+    let models = fetch_gateway_models(&gateway_url, api_key).await;
+    let edgee_provider = build_edgee_provider(api_key, &session_id, &gateway_url, &models);
 
     if let Some(obj) = config.as_object_mut() {
         if let Some(providers) = obj.get_mut("provider") {
