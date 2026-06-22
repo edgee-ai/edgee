@@ -284,7 +284,7 @@ pub fn gateway_base_url() -> String {
     read()
         .ok()
         .and_then(|p| p.gateway_url)
-        .unwrap_or_else(|| "https://api.edgee.ai".to_string())
+        .unwrap_or_else(|| "https://edgee.io".to_string())
 }
 
 pub fn mcp_base_url() -> String {
