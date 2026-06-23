@@ -7,7 +7,7 @@ Core LLM request/response pipeline for the Edgee AI Gateway.
 This crate is the foundation that all other gateway crates build on. It defines the canonical request/response types (OpenAI Chat Completions format), the `Provider` trait, and the two working passthrough services for Anthropic and OpenAI. It has no hard dependency on tokio or reqwest, making it portable to any async runtime including `wasm32-wasip1`.
 
 ```
-coding agent (Claude Code / Codex / OpenCode)
+coding agent (Claude Code / CodeBuddy / Codex / OpenCode)
         |
   compression-layer (edgee-compression-layer)
         |
