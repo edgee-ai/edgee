@@ -20,7 +20,7 @@ If `edgee stats` fails, you have the wrong package installed.
 
 Entry point: `crates/cli/src/main.rs`. Subcommands declared in `crates/cli/src/commands/mod.rs`:
 
-- `edgee launch {claude|codex|opencode}` — launches the agent with `ANTHROPIC_BASE_URL` and custom headers pointing at the local gateway. Implementation per agent under `crates/cli/src/commands/launch/`.
+- `edgee launch {claude|codex|opencode|crush}` — launches the agent with `ANTHROPIC_BASE_URL` and custom headers pointing at the local gateway. Implementation per agent under `crates/cli/src/commands/launch/`.
 - `edgee auth {login|status|list|switch}` — OAuth-style flow against the Edgee console. See `crates/cli/src/api.rs` and `crates/cli/src/commands/auth/`.
 - `edgee stats` (visible alias `report`) — prints session token counts and compression savings.
 - `edgee alias` — installs shell aliases for quick access.

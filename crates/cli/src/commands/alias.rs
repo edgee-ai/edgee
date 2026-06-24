@@ -15,8 +15,9 @@ const USES_SHIMS: bool = cfg!(unix);
 const CLAUDE_ALIAS: AliasSpec = AliasSpec::new("claude", "edgee launch claude");
 const CODEX_ALIAS: AliasSpec = AliasSpec::new("codex", "edgee launch codex");
 const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch opencode");
+const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush");
 
-const ALL_ALIASES: [AliasSpec; 3] = [CLAUDE_ALIAS, CODEX_ALIAS, OPENCODE_ALIAS];
+const ALL_ALIASES: [AliasSpec; 4] = [CLAUDE_ALIAS, CODEX_ALIAS, OPENCODE_ALIAS, CRUSH_ALIAS];
 
 const PATH_EXPORT_POSIX: &str = "case \":$PATH:\" in\n  *\":$HOME/.edgee/bin:\"*) ;;\n  *) export PATH=\"$HOME/.edgee/bin:$PATH\" ;;\nesac\n";
 const PATH_EXPORT_FISH: &str = "fish_add_path -p \"$HOME/.edgee/bin\"\n";
@@ -26,6 +27,7 @@ pub enum Agent {
     Claude,
     Codex,
     Opencode,
+    Crush,
     All,
 }
 
@@ -35,6 +37,7 @@ impl Agent {
             Self::Claude => std::slice::from_ref(&CLAUDE_ALIAS),
             Self::Codex => std::slice::from_ref(&CODEX_ALIAS),
             Self::Opencode => std::slice::from_ref(&OPENCODE_ALIAS),
+            Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
             Self::All => &ALL_ALIASES,
         }
     }
@@ -44,7 +47,8 @@ impl Agent {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Opencode => "opencode",
-            Self::All => "claude, codex, and opencode",
+            Self::Crush => "crush",
+            Self::All => "claude, codex, opencode, and crush",
         }
     }
 }

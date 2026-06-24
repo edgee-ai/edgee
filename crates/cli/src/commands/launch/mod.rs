@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod crush;
 pub mod opencode;
 mod util;
 
@@ -17,6 +18,8 @@ enum Command {
     /// Launch OpenCode routed through Edgee
     #[command(name = "opencode")]
     OpenCode(opencode::Options),
+    /// Launch Crush routed through Edgee
+    Crush(crush::Options),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -30,6 +33,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Claude(o) => claude::run(o).await,
         Command::Codex(o) => codex::run(o).await,
         Command::OpenCode(o) => opencode::run(o).await,
+        Command::Crush(o) => crush::run(o).await,
     }
 }
 
