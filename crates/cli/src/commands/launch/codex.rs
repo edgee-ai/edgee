@@ -67,7 +67,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let repo_entry = crate::git::detect_origin()
         .map(|url| format!(",\"x-edgee-repo\"=\"{url}\""))
         .unwrap_or_default();
-    let base_url = format!("{}/v1", crate::config::gateway_base_url());
+    let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
     let mut cmd = std::process::Command::new(util::resolve_binary("codex"));
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.args([

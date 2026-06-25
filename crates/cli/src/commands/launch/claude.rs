@@ -70,8 +70,9 @@ pub async fn run(opts: Options) -> Result<()> {
 
     util::spawn_cli_version_report(&creds, &session_id);
 
+    let gateway_url = super::resolve_gateway_base_url(&creds).await;
     let mut cmd = std::process::Command::new(util::resolve_binary("claude"));
-    cmd.env("ANTHROPIC_BASE_URL", crate::config::gateway_base_url());
+    cmd.env("ANTHROPIC_BASE_URL", &gateway_url);
     cmd.env(
         "ANTHROPIC_CUSTOM_HEADERS",
         format!("x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}"),
