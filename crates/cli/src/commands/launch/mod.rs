@@ -90,14 +90,22 @@ async fn print_session_stats(
 
 /// Resolves the gateway base URL for a launch.
 ///
-/// Precedence (highest first): the org's console-configured `gateway_api_url`,
-/// then an explicit local override (`EDGEE_API_URL` env or the profile's
-/// `gateway_url`), then the built-in default. The server value is authoritative
-/// when set; the local override only applies as a fallback (offline, no org
-/// selected, or the org has no configured gateway). The org fetch is
-/// best-effort: any failure falls through to the next source so launch never
-/// breaks.
+/// Precedence (highest first):
+/// 1. `EDGEE_API_URL` env var — the explicit escape hatch (local debugging,
+///    incident response). It outranks the server so an operator can always
+///    force a value.
+/// 2. The org's console-configured `gateway_api_url` — central, admin-managed
+///    default for the normal case.
+/// 3. The active profile's persisted `gateway_url`.
+/// 4. The built-in default.
+///
+/// The org fetch is best-effort: any failure falls through to the next source
+/// so launch never breaks (offline, no org selected, or no configured gateway).
 pub async fn resolve_gateway_base_url(creds: &crate::config::Credentials) -> String {
+    if let Some(env_url) = crate::config::gateway_url_env_override() {
+        return env_url;
+    }
+
     if let (Some(token), Some(org_id)) = (
         creds.user_token.as_deref().filter(|t| !t.is_empty()),
         creds.org_id.as_deref().filter(|o| !o.is_empty()),
@@ -111,8 +119,8 @@ pub async fn resolve_gateway_base_url(creds: &crate::config::Credentials) -> Str
         }
     }
 
-    if let Some(local) = crate::config::gateway_url_local_override() {
-        return local;
+    if let Some(profile_url) = crate::config::gateway_url_profile_override() {
+        return profile_url;
     }
 
     crate::config::DEFAULT_GATEWAY_URL.to_string()

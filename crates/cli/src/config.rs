@@ -282,16 +282,20 @@ pub fn console_api_base_url() -> String {
 /// org-configured gateway URL is available.
 pub const DEFAULT_GATEWAY_URL: &str = "https://api.edgee.ai";
 
-/// An explicit *local* gateway override, if one is set: the `EDGEE_API_URL` env
-/// var (highest priority) or the active profile's `gateway_url`. The launch path
-/// layers the org's console-configured gateway below this and above the default;
-/// see `commands::launch::resolve_gateway_base_url`.
-pub fn gateway_url_local_override() -> Option<String> {
-    if let Ok(v) = std::env::var("EDGEE_API_URL") {
-        if !v.is_empty() {
-            return Some(v);
-        }
-    }
+/// The `EDGEE_API_URL` env-var gateway override, if set and non-empty. This is
+/// the explicit escape hatch (e.g. pointing at `http://localhost:5000` for local
+/// debugging) and outranks everything, including the org's console-configured
+/// gateway; see `commands::launch::resolve_gateway_base_url`.
+pub fn gateway_url_env_override() -> Option<String> {
+    std::env::var("EDGEE_API_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// The active profile's persisted `gateway_url`, if set and non-empty. This is a
+/// stored preference, so the launch path layers it *below* the org's
+/// console-configured gateway and above the built-in default.
+pub fn gateway_url_profile_override() -> Option<String> {
     read()
         .ok()
         .and_then(|p| p.gateway_url)
