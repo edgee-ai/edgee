@@ -292,9 +292,10 @@ pub fn gateway_url_env_override() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// The active profile's persisted `gateway_url`, if set and non-empty. This is a
-/// stored preference, so the launch path layers it *below* the org's
-/// console-configured gateway and above the built-in default.
+/// The active profile's persisted `gateway_url`, if set and non-empty. A local
+/// user preference: the launch path layers it above the org's console-configured
+/// gateway and below the `EDGEE_API_URL` env override; see
+/// `commands::launch::resolve_gateway_base_url`.
 pub fn gateway_url_profile_override() -> Option<String> {
     read()
         .ok()
