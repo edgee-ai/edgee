@@ -41,6 +41,21 @@ impl Position {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    Inline,
+    Stacked,
+}
+
+impl Layout {
+    fn from_env() -> Self {
+        match std::env::var("EDGEE_STATUSLINE_LAYOUT").ok().as_deref() {
+            Some("stacked") => Self::Stacked,
+            _ => Self::Inline,
+        }
+    }
+}
+
 /// Public entrypoint for the `--wrap` flag.
 pub async fn run(command: String) -> Result<()> {
     let stdin = read_stdin();
@@ -71,6 +86,7 @@ async fn run_merge(command: String, stdin: Vec<u8>) -> String {
     let separator =
         std::env::var("EDGEE_STATUSLINE_SEPARATOR").unwrap_or_else(|_| DEFAULT_SEPARATOR.to_string());
     let position = Position::from_env();
+    let layout = Layout::from_env();
     let columns = detect_columns();
     let min_wrapped = parse_env_usize(
         "EDGEE_STATUSLINE_MIN_WRAPPED_WIDTH",
@@ -103,9 +119,13 @@ async fn run_merge(command: String, stdin: Vec<u8>) -> String {
 
     merge_outputs(MergeInputs {
         edgee: trim_to_one_line(&edgee_out),
-        wrapped: wrapped_out.as_deref().map(trim_to_one_line),
+        wrapped: wrapped_out.as_deref().map(|s| match layout {
+            Layout::Stacked => s.trim_end().to_string(),
+            Layout::Inline => trim_to_one_line(s),
+        }),
         separator: &separator,
         position,
+        layout,
         columns,
         min_wrapped_width: min_wrapped,
     })
@@ -199,6 +219,7 @@ pub(crate) struct MergeInputs<'a> {
     pub wrapped: Option<String>,
     pub separator: &'a str,
     pub position: Position,
+    pub layout: Layout,
     pub columns: usize,
     pub min_wrapped_width: usize,
 }
@@ -223,6 +244,14 @@ pub(crate) fn merge_outputs(input: MergeInputs<'_>) -> String {
     let Some(wrapped) = wrapped else {
         return edgee;
     };
+
+    // Stacked layout: each segment gets its own line; no width constraints apply.
+    if input.layout == Layout::Stacked {
+        return match input.position {
+            Position::Left => format!("{edgee}\n{wrapped}"),
+            Position::Right => format!("{wrapped}\n{edgee}"),
+        };
+    }
 
     let edgee_width = display_width(&edgee);
     let separator_width = display_width(input.separator);
@@ -269,6 +298,24 @@ mod tests {
             wrapped: wrapped.map(str::to_string),
             separator,
             position,
+            layout: Layout::Inline,
+            columns,
+            min_wrapped_width: DEFAULT_MIN_WRAPPED_WIDTH,
+        }
+    }
+
+    fn stacked_inputs<'a>(
+        edgee: &str,
+        wrapped: Option<&str>,
+        position: Position,
+        columns: usize,
+    ) -> MergeInputs<'a> {
+        MergeInputs {
+            edgee: edgee.to_string(),
+            wrapped: wrapped.map(str::to_string),
+            separator: " | ",
+            position,
+            layout: Layout::Stacked,
             columns,
             min_wrapped_width: DEFAULT_MIN_WRAPPED_WIDTH,
         }
@@ -489,5 +536,46 @@ mod tests {
         }
         let line = run_merge("exit 1".to_string(), Vec::new()).await;
         assert!(line.is_empty());
+    }
+
+    #[test]
+    fn merge_stacked_both_left() {
+        let s = merge_outputs(stacked_inputs("EDGEE", Some("OTHER"), Position::Left, 5));
+        assert_eq!(s, "EDGEE\nOTHER");
+    }
+
+    #[test]
+    fn merge_stacked_both_right() {
+        let s = merge_outputs(stacked_inputs("EDGEE", Some("OTHER"), Position::Right, 5));
+        assert_eq!(s, "OTHER\nEDGEE");
+    }
+
+    #[test]
+    fn merge_stacked_no_wrapped_emits_edgee_alone() {
+        let s = merge_outputs(stacked_inputs("EDGEE", None, Position::Left, 5));
+        assert_eq!(s, "EDGEE");
+    }
+
+    #[test]
+    fn merge_stacked_preserves_multiline_wrapped() {
+        let s = merge_outputs(stacked_inputs(
+            "EDGEE",
+            Some("LINE1\nLINE2"),
+            Position::Left,
+            80,
+        ));
+        assert_eq!(s, "EDGEE\nLINE1\nLINE2");
+    }
+
+    #[test]
+    fn merge_stacked_ignores_column_width() {
+        // columns=5 is far too narrow for inline, but stacked never truncates.
+        let s = merge_outputs(stacked_inputs(
+            "EDGEE_SEGMENT_LONG",
+            Some("WRAPPED_SEGMENT_ALSO_LONG"),
+            Position::Left,
+            5,
+        ));
+        assert_eq!(s, "EDGEE_SEGMENT_LONG\nWRAPPED_SEGMENT_ALSO_LONG");
     }
 }
