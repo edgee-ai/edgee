@@ -119,7 +119,10 @@ async fn run_merge(command: String, stdin: Vec<u8>) -> String {
 
     merge_outputs(MergeInputs {
         edgee: trim_to_one_line(&edgee_out),
-        wrapped: wrapped_out.as_deref().map(trim_to_one_line),
+        wrapped: wrapped_out.as_deref().map(|s| match layout {
+            Layout::Stacked => s.trim_end().to_string(),
+            Layout::Inline => trim_to_one_line(s),
+        }),
         separator: &separator,
         position,
         layout,
@@ -551,6 +554,17 @@ mod tests {
     fn merge_stacked_no_wrapped_emits_edgee_alone() {
         let s = merge_outputs(stacked_inputs("EDGEE", None, Position::Left, 5));
         assert_eq!(s, "EDGEE");
+    }
+
+    #[test]
+    fn merge_stacked_preserves_multiline_wrapped() {
+        let s = merge_outputs(stacked_inputs(
+            "EDGEE",
+            Some("LINE1\nLINE2"),
+            Position::Left,
+            80,
+        ));
+        assert_eq!(s, "EDGEE\nLINE1\nLINE2");
     }
 
     #[test]
