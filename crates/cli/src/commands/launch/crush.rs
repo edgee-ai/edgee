@@ -187,7 +187,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // exactly once (Claude Code-targeted; honors the disable marker).
     util::ensure_first_run_installed().await;
 
-    let gateway_url = crate::config::gateway_base_url();
+    let gateway_url = super::resolve_gateway_base_url(&creds).await;
 
     let mut config = find_global_config().unwrap_or_else(|| {
         serde_json::json!({

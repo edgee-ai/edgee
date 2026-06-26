@@ -13,6 +13,11 @@ pub struct Organization {
     pub id: String,
     pub slug: String,
     pub name: String,
+    /// The gateway base URL configured for this org in the console (region or
+    /// self-hosted). Absent/empty when never set; the launch path then falls
+    /// back to a local override or the built-in default.
+    #[serde(default, rename = "gateway_api_url")]
+    pub gateway_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -218,6 +223,21 @@ impl ApiClient {
         let body: ListResponse<Organization> =
             resp.json().await.context("Invalid organization response")?;
         Ok(body.data)
+    }
+
+    /// Fetches a single organization (`GET /v1/organizations/{org}`). Used at
+    /// launch to read the org's configured `gateway_api_url` fresh, so a console
+    /// change takes effect on the next launch without re-login.
+    pub async fn get_organization(&self, org_id: &str) -> Result<Organization> {
+        let url = format!("{}/v1/organizations/{}", self.base_url, org_id);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch organization")?;
+        check_status(&resp, "fetch organization")?;
+        resp.json().await.context("Invalid organization response")
     }
 
     /// Lists the gateway model catalog (with `plan_fallback`, `aliases`, etc.) used

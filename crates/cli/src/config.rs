@@ -278,14 +278,29 @@ pub fn console_api_base_url() -> String {
         .unwrap_or_else(|| "https://api.edgee.app".to_string())
 }
 
-pub fn gateway_base_url() -> String {
-    if let Ok(v) = std::env::var("EDGEE_API_URL") {
-        return v;
-    }
+/// Built-in fallback gateway used when neither a local override nor an
+/// org-configured gateway URL is available.
+pub const DEFAULT_GATEWAY_URL: &str = "https://api.edgee.ai";
+
+/// The `EDGEE_API_URL` env-var gateway override, if set and non-empty. This is
+/// the explicit escape hatch (e.g. pointing at `http://localhost:5000` for local
+/// debugging) and outranks everything, including the org's console-configured
+/// gateway; see `commands::launch::resolve_gateway_base_url`.
+pub fn gateway_url_env_override() -> Option<String> {
+    std::env::var("EDGEE_API_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// The active profile's persisted `gateway_url`, if set and non-empty. A local
+/// user preference: the launch path layers it above the org's console-configured
+/// gateway and below the `EDGEE_API_URL` env override; see
+/// `commands::launch::resolve_gateway_base_url`.
+pub fn gateway_url_profile_override() -> Option<String> {
     read()
         .ok()
         .and_then(|p| p.gateway_url)
-        .unwrap_or_else(|| "https://api.edgee.ai".to_string())
+        .filter(|s| !s.is_empty())
 }
 
 pub fn mcp_base_url() -> String {
