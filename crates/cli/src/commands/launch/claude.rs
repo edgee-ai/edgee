@@ -71,7 +71,6 @@ pub async fn run(opts: Options) -> Result<()> {
     util::spawn_cli_version_report(&creds, &session_id);
 
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
-    println!("edgee: gateway URL -> {gateway_url}");
     let mut cmd = std::process::Command::new(util::resolve_binary("claude"));
     cmd.env("ANTHROPIC_BASE_URL", &gateway_url);
     cmd.env(
