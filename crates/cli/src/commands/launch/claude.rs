@@ -83,15 +83,6 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::config::console_api_base_url(),
     );
 
-    // Claude Code's native tool search shrinks the tool surface the same way the
-    // gateway's tool-surface-reduction technique does. Running both is redundant
-    // and can hide tools, so enable tool search only when this key isn't already
-    // doing surface reduction. Best-effort: if the key's config can't be read,
-    // fall back to enabling it (the prior default).
-    if !key_has_tool_surface_reduction(&creds).await {
-        cmd.env("ENABLE_TOOL_SEARCH", "true");
-    }
-
     // Step 5: conditionally set up MCP integration
     let use_mcp = creds.enable_mcp.unwrap_or(false);
     if use_mcp {
@@ -130,31 +121,6 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Fetches the Claude key's compression config and reports whether tool-surface
-/// reduction is enabled on it. Best-effort: any missing credential, network
-/// error, or unreported flag resolves to `false` so launch is never blocked.
-async fn key_has_tool_surface_reduction(creds: &crate::config::Credentials) -> bool {
-    let (Some(token), Some(org_id), Some(key_id)) = (
-        creds.user_token.as_deref().filter(|t| !t.is_empty()),
-        creds.org_id.as_deref().filter(|o| !o.is_empty()),
-        creds.claude.as_ref().and_then(|c| c.api_key_id.as_deref()),
-    ) else {
-        return false;
-    };
-
-    match crate::api::ApiClient::new(token) {
-        Ok(client) => client
-            .get_key_by_id(org_id, key_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|k| k.compression)
-            .map(|c| c.tool_surface_reduction)
-            .unwrap_or(false),
-        Err(_) => false,
-    }
 }
 
 /// Launch Claude Code routed through a local gateway. Session tracking,
