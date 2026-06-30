@@ -3,7 +3,7 @@ pub mod codebuddy;
 pub mod codex;
 pub mod crush;
 pub mod opencode;
-mod util;
+pub(crate) mod util;
 
 use anyhow::Result;
 use console::style;
