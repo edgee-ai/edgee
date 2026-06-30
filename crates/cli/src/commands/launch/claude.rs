@@ -10,12 +10,22 @@ pub struct Options {
     #[arg(long)]
     pub local_gateway: bool,
 
+    /// Launch through a local relay (MITM) proxy — same as `edgee relay claude`.
+    #[cfg(feature = "relay")]
+    #[arg(long)]
+    pub relay: bool,
+
     /// Extra args passed through to the claude CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
 
 pub async fn run(opts: Options) -> Result<()> {
+    #[cfg(feature = "relay")]
+    if opts.relay {
+        return crate::commands::relay::run_for_agent("claude").await;
+    }
+
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
