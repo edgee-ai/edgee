@@ -116,6 +116,13 @@ pub fn local_gateway_log_path() -> PathBuf {
     global_data_dir().join("local-gateway.log")
 }
 
+/// Directory holding the local MITM CA used by `edgee relay`.
+/// Linux/macOS: `~/.local/share/edgee/ca` (contains `edgee-ca.pem` + `edgee-ca.key`).
+#[cfg(feature = "relay")]
+pub fn relay_ca_dir() -> PathBuf {
+    global_data_dir().join("ca")
+}
+
 /// Global credentials file path (`~/.config/edgee/credentials.toml`, etc.).
 pub fn global_credentials_path() -> PathBuf {
     global_config_dir().join("credentials.toml")

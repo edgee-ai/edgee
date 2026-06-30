@@ -29,9 +29,15 @@ setup_commands! {
     Stats(stats),
     /// Render the Edgee statusline and manage agent statusline integrations
     Statusline(statusline),
+    [cfg(feature = "relay")]
+    /// Relay LLM API traffic through the Edgee gateway via a local MITM proxy
+    #[command(hide = true)]
+    Relay(relay),
     /// Reset Edgee credentials and connection mode
     Reset(reset),
     [cfg(feature = "self-update")]
     /// Update Edgee
-    SelfUpdate(update),
+    #[command(visible_alias = "self-update")]
+    Update(update),
+
 }
