@@ -190,6 +190,23 @@ pub struct ToolCompressionStat {
     pub after: u64,
 }
 
+/// Self-serve spend-limit status for the logged-in user on an org
+/// (`GET /v1/organizations/{org}/usage-limit-status`). Always resolves to the
+/// caller, unlike the admin-only per-member settings endpoint. Used to warn
+/// the user before they hit their cap.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsageLimitStatus {
+    pub has_limit: bool,
+    #[serde(default)]
+    pub max_usage: Option<f64>,
+    #[serde(default)]
+    pub used_credits: Option<u64>,
+    #[serde(default)]
+    pub period: Option<String>,
+    #[serde(default)]
+    pub percent_used: Option<f64>,
+}
+
 impl ApiClient {
     pub fn new(token: &str) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
@@ -397,6 +414,27 @@ impl ApiClient {
             .context("Failed to report CLI version")?;
         check_status(&resp, "report CLI version")?;
         Ok(())
+    }
+
+    /// Fetches the caller's own spend-limit status on an org
+    /// (`GET /v1/organizations/{org}/usage-limit-status`). Self-serve — any
+    /// org role — so this always reports the logged-in user, not an
+    /// arbitrary member.
+    pub async fn get_usage_limit_status(&self, org_id: &str) -> Result<UsageLimitStatus> {
+        let url = format!(
+            "{}/v1/organizations/{}/usage-limit-status",
+            self.base_url, org_id
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch usage limit status")?;
+        check_status(&resp, "fetch usage limit status")?;
+        resp.json()
+            .await
+            .context("Invalid usage limit status response")
     }
 
     pub async fn get_session_stats(&self, org_id: &str, session_id: &str) -> Result<SessionStats> {
