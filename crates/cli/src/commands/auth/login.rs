@@ -207,6 +207,7 @@ pub fn agent_label(provider: &str) -> &'static str {
         "codebuddy" => "CodeBuddy",
         "codex" => "Codex",
         "opencode" => "OpenCode",
+        "crush" => "Crush",
         _ => "your agent",
     }
 }
@@ -287,6 +288,7 @@ fn coding_assistant_name(provider: &str) -> Result<&'static str> {
         "codebuddy" => Ok("codebuddy"),
         "codex" => Ok("codex"),
         "opencode" => Ok("opencode"),
+        "crush" => Ok("crush"),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
     }
 }
@@ -300,6 +302,7 @@ fn provider_config_mut<'a>(
         "codebuddy" => Ok(&mut creds.codebuddy),
         "codex" => Ok(&mut creds.codex),
         "opencode" => Ok(&mut creds.opencode),
+        "crush" => Ok(&mut creds.crush),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
     }
 }
@@ -313,6 +316,7 @@ fn provider_config<'a>(
         "codebuddy" => Ok(creds.codebuddy.as_ref()),
         "codex" => Ok(creds.codex.as_ref()),
         "opencode" => Ok(creds.opencode.as_ref()),
+        "crush" => Ok(creds.crush.as_ref()),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
     }
 }

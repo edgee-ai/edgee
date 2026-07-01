@@ -8,7 +8,7 @@ use crate::api::{ApiClient, Compression, GatewayModel, KeySettings, ModelRoute, 
 use crate::commands::auth::login;
 
 /// Coding agents whose keys can be configured. Order is reused for the interactive picker.
-const PROVIDERS: [&str; 4] = ["claude", "codebuddy", "codex", "opencode"];
+const PROVIDERS: [&str; 5] = ["claude", "codebuddy", "codex", "opencode", "crush"];
 
 #[derive(Debug, clap::Parser)]
 pub struct Options {
