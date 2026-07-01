@@ -23,42 +23,48 @@ use hudsucker::Proxy;
 
 use handler::{GatewayTarget, RelayHandler, Sink};
 
-/// Provider hosts logged by default. Inference paths on these hosts are also the
-/// only ones rerouted to the gateway.
-const DEFAULT_DOMAINS: &[&str] = &[
-    "api.anthropic.com",
-    "api.openai.com",
-    "chatgpt.com",
-];
+const PROVIDERS: &[&str] = &["claude", "codex", "vscode"];
 
-const PROVIDERS: &[&str] = &["claude", "codex"];
+/// True for the VS Code Copilot relay target (launches the `code` binary).
+fn is_copilot(agent: &str) -> bool {
+    matches!(agent, "vscode-copilot" | "copilot" | "code" | "vscode")
+}
+
+/// The Edgee provider key that backs the gateway reroute for `agent`. The VS Code
+/// Copilot aliases map to the `copilot` Edgee provider; everything else uses its
+/// own name.
+fn key_provider(agent: &str) -> &str {
+    if is_copilot(agent) {
+        "copilot"
+    } else {
+        agent
+    }
+}
 
 setup_command! {
-    /// Agent to spawn through the relay (claude|codex). Omit to run proxy-only
-    /// (e.g. for external clients like Claude Desktop). Selects which Edgee key
-    /// is injected (claude by default).
+    /// Agent / provider for the relay (claude|codex|vscode). Launched unless
+    /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
+    /// Don't spawn the agent; just run the proxy (for external clients, e.g. Claude Desktop).
+    #[arg(long)]
+    pub no_launch: bool,
     /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200)
     /// so `relay claude` and `relay codex` can run side by side.
     #[arg(long)]
     pub port: Option<u16>,
-    /// Host to log; repeatable. Defaults to the LLM provider list.
-    #[arg(long = "domain")]
-    pub domains: Vec<String>,
     /// Write relayed-traffic logs to this file (appended). If unset, logging is off.
     #[arg(long)]
     pub log_output: Option<PathBuf>,
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    // The injected Edgee key follows the relay's agent: claude when claude is the
-    // agent (or proxy-only), codex when codex is. Each spawned agent routes only
-    // through its own relay, so concurrent `relay claude` / `relay codex` (on
-    // different ports) each inject the right key without interference.
-    let provider = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
-    if !PROVIDERS.contains(&provider.as_str()) {
-        anyhow::bail!("unknown agent '{provider}' (expected claude|codex)");
+    let agent = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
+    if !PROVIDERS.contains(&agent.as_str()) {
+        anyhow::bail!("unknown agent '{agent}' (expected claude|codex|vscode)");
     }
+    // The Edgee provider key backing the gateway reroute. For VS Code Copilot this
+    // is the claude key (Copilot isn't an Edgee provider of its own).
+    let provider = key_provider(&agent).to_string();
 
     // Auth bootstrap — same flow as `edgee launch`.
     let mut creds = crate::config::read()?;
@@ -70,24 +76,43 @@ pub async fn run(opts: Options) -> Result<()> {
     if reprovisioned {
         crate::commands::auth::login::ensure_onboarded(&provider).await?;
     }
+    // VS Code can host Claude Code alongside Copilot chat. Provision the claude key
+    // too so Claude's `/v1/messages` traffic reroutes through the claude pipeline.
+    if is_copilot(&agent) {
+        let reprov = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
+        if reprov {
+            crate::commands::auth::login::ensure_onboarded("claude").await?;
+        }
+    }
     creds = crate::config::read()?;
 
     let api_key = provider_api_key(&creds, &provider).ok_or_else(|| {
         anyhow::anyhow!("no Edgee API key for '{provider}'; run `edgee auth login`")
     })?;
+    // Only wired for the VS Code relay; None elsewhere so `/v1/messages` keeps using
+    // the relay's own key.
+    let claude_api_key = if is_copilot(&agent) {
+        provider_api_key(&creds, "claude")
+    } else {
+        None
+    };
     let session_id = uuid::Uuid::new_v4().to_string();
     let repo = crate::git::detect_origin();
 
     let gateway_url = crate::commands::launch::resolve_gateway_base_url(&creds).await;
-    let gateway = build_gateway_target(&gateway_url, api_key, session_id.clone(), repo)?;
+    // Copilot has no Edgee provider pipeline; the gateway forwards its rerouted
+    // calls to Copilot's own backend, so record the original upstream.
+    let passthrough_to_upstream = is_copilot(&agent);
+    let gateway = build_gateway_target(
+        &gateway_url,
+        api_key,
+        session_id.clone(),
+        repo,
+        passthrough_to_upstream,
+        claude_api_key,
+    )?;
 
     let (cert_pem, key_pem, cert_path) = ensure_ca()?;
-    let domains: Vec<String> = if opts.domains.is_empty() {
-        DEFAULT_DOMAINS.iter().map(|s| s.to_string()).collect()
-    } else {
-        opts.domains.clone()
-    };
-
     let ca = build_ca(&cert_pem, &key_pem)?;
     let port = opts.port.unwrap_or_else(|| default_port(&provider));
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -107,11 +132,16 @@ pub async fn run(opts: Options) -> Result<()> {
         None => Sink::stdout(),
     };
 
+    // Print a live one-liner per matched request (with status) when the terminal is
+    // free: a GUI client (VS Code Copilot) or an external process (`--no-launch`).
+    // TUI agents (claude/codex) own the terminal, so stay quiet there.
+    let announce = is_copilot(&agent) || opts.no_launch;
+
     let handler = RelayHandler::new(
-        Arc::new(domains.clone()),
         sink,
         Arc::new(gateway.clone()),
         log_enabled,
+        announce,
     );
 
     let proxy = Proxy::builder()
@@ -126,7 +156,6 @@ pub async fn run(opts: Options) -> Result<()> {
     print_banner(
         &addr,
         &cert_path,
-        &domains,
         opts.log_output.as_deref(),
         &gateway,
         &session_id,
@@ -139,6 +168,9 @@ pub async fn run(opts: Options) -> Result<()> {
             proxy.start().await.context("relay proxy error")?;
         }
         Some(agent) => {
+            if is_copilot(&agent) {
+                print_copilot_hint();
+            }
             let task = tokio::spawn(async move {
                 let _ = proxy.start().await;
             });
@@ -158,8 +190,8 @@ pub async fn run(opts: Options) -> Result<()> {
 pub async fn run_for_agent(agent: &str) -> Result<()> {
     run(Options {
         agent: Some(agent.to_string()),
+        no_launch: false,
         port: None,
-        domains: Vec::new(),
         log_output: None,
     })
     .await
@@ -179,6 +211,9 @@ fn provider_api_key(creds: &crate::config::Credentials, provider: &str) -> Optio
     let p = match provider {
         "claude" => creds.claude.as_ref(),
         "codex" => creds.codex.as_ref(),
+        "opencode" => creds.opencode.as_ref(),
+        "crush" => creds.crush.as_ref(),
+        "copilot" => creds.copilot.as_ref(),
         _ => None,
     }?;
     if p.api_key.is_empty() {
@@ -194,6 +229,8 @@ fn build_gateway_target(
     api_key: String,
     session_id: String,
     repo: Option<String>,
+    passthrough_to_upstream: bool,
+    claude_api_key: Option<String>,
 ) -> Result<GatewayTarget> {
     let uri: Uri = url.parse().with_context(|| format!("parsing gateway url {url}"))?;
     let scheme = uri.scheme().cloned().unwrap_or(Scheme::HTTPS);
@@ -209,6 +246,8 @@ fn build_gateway_target(
         api_key,
         session_id,
         repo,
+        passthrough_to_upstream,
+        claude_api_key,
     })
 }
 
@@ -281,16 +320,25 @@ async fn run_agent(
     ca_path: &Path,
     session_id: &str,
 ) -> Result<std::process::ExitStatus> {
-    let bin = crate::commands::launch::util::resolve_binary(agent);
+    // VS Code Copilot launches the `code` binary. `--wait` keeps this process
+    // alive (and the proxy with it) until the editor window is closed, instead of
+    // `code` forking and returning immediately.
+    let (bin_name, args): (&str, &[&str]) = if is_copilot(agent) {
+        ("code", &["--wait"])
+    } else {
+        (agent, &[])
+    };
+    let bin = crate::commands::launch::util::resolve_binary(bin_name);
     let proxy_url = format!("http://127.0.0.1:{port}");
 
     let mut cmd = tokio::process::Command::new(bin);
+    cmd.args(args);
     cmd.env("HTTPS_PROXY", &proxy_url);
     cmd.env("HTTP_PROXY", &proxy_url);
     cmd.env("https_proxy", &proxy_url);
     cmd.env("http_proxy", &proxy_url);
     // Make each agent's TLS stack trust the relay CA without a system-store install:
-    //  - Node agents (Claude Code) read NODE_EXTRA_CA_CERTS.
+    //  - Node agents (Claude Code) and VS Code / Copilot read NODE_EXTRA_CA_CERTS.
     //  - Codex (Rust) reads CODEX_CA_CERTIFICATE / SSL_CERT_FILE for its own client;
     //    it does NOT read NODE_EXTRA_CA_CERTS.
     cmd.env("NODE_EXTRA_CA_CERTS", ca_path);
@@ -299,7 +347,7 @@ async fn run_agent(
 
     cmd.status()
         .await
-        .with_context(|| format!("failed to launch '{agent}'"))
+        .with_context(|| format!("failed to launch '{bin_name}'"))
 }
 
 async fn shutdown_signal() {
@@ -309,7 +357,6 @@ async fn shutdown_signal() {
 fn print_banner(
     addr: &SocketAddr,
     cert_path: &Path,
-    domains: &[String],
     log_output: Option<&Path>,
     gateway: &GatewayTarget,
     session_id: &str,
@@ -326,11 +373,23 @@ fn print_banner(
         "  console:  {}/sessions/{session_id}",
         crate::config::console_base_url()
     );
-    println!("  domains:  {}", domains.join(", "));
     match log_output {
         Some(p) => println!("  logs:     {}", p.display()),
         None => println!("  logs:     disabled"),
     }
+    println!();
+}
+
+fn print_copilot_hint() {
+    println!("{}", style("Launching VS Code (code --wait) behind the relay.").bold());
+    println!(
+        "  {}",
+        style("Quit any running VS Code first — the proxy env only applies to a freshly").dim()
+    );
+    println!(
+        "  {}",
+        style("spawned instance. Copilot Chat traffic then reroutes through the gateway.").dim()
+    );
     println!();
 }
 
@@ -353,7 +412,9 @@ mod tests {
 
     #[test]
     fn parses_default_gateway() {
-        let gw = build_gateway_target("https://edgee.io", "k".into(), "s".into(), None).unwrap();
+        let gw =
+            build_gateway_target("https://edgee.io", "k".into(), "s".into(), None, false, None)
+                .unwrap();
         assert_eq!(gw.scheme, Scheme::HTTPS);
         assert_eq!(gw.authority.as_str(), "edgee.io");
         assert_eq!(gw.base_path, "");
@@ -362,16 +423,38 @@ mod tests {
     #[test]
     fn parses_local_override() {
         let gw =
-            build_gateway_target("http://127.0.0.1:9999", "k".into(), "s".into(), None).unwrap();
+            build_gateway_target("http://127.0.0.1:9999", "k".into(), "s".into(), None, false, None)
+                .unwrap();
         assert_eq!(gw.scheme.as_str(), "http");
         assert_eq!(gw.authority.as_str(), "127.0.0.1:9999");
         assert_eq!(gw.base_path, "");
     }
 
     #[test]
+    fn copilot_agent_aliases_recognized() {
+        for a in ["vscode-copilot", "copilot", "code", "vscode"] {
+            assert!(is_copilot(a), "{a} should be a copilot alias");
+        }
+        assert!(!is_copilot("claude"));
+        assert!(!is_copilot("codex"));
+    }
+
+    #[test]
+    fn copilot_reroute_uses_copilot_key() {
+        for a in ["vscode-copilot", "copilot", "code", "vscode"] {
+            assert_eq!(key_provider(a), "copilot");
+        }
+        // Real providers back their own key.
+        assert_eq!(key_provider("claude"), "claude");
+        assert_eq!(key_provider("codex"), "codex");
+    }
+
+    #[test]
     fn rejects_url_without_host() {
         // A path-only URI has no authority → reroute target can't be built.
-        assert!(build_gateway_target("/no/host", "k".into(), "s".into(), None).is_err());
+        assert!(
+            build_gateway_target("/no/host", "k".into(), "s".into(), None, false, None).is_err()
+        );
     }
 }
 
