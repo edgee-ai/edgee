@@ -13,11 +13,12 @@ const SHIM_DIR_REL: &str = ".edgee/bin";
 const USES_SHIMS: bool = cfg!(unix);
 
 const CLAUDE_ALIAS: AliasSpec = AliasSpec::new("claude", "edgee launch claude");
+const CODEBUDDY_ALIAS: AliasSpec = AliasSpec::new("codebuddy", "edgee launch codebuddy");
 const CODEX_ALIAS: AliasSpec = AliasSpec::new("codex", "edgee launch codex");
 const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch opencode");
 const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush");
 
-const ALL_ALIASES: [AliasSpec; 4] = [CLAUDE_ALIAS, CODEX_ALIAS, OPENCODE_ALIAS, CRUSH_ALIAS];
+const ALL_ALIASES: [AliasSpec; 5] = [CLAUDE_ALIAS, CODEBUDDY_ALIAS, CODEX_ALIAS, OPENCODE_ALIAS, CRUSH_ALIAS];
 
 const PATH_EXPORT_POSIX: &str = "case \":$PATH:\" in\n  *\":$HOME/.edgee/bin:\"*) ;;\n  *) export PATH=\"$HOME/.edgee/bin:$PATH\" ;;\nesac\n";
 const PATH_EXPORT_FISH: &str = "fish_add_path -p \"$HOME/.edgee/bin\"\n";
@@ -25,6 +26,7 @@ const PATH_EXPORT_FISH: &str = "fish_add_path -p \"$HOME/.edgee/bin\"\n";
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum Agent {
     Claude,
+    Codebuddy,
     Codex,
     Opencode,
     Crush,
@@ -35,6 +37,7 @@ impl Agent {
     fn aliases(self) -> &'static [AliasSpec] {
         match self {
             Self::Claude => std::slice::from_ref(&CLAUDE_ALIAS),
+            Self::Codebuddy => std::slice::from_ref(&CODEBUDDY_ALIAS),
             Self::Codex => std::slice::from_ref(&CODEX_ALIAS),
             Self::Opencode => std::slice::from_ref(&OPENCODE_ALIAS),
             Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
@@ -45,10 +48,11 @@ impl Agent {
     fn label(self) -> &'static str {
         match self {
             Self::Claude => "claude",
+            Self::Codebuddy => "codebuddy",
             Self::Codex => "codex",
             Self::Opencode => "opencode",
             Self::Crush => "crush",
-            Self::All => "claude, codex, opencode, and crush",
+            Self::All => "claude, codebuddy, codex, opencode, and crush",
         }
     }
 }
@@ -650,11 +654,13 @@ mod tests {
         let dir = tmp.path().join("bin");
         write_shims(&dir, &ALL_ALIASES).unwrap();
         assert!(dir.join("claude").exists());
+        assert!(dir.join("codebuddy").exists());
         assert!(dir.join("codex").exists());
         assert!(dir.join("opencode").exists());
 
         remove_shims(&dir, &codex_only()).unwrap();
         assert!(dir.join("claude").exists());
+        assert!(dir.join("codebuddy").exists());
         assert!(!dir.join("codex").exists());
         assert!(dir.join("opencode").exists());
     }

@@ -33,6 +33,7 @@ pub struct Profile {
     /// When false, no MCP config or system prompt is injected into the coding assistant.
     pub enable_mcp: Option<bool>,
     pub claude: Option<ProviderConfig>,
+    pub codebuddy: Option<ProviderConfig>,
     pub codex: Option<ProviderConfig>,
     pub opencode: Option<ProviderConfig>,
     pub crush: Option<ProviderConfig>,

@@ -7,7 +7,7 @@ Tower `Layer`/`Service` that compresses LLM tool outputs in-flight.
 This crate wraps any downstream Tower service and intercepts requests before they leave the gateway. It calls `edgee-compressor` to shrink tool-result payloads, then forwards the mutated request to the inner service. Only tool results are modified; all other request fields pass through unchanged.
 
 ```
-coding agent (Claude Code / Codex / OpenCode)
+coding agent (Claude Code / CodeBuddy / Codex / OpenCode)
         |
   edgee-compression-layer               <-- this crate
     CompressionLayer
