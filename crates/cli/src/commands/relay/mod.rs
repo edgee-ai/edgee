@@ -23,26 +23,41 @@ use hudsucker::Proxy;
 
 use handler::{GatewayTarget, RelayHandler, Sink};
 
-const PROVIDERS: &[&str] = &["claude", "codex", "vscode"];
+const PROVIDERS: &[&str] = &["claude", "codex", "vscode", "cursor"];
 
 /// True for the VS Code Copilot relay target (launches the `code` binary).
 fn is_copilot(agent: &str) -> bool {
     matches!(agent, "vscode-copilot" | "copilot" | "code" | "vscode")
 }
 
+/// True for the Cursor relay target (launches the `cursor` binary).
+fn is_cursor(agent: &str) -> bool {
+    matches!(agent, "cursor")
+}
+
+/// True for GUI editors relayed as passthrough providers (VS Code Copilot,
+/// Cursor). These launch their own binary, leave the terminal free (so we
+/// announce per-request), and the gateway forwards to the editor's own backend
+/// rather than routing through an Edgee provider pipeline.
+fn is_gui_editor(agent: &str) -> bool {
+    is_copilot(agent) || is_cursor(agent)
+}
+
 /// The Edgee provider key that backs the gateway reroute for `agent`. The VS Code
-/// Copilot aliases map to the `copilot` Edgee provider; everything else uses its
-/// own name.
+/// Copilot aliases map to the `copilot` Edgee provider, Cursor to `cursor`;
+/// everything else uses its own name.
 fn key_provider(agent: &str) -> &str {
     if is_copilot(agent) {
         "copilot"
+    } else if is_cursor(agent) {
+        "cursor"
     } else {
         agent
     }
 }
 
 setup_command! {
-    /// Agent / provider for the relay (claude|codex|vscode). Launched unless
+    /// Agent / provider for the relay (claude|codex|vscode|cursor). Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
     /// Don't spawn the agent; just run the proxy (for external clients, e.g. Claude Desktop).
@@ -60,10 +75,10 @@ setup_command! {
 pub async fn run(opts: Options) -> Result<()> {
     let agent = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
     if !PROVIDERS.contains(&agent.as_str()) {
-        anyhow::bail!("unknown agent '{agent}' (expected claude|codex|vscode)");
+        anyhow::bail!("unknown agent '{agent}' (expected claude|codex|vscode|cursor)");
     }
-    // The Edgee provider key backing the gateway reroute. For VS Code Copilot this
-    // is the claude key (Copilot isn't an Edgee provider of its own).
+    // The Edgee provider key backing the gateway reroute. GUI editors (VS Code
+    // Copilot, Cursor) map to their own passthrough provider key.
     let provider = key_provider(&agent).to_string();
 
     // Auth bootstrap — same flow as `edgee launch`.
@@ -100,9 +115,9 @@ pub async fn run(opts: Options) -> Result<()> {
     let repo = crate::git::detect_origin();
 
     let gateway_url = crate::commands::launch::resolve_gateway_base_url(&creds).await;
-    // Copilot has no Edgee provider pipeline; the gateway forwards its rerouted
-    // calls to Copilot's own backend, so record the original upstream.
-    let passthrough_to_upstream = is_copilot(&agent);
+    // GUI editors have no Edgee provider pipeline; the gateway forwards their
+    // rerouted calls to the editor's own backend, so record the original upstream.
+    let passthrough_to_upstream = is_gui_editor(&agent);
     let gateway = build_gateway_target(
         &gateway_url,
         api_key,
@@ -133,9 +148,9 @@ pub async fn run(opts: Options) -> Result<()> {
     };
 
     // Print a live one-liner per matched request (with status) when the terminal is
-    // free: a GUI client (VS Code Copilot) or an external process (`--no-launch`).
-    // TUI agents (claude/codex) own the terminal, so stay quiet there.
-    let announce = is_copilot(&agent) || opts.no_launch;
+    // free: a GUI client (VS Code Copilot, Cursor) or an external process
+    // (`--no-launch`). TUI agents (claude/codex) own the terminal, so stay quiet there.
+    let announce = is_gui_editor(&agent) || opts.no_launch;
 
     let handler = RelayHandler::new(
         sink,
@@ -168,8 +183,8 @@ pub async fn run(opts: Options) -> Result<()> {
             proxy.start().await.context("relay proxy error")?;
         }
         Some(agent) => {
-            if is_copilot(&agent) {
-                print_copilot_hint();
+            if is_gui_editor(&agent) {
+                print_gui_editor_hint(&agent);
             }
             let task = tokio::spawn(async move {
                 let _ = proxy.start().await;
@@ -202,7 +217,8 @@ pub async fn run_for_agent(agent: &str) -> Result<()> {
 fn default_port(provider: &str) -> u16 {
     match provider {
         "codex" => 41200,
-        _ => 41100, // claude / proxy-only
+        "cursor" => 41300,
+        _ => 41100, // claude / copilot / proxy-only
     }
 }
 
@@ -214,6 +230,7 @@ fn provider_api_key(creds: &crate::config::Credentials, provider: &str) -> Optio
         "opencode" => creds.opencode.as_ref(),
         "crush" => creds.crush.as_ref(),
         "copilot" => creds.copilot.as_ref(),
+        "cursor" => creds.cursor.as_ref(),
         _ => None,
     }?;
     if p.api_key.is_empty() {
@@ -320,11 +337,13 @@ async fn run_agent(
     ca_path: &Path,
     session_id: &str,
 ) -> Result<std::process::ExitStatus> {
-    // VS Code Copilot launches the `code` binary. `--wait` keeps this process
-    // alive (and the proxy with it) until the editor window is closed, instead of
-    // `code` forking and returning immediately.
+    // GUI editors launch their own binary (VS Code Copilot → `code`, Cursor →
+    // `cursor`). `--wait` keeps this process alive (and the proxy with it) until the
+    // editor window is closed, instead of the launcher forking and returning at once.
     let (bin_name, args): (&str, &[&str]) = if is_copilot(agent) {
         ("code", &["--wait"])
+    } else if is_cursor(agent) {
+        ("cursor", &["--wait"])
     } else {
         (agent, &[])
     };
@@ -333,12 +352,17 @@ async fn run_agent(
 
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(args);
+    // Cursor's Electron net module ignores HTTPS_PROXY; --proxy-server routes
+    // all HTTPS traffic through the relay so BidiAppend / RunSSE are intercepted.
+    if is_cursor(agent) {
+        cmd.arg(format!("--proxy-server={proxy_url}"));
+    }
     cmd.env("HTTPS_PROXY", &proxy_url);
     cmd.env("HTTP_PROXY", &proxy_url);
     cmd.env("https_proxy", &proxy_url);
     cmd.env("http_proxy", &proxy_url);
     // Make each agent's TLS stack trust the relay CA without a system-store install:
-    //  - Node agents (Claude Code) and VS Code / Copilot read NODE_EXTRA_CA_CERTS.
+    //  - Node agents (Claude Code) and VS Code / Copilot / Cursor read NODE_EXTRA_CA_CERTS.
     //  - Codex (Rust) reads CODEX_CA_CERTIFICATE / SSL_CERT_FILE for its own client;
     //    it does NOT read NODE_EXTRA_CA_CERTS.
     cmd.env("NODE_EXTRA_CA_CERTS", ca_path);
@@ -380,15 +404,29 @@ fn print_banner(
     println!();
 }
 
-fn print_copilot_hint() {
-    println!("{}", style("Launching VS Code (code --wait) behind the relay.").bold());
+fn print_gui_editor_hint(agent: &str) {
+    let (app, launch, feature) = if is_cursor(agent) {
+        ("Cursor", "cursor --wait", "Cursor AI")
+    } else {
+        ("VS Code", "code --wait", "Copilot Chat")
+    };
     println!(
-        "  {}",
-        style("Quit any running VS Code first — the proxy env only applies to a freshly").dim()
+        "{}",
+        style(format!("Launching {app} ({launch}) behind the relay.")).bold()
     );
     println!(
         "  {}",
-        style("spawned instance. Copilot Chat traffic then reroutes through the gateway.").dim()
+        style(format!(
+            "Quit any running {app} first — the proxy env only applies to a freshly"
+        ))
+        .dim()
+    );
+    println!(
+        "  {}",
+        style(format!(
+            "spawned instance. {feature} traffic then reroutes through the gateway."
+        ))
+        .dim()
     );
     println!();
 }
@@ -447,6 +485,30 @@ mod tests {
         // Real providers back their own key.
         assert_eq!(key_provider("claude"), "claude");
         assert_eq!(key_provider("codex"), "codex");
+    }
+
+    #[test]
+    fn cursor_agent_recognized() {
+        assert!(is_cursor("cursor"));
+        assert!(!is_cursor("claude"));
+        assert!(!is_cursor("code"));
+        // Both Copilot and Cursor are GUI editors; TUI agents are not.
+        assert!(is_gui_editor("cursor"));
+        assert!(is_gui_editor("copilot"));
+        assert!(!is_gui_editor("claude"));
+        assert!(!is_gui_editor("codex"));
+    }
+
+    #[test]
+    fn cursor_reroute_uses_cursor_key() {
+        assert_eq!(key_provider("cursor"), "cursor");
+    }
+
+    #[test]
+    fn default_ports_are_distinct_per_agent() {
+        assert_eq!(default_port("claude"), 41100);
+        assert_eq!(default_port("codex"), 41200);
+        assert_eq!(default_port("cursor"), 41300);
     }
 
     #[test]

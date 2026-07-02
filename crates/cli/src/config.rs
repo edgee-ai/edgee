@@ -38,6 +38,7 @@ pub struct Profile {
     pub opencode: Option<ProviderConfig>,
     pub crush: Option<ProviderConfig>,
     pub copilot: Option<ProviderConfig>,
+    pub cursor: Option<ProviderConfig>,
 }
 
 /// Type alias so existing call sites that use `Credentials` compile unchanged.

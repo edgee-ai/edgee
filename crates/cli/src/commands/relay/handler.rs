@@ -20,6 +20,11 @@ use hudsucker::{Body, HttpContext, HttpHandler, RequestOrResponse};
 /// identity; Codex's ChatGPT backend (`/backend-api/codex/responses`) is remapped
 /// to the gateway's `/v1/responses`, and VS Code Copilot's `/chat/completions` to
 /// the gateway's `/v1/chat/completions`.
+///
+/// Cursor uses Connect-RPC over HTTPS (`api2.cursor.sh`). The two inference
+/// endpoints are mapped to `/v1/chat/completions` so the gateway routes them
+/// through its upstream-passthrough handler (path is irrelevant there — the
+/// handler fires on the presence of `x-edgee-upstream-url`, before path matching).
 const REROUTE_MAP: &[(&str, &str)] = &[
     ("/v1/messages", "/v1/messages"),
     ("/v1/responses", "/v1/responses"),
@@ -29,6 +34,19 @@ const REROUTE_MAP: &[(&str, &str)] = &[
     // uses the bare chat-completions path. Both map to the gateway's /v1 routes.
     ("/responses", "/v1/responses"),
     ("/chat/completions", "/v1/chat/completions"),
+    // Cursor Connect-RPC inference endpoints (api2.cursor.sh).
+    // BidiAppend sends the full agent context; RunSSE subscribes to the token stream.
+    // Paths map to themselves: the gateway routes these via the upstream-passthrough
+    // check (fires on x-edgee-upstream-url, before path matching) so the path value
+    // here only affects logs.
+    (
+        "/aiserver.v1.BidiService/BidiAppend",
+        "/aiserver.v1.BidiService/BidiAppend",
+    ),
+    (
+        "/agent.v1.AgentService/RunSSE",
+        "/agent.v1.AgentService/RunSSE",
+    ),
 ];
 
 /// Gateway path for a request path, or `None` if it isn't an inference path.
@@ -688,6 +706,15 @@ mod tests {
             Some("/v1/chat/completions")
         );
         assert_eq!(gateway_path_for("/api/oauth/validate"), None);
+        // Cursor Connect-RPC paths map to themselves.
+        assert_eq!(
+            gateway_path_for("/aiserver.v1.BidiService/BidiAppend"),
+            Some("/aiserver.v1.BidiService/BidiAppend")
+        );
+        assert_eq!(
+            gateway_path_for("/agent.v1.AgentService/RunSSE"),
+            Some("/agent.v1.AgentService/RunSSE")
+        );
     }
 }
 
