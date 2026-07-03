@@ -4,7 +4,7 @@ This document describes the design of the Edgee AI Gateway OSS codebase: the Tow
 
 ## Overview
 
-Edgee is an LLM gateway that sits between a coding agent (Claude Code, Codex, OpenCode) and an LLM provider (Anthropic, OpenAI). Its primary function today is **tool-output compression**: before each API request is forwarded, tool results in the context window are analyzed and shrunk to reduce token count without changing the model's view of the conversation.
+Edgee is an LLM gateway that sits between a coding agent (Claude Code, CodeBuddy, Codex, OpenCode) and an LLM provider (Anthropic, OpenAI). Its primary function today is **tool-output compression**: before each API request is forwarded, tool results in the context window are analyzed and shrunk to reduce token count without changing the model's view of the conversation.
 
 The gateway is built on **[Tower](https://docs.rs/tower/latest/tower/)**, a Rust middleware framework. Every processing step is a Tower [`Service`](https://docs.rs/tower/latest/tower/trait.Service.html), and processing steps are composed by stacking Tower [`Layer`](https://docs.rs/tower/latest/tower/trait.Layer.html)s. This design means the compression pipeline, the HTTP boundary, and the provider dispatch are all independently testable units that can be composed in different configurations using [`ServiceBuilder`](https://docs.rs/tower/latest/tower/builder/struct.ServiceBuilder.html).
 

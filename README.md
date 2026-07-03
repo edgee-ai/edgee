@@ -76,6 +76,9 @@ edgee launch codex
 # Opencode
 edgee launch opencode
 
+# CodeBuddy
+edgee launch codebuddy
+
 # Crush
 edgee launch crush
 ```
@@ -86,6 +89,7 @@ Any extra flags you pass after the subcommand are forwarded straight to the unde
 edgee launch claude --resume abcd # continue the last Claude Code session
 edgee launch codex resume         # resume the last Codex session
 edgee launch opencode -c          # continue the last OpenCode session
+edgee launch codebuddy --resume <id>  # resume the last CodeBuddy session
 ```
 
 ### Route plain `claude` / `codex` / `opencode` / `crush` through Edgee
@@ -93,14 +97,14 @@ edgee launch opencode -c          # continue the last OpenCode session
 If you'd rather type `claude` (or have another tool spawn `claude` for you), install Edgee's shims:
 
 ```bash
-edgee alias            # installs all four; pass `claude`, `codex`, `opencode`, `crush` to scope
+edgee alias            # installs all five; pass `claude`, `codebuddy`, `codex`, `opencode`, `crush` to scope
 edgee alias remove     # to undo
 ```
 
 This does two things:
 
 1. Adds a shell alias to `~/.bashrc`, `~/.zshrc`, and `~/.config/fish/config.fish` (`alias claude='edgee launch claude'`, etc.) so interactive shells route through Edgee.
-2. Writes executable shim scripts to `~/.edgee/bin/{claude,codex,opencode,crush}` and prepends `~/.edgee/bin` to `PATH` in the same rc block. This means **non-interactive** shells, including `bash -c '...'`, scripts, and tools that spawn Claude Code via `exec`, also get routed through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
+2. Writes executable shim scripts to `~/.edgee/bin/{claude,codebuddy,codex,opencode,crush}` and prepends `~/.edgee/bin` to `PATH` in the same rc block. This means **non-interactive** shells, including `bash -c '...'`, scripts, and tools that spawn Claude Code via `exec`, also get routed through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
 
 ### Use as a standalone gateway
 
@@ -195,6 +199,7 @@ The `SessionStart` hook installed by `edgee statusline claude install` (or by th
 | Claude Code | `edgee launch claude` | ✅ Supported |
 | Codex | `edgee launch codex` | ✅ Supported |
 | Opencode | `edgee launch opencode` | ✅ Supported |
+| CodeBuddy | `edgee launch codebuddy` | ✅ Supported |
 | Crush | `edgee launch crush` | ✅ Supported |
 | Cursor | `edgee launch cursor` | 🔜 Coming soon |
 | Any OpenAI-compatible client | `edgee serve` | ✅ Supported |
