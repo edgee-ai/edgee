@@ -134,6 +134,7 @@ async fn fetch_summary(session_id: &str) -> Option<SessionSummary> {
     let url = format!("{api_base}/v1/sessions/{session_id}/summary");
 
     let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(crate::config::insecure_tls())
         .timeout(HTTP_TIMEOUT)
         .build()
         .ok()?;

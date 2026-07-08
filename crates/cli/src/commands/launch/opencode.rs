@@ -150,6 +150,7 @@ struct GatewayModelEntry {
 async fn fetch_gateway_models(gateway_url: &str, api_key: &str) -> Vec<String> {
     let url = format!("{}/v1/models", gateway_url);
     let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(crate::config::insecure_tls())
         .timeout(std::time::Duration::from_secs(10))
         .build()
     {

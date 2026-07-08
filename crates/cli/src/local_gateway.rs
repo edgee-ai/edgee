@@ -59,6 +59,7 @@ impl LocalGatewayHandle {
 /// to let the OS assign an available ephemeral port.
 pub async fn start(addr: SocketAddr) -> Result<LocalGatewayHandle> {
     let reqwest_client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(crate::config::insecure_tls())
         .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
         .read_timeout(UPSTREAM_READ_TIMEOUT)
         .build()

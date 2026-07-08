@@ -200,6 +200,7 @@ impl ApiClient {
         );
 
         let http = reqwest::Client::builder()
+            .danger_accept_invalid_certs(crate::config::insecure_tls())
             .default_headers(headers)
             .timeout(Duration::from_secs(30))
             .build()

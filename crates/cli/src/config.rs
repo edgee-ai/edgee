@@ -259,6 +259,13 @@ pub fn write(creds: &Credentials) -> Result<()> {
 // URL helpers — precedence: env var > active profile > hardcoded default
 // ---------------------------------------------------------------------------
 
+pub fn insecure_tls() -> bool {
+    matches!(
+        std::env::var("EDGEE_INSECURE").ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes")
+    )
+}
+
 pub fn console_base_url() -> String {
     if let Ok(v) = std::env::var("EDGEE_CONSOLE_URL") {
         return v;
