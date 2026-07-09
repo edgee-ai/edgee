@@ -44,6 +44,10 @@ pub struct ApiKeyItem {
     /// when an existing key was returned). Gates first-run onboarding.
     #[serde(default)]
     pub created: bool,
+    /// Always present in the server response. A key with no expiry is sent as
+    /// the Go zero-value sentinel (`0001-01-01T00:00:00Z`), not omitted.
+    #[serde(with = "time::serde::rfc3339")]
+    pub expires_at: time::OffsetDateTime,
     /// Current compression config on the key (absent when never configured).
     #[serde(default)]
     pub compression: Option<Compression>,
@@ -458,5 +462,16 @@ mod tests {
         assert!(!billing(Some("free"), Some("active")).is_paying());
         assert!(!billing(None, None).is_paying());
         assert!(!billing(None, Some("cancelled")).is_paying());
+    }
+
+    #[test]
+    fn deserializes_expires_at_sentinel_and_real_timestamp() {
+        let no_expiry: ApiKeyItem =
+            serde_json::from_str(r#"{"id":"k1","expires_at":"0001-01-01T00:00:00Z"}"#).unwrap();
+        assert_eq!(no_expiry.expires_at.year(), 1);
+
+        let with_expiry: ApiKeyItem =
+            serde_json::from_str(r#"{"id":"k2","expires_at":"2030-06-15T14:30:00Z"}"#).unwrap();
+        assert_eq!(with_expiry.expires_at.year(), 2030);
     }
 }

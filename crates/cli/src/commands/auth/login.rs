@@ -212,14 +212,22 @@ pub fn agent_label(provider: &str) -> &'static str {
     }
 }
 
-/// Ensures the active profile holds an API key that still exists server-side,
-/// re-provisioning it if the cached key was deleted in the console.
+/// Whether a key's expiry has passed. The server's zero-value sentinel for
+/// "no expiry" (year 1, `0001-01-01T00:00:00Z`) is not a real expiration.
+fn key_is_expired(expires_at: time::OffsetDateTime) -> bool {
+    expires_at.year() > 1 && expires_at <= time::OffsetDateTime::now_utc()
+}
+
+/// Ensures the active profile holds an API key that still exists server-side
+/// and has not expired, re-provisioning it if the cached key was deleted or
+/// expired in the console.
 ///
 /// Returns `true` when a fresh key was minted this launch — either because the
 /// cache was empty (first run for this agent) or because the cached key is gone
-/// — so callers can (re-)run first-run onboarding. A cached key is validated by
-/// id; only a definitive not-found triggers re-provisioning. Transient errors
-/// keep the existing key so a network blip never wipes a valid setup.
+/// or expired — so callers can (re-)run first-run onboarding. A cached key is
+/// validated by id; only a definitive not-found or expiry triggers
+/// re-provisioning. Transient errors keep the existing key so a network blip
+/// never wipes a valid setup.
 pub async fn ensure_valid_provider_key(provider: &str) -> Result<bool> {
     let creds = crate::config::read()?;
 
@@ -247,7 +255,11 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<bool> {
         // Key was deleted in the console → re-provision and signal the caller to
         // re-run onboarding for the fresh key.
         Ok(None) => Ok(fetch_provider_key(provider).await?.created),
-        // Key still exists, or the server was unreachable → keep the cached key.
+        // Key still exists but has expired → same re-provisioning path as deletion.
+        Ok(Some(key_item)) if key_is_expired(key_item.expires_at) => {
+            Ok(fetch_provider_key(provider).await?.created)
+        }
+        // Key still exists and is valid, or the server was unreachable → keep the cached key.
         Ok(Some(_)) | Err(_) => Ok(false),
     }
 }
@@ -506,5 +518,23 @@ mod tests {
         assert!(creds.codebuddy.is_some());
         assert!(creds.codex.is_some());
         assert!(creds.opencode.is_some());
+    }
+
+    #[test]
+    fn key_is_expired_for_past_timestamp() {
+        use time::macros::datetime;
+        assert!(key_is_expired(datetime!(2020-01-01 00:00:00 UTC)));
+    }
+
+    #[test]
+    fn key_is_expired_false_for_future_timestamp() {
+        use time::macros::datetime;
+        assert!(!key_is_expired(datetime!(2999-01-01 00:00:00 UTC)));
+    }
+
+    #[test]
+    fn key_is_expired_false_for_no_expiry_sentinel() {
+        use time::macros::datetime;
+        assert!(!key_is_expired(datetime!(0001-01-01 00:00:00 UTC)));
     }
 }
