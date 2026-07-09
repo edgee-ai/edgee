@@ -64,7 +64,7 @@ fn filter_gt_log(input: &str) -> String {
 
         let replaced = email_re.replace_all(line, "");
         let processed = if replaced.len() > 120 {
-            format!("{}...", &replaced[..120].trim_end())
+            format!("{}...", replaced[..120].trim_end())
         } else {
             replaced.trim().to_string()
         };
