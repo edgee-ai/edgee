@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
 
     // Nudge about newer releases, except when the user is already updating.
     #[cfg(feature = "self-update")]
-    if !matches!(opts.command, commands::Command::SelfUpdate(_)) {
+    if !matches!(opts.command, commands::Command::Update(_)) {
         version_check::maybe_notify().await;
     }
 

@@ -37,6 +37,7 @@ pub struct Profile {
     pub codex: Option<ProviderConfig>,
     pub opencode: Option<ProviderConfig>,
     pub crush: Option<ProviderConfig>,
+    pub copilot: Option<ProviderConfig>,
 }
 
 /// Type alias so existing call sites that use `Credentials` compile unchanged.
@@ -115,6 +116,13 @@ pub fn global_data_dir() -> PathBuf {
 /// Linux/macOS: `~/.local/share/edgee/local-gateway.log`
 pub fn local_gateway_log_path() -> PathBuf {
     global_data_dir().join("local-gateway.log")
+}
+
+/// Directory holding the local MITM CA used by `edgee relay`.
+/// Linux/macOS: `~/.local/share/edgee/ca` (contains `edgee-ca.pem` + `edgee-ca.key`).
+#[cfg(feature = "relay")]
+pub fn relay_ca_dir() -> PathBuf {
+    global_data_dir().join("ca")
 }
 
 /// Global credentials file path (`~/.config/edgee/credentials.toml`, etc.).

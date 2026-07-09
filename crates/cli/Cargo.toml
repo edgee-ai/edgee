@@ -38,6 +38,12 @@ self_update = { workspace = true, optional = true, features = ["reqwest", "rustl
 time = { workspace = true, features = ["formatting", "parsing", "serde", "serde-human-readable", "macros"] }
 unicode-width.workspace = true
 
+# `relay` feature: MITM proxy that reroutes LLM inference through the Edgee gateway
+bytes = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+hudsucker = { workspace = true, optional = true }
+rcgen = { workspace = true, optional = true }
+
 [dev-dependencies]
 tempfile = "3"
 
@@ -45,5 +51,6 @@ tempfile = "3"
 which = "8"
 
 [features]
-default = ["self-update"]
+default = ["self-update", "relay"]
 self-update = ["dep:self_update"]
+relay = ["dep:hudsucker", "dep:rcgen", "dep:http-body-util", "dep:bytes"]
