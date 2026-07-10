@@ -18,7 +18,6 @@ Entry point: `crates/cli/src/main.rs`. Subcommands declared in `crates/cli/src/c
 
 - `edgee launch {claude|codebuddy|codex|opencode|crush}` — launches the agent with `ANTHROPIC_BASE_URL` and custom headers pointing at the local gateway. Implementation per agent under `crates/cli/src/commands/launch/`.
 - `edgee auth {login|status|list|switch}` — OAuth-style flow against the Edgee console. See `crates/cli/src/api.rs` and `crates/cli/src/commands/auth/`.
-- `edgee local-gateway` — runs a local, unauthenticated HTTP gateway (`/v1/messages`, `/v1/responses`) for dev use; also invoked internally by `--local-gateway` on `launch`. See `crates/cli/src/local_gateway.rs`.
 - `edgee settings` — configures compression, fallback, and reroute settings for a coding-agent key against the console API.
 - `edgee stats` (visible alias `report`) — prints session token counts and compression savings.
 - `edgee statusline` — renders/manages the Claude Code statusline integration (see README.md's Statusline section for the install/doctor/fix flow).
@@ -117,7 +116,7 @@ The working path today is **passthrough**: provider-native bodies are forwarded 
 - `AnthropicPassthroughService` — `POST /v1/messages` (`crates/gateway-core/src/passthrough/anthropic.rs`)
 - `OpenAIPassthroughService` — `POST /v1/responses` (`crates/gateway-core/src/passthrough/openai.rs`)
 
-Neither service filters headers itself — both trust `req.headers` as already-clean and forward them as-is. Hop-by-hop and gateway-internal header stripping happens once, upstream, in `gateway-http`'s `PassthroughService` (using the `SKIP_HEADERS` list defined in `crates/gateway-core/src/passthrough/mod.rs`). The production wiring in `crates/cli/src/local_gateway.rs` stacks these as `PassthroughLayer` (gateway-http) → `CompressionLayer` (compression-layer) → `Anthropic`/`OpenAIPassthroughService` (gateway-core) via `ServiceBuilder`, one stack per route (`/v1/messages`, `/v1/responses`). The HTTP backend is abstracted behind `HttpClient` (`crates/gateway-core/src/backend/http.rs`); enable the `tokio` feature to get `ReqwestHttpClient`, or implement `HttpClient` yourself for a different runtime.
+Neither service filters headers itself — both trust `req.headers` as already-clean and forward them as-is. Hop-by-hop and gateway-internal header stripping happens once, upstream, in `gateway-http`'s `PassthroughService` (using the `SKIP_HEADERS` list defined in `crates/gateway-core/src/passthrough/mod.rs`). The intended integration pattern for anyone embedding these crates is to stack `PassthroughLayer` (gateway-http) → `CompressionLayer` (compression-layer) → `Anthropic`/`OpenAIPassthroughService` (gateway-core) via `tower::ServiceBuilder`, one stack per route (`/v1/messages`, `/v1/responses`). The HTTP backend is abstracted behind `HttpClient` (`crates/gateway-core/src/backend/http.rs`); enable the `tokio` feature to get `ReqwestHttpClient`, or implement `HttpClient` yourself for a different runtime.
 
 ## Token compression — current state & roadmap
 

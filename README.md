@@ -106,18 +106,6 @@ This does two things:
 1. Adds a shell alias to `~/.bashrc`, `~/.zshrc`, and `~/.config/fish/config.fish` (`alias claude='edgee launch claude'`, etc.) so interactive shells route through Edgee.
 2. Writes executable shim scripts to `~/.edgee/bin/{claude,codebuddy,codex,opencode,crush}` and prepends `~/.edgee/bin` to `PATH` in the same rc block. This means **non-interactive** shells, including `bash -c '...'`, scripts, and tools that spawn Claude Code via `exec`, also get routed through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
 
-### Use as a standalone gateway
-
-Point any OpenAI-compatible client at Edgee:
-
-```bash
-# Start the gateway
-edgee serve
-
-# Your app talks to Edgee instead of the provider directly
-export OPENAI_BASE_URL=http://localhost:1207/v1
-```
-
 ---
 
 ## Features
@@ -202,7 +190,6 @@ The `SessionStart` hook installed by `edgee statusline claude install` (or by th
 | CodeBuddy | `edgee launch codebuddy` | ✅ Supported |
 | Crush | `edgee launch crush` | ✅ Supported |
 | Cursor | `edgee launch cursor` | 🔜 Coming soon |
-| Any OpenAI-compatible client | `edgee serve` | ✅ Supported |
 
 ---
 

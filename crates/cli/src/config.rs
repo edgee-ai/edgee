@@ -112,12 +112,6 @@ pub fn global_data_dir() -> PathBuf {
     app_strategy().data_dir()
 }
 
-/// Path for the local gateway log file.
-/// Linux/macOS: `~/.local/share/edgee/local-gateway.log`
-pub fn local_gateway_log_path() -> PathBuf {
-    global_data_dir().join("local-gateway.log")
-}
-
 /// Directory holding the local MITM CA used by `edgee relay`.
 /// Linux/macOS: `~/.local/share/edgee/ca` (contains `edgee-ca.pem` + `edgee-ca.key`).
 #[cfg(feature = "relay")]

@@ -5,7 +5,6 @@ mod api;
 mod commands;
 mod config;
 mod git;
-mod local_gateway;
 #[cfg(feature = "self-update")]
 mod version_check;
 
