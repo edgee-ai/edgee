@@ -5,11 +5,6 @@ use super::util;
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
-    /// Route traffic through a local gateway instead of the hosted Edgee service.
-    /// Session tracking is disabled in this mode.
-    #[arg(long)]
-    pub local_gateway: bool,
-
     /// Extra args passed through to the codex CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
@@ -58,10 +53,6 @@ pub async fn run(opts: Options) -> Result<()> {
     // "set it up once" flow we want.
     util::ensure_first_run_installed().await;
 
-    if opts.local_gateway {
-        return run_with_local_gateway(opts.args).await;
-    }
-
     util::spawn_cli_version_report(&creds, &session_id);
 
     let repo_entry = crate::git::detect_origin()
@@ -96,38 +87,4 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Launch Codex routed through a local gateway. Session tracking and version
-/// reporting are skipped — the backend never sees this traffic.
-async fn run_with_local_gateway(args: Vec<String>) -> Result<()> {
-    use std::net::Ipv4Addr;
-
-    let log_path = crate::config::local_gateway_log_path();
-    crate::local_gateway::init_file_tracing(&log_path)?;
-    eprintln!("edgee: gateway logs -> {}", log_path.display());
-
-    let gateway = crate::local_gateway::start((Ipv4Addr::LOCALHOST, 0).into()).await?;
-    let addr = gateway.addr;
-
-    let base_url = format!("http://{addr}/v1");
-    let mut cmd = tokio::process::Command::new(util::resolve_binary("codex"));
-    cmd.args([
-        "-c",
-        "model_provider=\"edgee-cli\"",
-        "-c",
-        "model_providers.edgee-cli.name=\"EDGEE\"",
-        "-c",
-        &format!("model_providers.edgee-cli.base_url=\"{base_url}\""),
-        "-c",
-        "model_providers.edgee-cli.wire_api=\"responses\"",
-    ]);
-    cmd.args(&args);
-
-    util::run_with_gateway(
-        gateway,
-        cmd,
-        "Codex CLI is not installed. Install it from https://developers.openai.com/codex/cli",
-    )
-    .await
 }

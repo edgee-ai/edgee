@@ -196,34 +196,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
-dependencies = [
- "axum-core",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "itoa",
- "matchit",
- "memchr",
- "mime",
- "percent-encoding",
- "pin-project-lite",
- "serde_core",
- "sync_wrapper",
- "tokio",
- "tower",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
 name = "axum-core"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -719,16 +691,11 @@ name = "edgee-cli"
 version = "0.2.12"
 dependencies = [
  "anyhow",
- "axum",
- "axum-core",
  "bytes",
  "clap",
  "colored",
  "console",
  "dialoguer",
- "edgee-compression-layer",
- "edgee-gateway-core",
- "edgee-gateway-http",
  "etcetera",
  "http",
  "http-body-util",
@@ -743,8 +710,6 @@ dependencies = [
  "time",
  "tokio",
  "toml",
- "tower",
- "tower-http",
  "tracing",
  "tracing-subscriber",
  "unicode-width",
@@ -1638,12 +1603,6 @@ checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
 ]
-
-[[package]]
-name = "matchit"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "memchr"

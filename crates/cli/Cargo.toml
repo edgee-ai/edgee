@@ -8,15 +8,8 @@ name = "edgee"
 path = "src/main.rs"
 
 [dependencies]
-# Workspace crates
-edgee-gateway-core = { workspace = true, features = ["tokio"] }
-edgee-gateway-http.workspace = true
-edgee-compression-layer.workspace = true
-
 # External dependencies
 anyhow.workspace = true
-axum = { workspace = true, features = ["http1", "tokio"] }
-axum-core.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 colored.workspace = true
 console.workspace = true
@@ -26,8 +19,6 @@ http.workspace = true
 open.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true
-tower = { workspace = true, features = ["full"] }
-tower-http = { workspace = true, features = ["full"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 uuid = { workspace = true, features = ["v4"] }
