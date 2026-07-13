@@ -147,17 +147,7 @@ pub async fn run(opts: Options) -> Result<()> {
         None => Sink::stdout(),
     };
 
-    // Print a live one-liner per matched request (with status) when the terminal is
-    // free: a GUI client (VS Code Copilot, Cursor) or an external process
-    // (`--no-launch`). TUI agents (claude/codex) own the terminal, so stay quiet there.
-    let announce = is_gui_editor(&agent) || opts.no_launch;
-
-    let handler = RelayHandler::new(
-        sink,
-        Arc::new(gateway.clone()),
-        log_enabled,
-        announce,
-    );
+    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled);
 
     let proxy = Proxy::builder()
         .with_addr(addr)
