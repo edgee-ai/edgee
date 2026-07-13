@@ -319,6 +319,113 @@ fn build_ca(cert_pem: &str, key_pem: &str) -> Result<RcgenAuthority> {
     ))
 }
 
+fn home_dir() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(PathBuf::from)
+}
+
+/// Path to Cursor's user `settings.json`, per platform:
+///   Linux:   `$XDG_CONFIG_HOME/Cursor/User/settings.json` (else `~/.config/...`)
+///   macOS:   `~/Library/Application Support/Cursor/User/settings.json`
+///   Windows: `%APPDATA%\Cursor\User\settings.json`
+fn cursor_settings_path() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        home_dir().map(|h| h.join("Library/Application Support/Cursor/User/settings.json"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Cursor/User/settings.json"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|h| h.join(".config")))
+            .map(|c| c.join("Cursor/User/settings.json"))
+    }
+}
+
+/// Ensure Cursor's `settings.json` has `cursor.general.disableHttp2: true` so its
+/// AI transport speaks HTTP/1.1 (which the relay can MITM) rather than HTTP/2.
+/// Merges the key into any existing settings, preserving other entries, and
+/// creates the file if absent. Best-effort: on any failure it prints a hint to
+/// set it manually rather than aborting the launch, and it never clobbers a file
+/// it can't parse (e.g. one with `//` comments).
+fn ensure_cursor_http1() {
+    const KEY: &str = "cursor.general.disableHttp2";
+    let manual = || {
+        eprintln!(
+            "{}",
+            style(format!(
+                "  Could not update Cursor settings automatically — set \
+                 \"{KEY}\": true (Settings → Network → HTTP Compatibility Mode → \
+                 HTTP/1.1) so relay traffic is intercepted."
+            ))
+            .dim()
+        );
+    };
+
+    let Some(path) = cursor_settings_path() else {
+        manual();
+        return;
+    };
+
+    let current = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => {
+            manual();
+            return;
+        }
+    };
+
+    // `None` => already set (nothing to write); `Err` => unparseable, leave as-is.
+    let body = match cursor_settings_with_http1(&current) {
+        Ok(Some(body)) => body,
+        Ok(None) => return,
+        Err(()) => {
+            manual();
+            return;
+        }
+    };
+
+    let write = || -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&path, &body)
+    };
+    if write().is_err() {
+        manual();
+    }
+}
+
+/// Merge `cursor.general.disableHttp2: true` into Cursor's `settings.json` body.
+/// `current` is the existing file contents (empty string when absent). Returns
+/// `Ok(Some(new_body))` to write, `Ok(None)` when it's already set (no write
+/// needed), or `Err(())` when `current` isn't a JSON object (don't clobber it).
+fn cursor_settings_with_http1(current: &str) -> Result<Option<String>, ()> {
+    const KEY: &str = "cursor.general.disableHttp2";
+    let mut obj = if current.trim().is_empty() {
+        serde_json::Map::new()
+    } else {
+        match serde_json::from_str::<serde_json::Value>(current) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return Err(()),
+        }
+    };
+    if obj.get(KEY) == Some(&serde_json::Value::Bool(true)) {
+        return Ok(None);
+    }
+    obj.insert(KEY.to_string(), serde_json::Value::Bool(true));
+    let mut body = serde_json::to_string_pretty(&serde_json::Value::Object(obj)).map_err(|_| ())?;
+    body.push('\n');
+    Ok(Some(body))
+}
+
 /// Spawn the named agent wired through the proxy. The proxy injects Edgee auth on
 /// reroute, so no base-URL / custom-header env is needed here.
 async fn run_agent(
@@ -344,8 +451,15 @@ async fn run_agent(
     cmd.args(args);
     // Cursor's Electron net module ignores HTTPS_PROXY; --proxy-server routes
     // all HTTPS traffic through the relay so BidiAppend / RunSSE are intercepted.
+    // NB: Cursor's AI calls don't use Chromium's net stack — they go through a
+    // Node `http2` transport in the `cursor-always-local` extension, which reads
+    // NODE_EXTRA_CA_CERTS (set below) but speaks HTTP/2 by default, which the relay
+    // can't MITM. `ensure_cursor_http1` writes `cursor.general.disableHttp2` (the
+    // Settings → Network → HTTP Compatibility Mode → HTTP/1.1 toggle) so the
+    // transport downgrades to HTTP/1.1 and the relay can see it.
     if is_cursor(agent) {
         cmd.arg(format!("--proxy-server={proxy_url}"));
+        ensure_cursor_http1();
     }
     cmd.env("HTTPS_PROXY", &proxy_url);
     cmd.env("HTTP_PROXY", &proxy_url);
@@ -507,6 +621,36 @@ mod tests {
         assert!(
             build_gateway_target("/no/host", "k".into(), "s".into(), None, false, None).is_err()
         );
+    }
+
+    #[test]
+    fn cursor_http1_creates_settings_when_empty() {
+        let body = cursor_settings_with_http1("").unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["cursor.general.disableHttp2"], serde_json::json!(true));
+        assert!(body.ends_with('\n'));
+    }
+
+    #[test]
+    fn cursor_http1_merges_and_preserves_existing_keys() {
+        let existing = r#"{"editor.fontSize": 14, "cursor.general.disableHttp2": false}"#;
+        let body = cursor_settings_with_http1(existing).unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["cursor.general.disableHttp2"], serde_json::json!(true));
+        assert_eq!(v["editor.fontSize"], serde_json::json!(14));
+    }
+
+    #[test]
+    fn cursor_http1_noop_when_already_set() {
+        let existing = r#"{"cursor.general.disableHttp2": true}"#;
+        assert_eq!(cursor_settings_with_http1(existing), Ok(None));
+    }
+
+    #[test]
+    fn cursor_http1_refuses_to_clobber_unparseable() {
+        // A file with comments (valid JSONC, invalid JSON) must be left untouched.
+        let jsonc = "{\n  // proxy tweak\n  \"editor.fontSize\": 14\n}";
+        assert_eq!(cursor_settings_with_http1(jsonc), Err(()));
     }
 }
 
