@@ -23,26 +23,41 @@ use hudsucker::Proxy;
 
 use handler::{GatewayTarget, RelayHandler, Sink};
 
-const PROVIDERS: &[&str] = &["claude", "codex", "vscode"];
+const PROVIDERS: &[&str] = &["claude", "codex", "vscode", "cursor"];
 
 /// True for the VS Code Copilot relay target (launches the `code` binary).
 fn is_copilot(agent: &str) -> bool {
     matches!(agent, "vscode-copilot" | "copilot" | "code" | "vscode")
 }
 
+/// True for the Cursor relay target (launches the `cursor` binary).
+fn is_cursor(agent: &str) -> bool {
+    matches!(agent, "cursor")
+}
+
+/// True for GUI editors relayed as passthrough providers (VS Code Copilot,
+/// Cursor). These launch their own binary, leave the terminal free (so we
+/// announce per-request), and the gateway forwards to the editor's own backend
+/// rather than routing through an Edgee provider pipeline.
+fn is_gui_editor(agent: &str) -> bool {
+    is_copilot(agent) || is_cursor(agent)
+}
+
 /// The Edgee provider key that backs the gateway reroute for `agent`. The VS Code
-/// Copilot aliases map to the `copilot` Edgee provider; everything else uses its
-/// own name.
+/// Copilot aliases map to the `copilot` Edgee provider, Cursor to `cursor`;
+/// everything else uses its own name.
 fn key_provider(agent: &str) -> &str {
     if is_copilot(agent) {
         "copilot"
+    } else if is_cursor(agent) {
+        "cursor"
     } else {
         agent
     }
 }
 
 setup_command! {
-    /// Agent / provider for the relay (claude|codex|vscode). Launched unless
+    /// Agent / provider for the relay (claude|codex|vscode|cursor). Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
     /// Don't spawn the agent; just run the proxy (for external clients, e.g. Claude Desktop).
@@ -60,10 +75,10 @@ setup_command! {
 pub async fn run(opts: Options) -> Result<()> {
     let agent = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
     if !PROVIDERS.contains(&agent.as_str()) {
-        anyhow::bail!("unknown agent '{agent}' (expected claude|codex|vscode)");
+        anyhow::bail!("unknown agent '{agent}' (expected claude|codex|vscode|cursor)");
     }
-    // The Edgee provider key backing the gateway reroute. For VS Code Copilot this
-    // is the claude key (Copilot isn't an Edgee provider of its own).
+    // The Edgee provider key backing the gateway reroute. GUI editors (VS Code
+    // Copilot, Cursor) map to their own passthrough provider key.
     let provider = key_provider(&agent).to_string();
 
     // Auth bootstrap — same flow as `edgee launch`.
@@ -100,9 +115,9 @@ pub async fn run(opts: Options) -> Result<()> {
     let repo = crate::git::detect_origin();
 
     let gateway_url = crate::commands::launch::resolve_gateway_base_url(&creds).await;
-    // Copilot has no Edgee provider pipeline; the gateway forwards its rerouted
-    // calls to Copilot's own backend, so record the original upstream.
-    let passthrough_to_upstream = is_copilot(&agent);
+    // GUI editors have no Edgee provider pipeline; the gateway forwards their
+    // rerouted calls to the editor's own backend, so record the original upstream.
+    let passthrough_to_upstream = is_gui_editor(&agent);
     let gateway = build_gateway_target(
         &gateway_url,
         api_key,
@@ -132,17 +147,7 @@ pub async fn run(opts: Options) -> Result<()> {
         None => Sink::stdout(),
     };
 
-    // Print a live one-liner per matched request (with status) when the terminal is
-    // free: a GUI client (VS Code Copilot) or an external process (`--no-launch`).
-    // TUI agents (claude/codex) own the terminal, so stay quiet there.
-    let announce = is_copilot(&agent) || opts.no_launch;
-
-    let handler = RelayHandler::new(
-        sink,
-        Arc::new(gateway.clone()),
-        log_enabled,
-        announce,
-    );
+    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled);
 
     let proxy = Proxy::builder()
         .with_addr(addr)
@@ -168,8 +173,8 @@ pub async fn run(opts: Options) -> Result<()> {
             proxy.start().await.context("relay proxy error")?;
         }
         Some(agent) => {
-            if is_copilot(&agent) {
-                print_copilot_hint();
+            if is_gui_editor(&agent) {
+                print_gui_editor_hint(&agent);
             }
             let task = tokio::spawn(async move {
                 let _ = proxy.start().await;
@@ -202,7 +207,8 @@ pub async fn run_for_agent(agent: &str) -> Result<()> {
 fn default_port(provider: &str) -> u16 {
     match provider {
         "codex" => 41200,
-        _ => 41100, // claude / proxy-only
+        "cursor" => 41300,
+        _ => 41100, // claude / copilot / proxy-only
     }
 }
 
@@ -214,6 +220,7 @@ fn provider_api_key(creds: &crate::config::Credentials, provider: &str) -> Optio
         "opencode" => creds.opencode.as_ref(),
         "crush" => creds.crush.as_ref(),
         "copilot" => creds.copilot.as_ref(),
+        "cursor" => creds.cursor.as_ref(),
         _ => None,
     }?;
     if p.api_key.is_empty() {
@@ -312,6 +319,113 @@ fn build_ca(cert_pem: &str, key_pem: &str) -> Result<RcgenAuthority> {
     ))
 }
 
+fn home_dir() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(PathBuf::from)
+}
+
+/// Path to Cursor's user `settings.json`, per platform:
+///   Linux:   `$XDG_CONFIG_HOME/Cursor/User/settings.json` (else `~/.config/...`)
+///   macOS:   `~/Library/Application Support/Cursor/User/settings.json`
+///   Windows: `%APPDATA%\Cursor\User\settings.json`
+fn cursor_settings_path() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        home_dir().map(|h| h.join("Library/Application Support/Cursor/User/settings.json"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Cursor/User/settings.json"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|h| h.join(".config")))
+            .map(|c| c.join("Cursor/User/settings.json"))
+    }
+}
+
+/// Ensure Cursor's `settings.json` has `cursor.general.disableHttp2: true` so its
+/// AI transport speaks HTTP/1.1 (which the relay can MITM) rather than HTTP/2.
+/// Merges the key into any existing settings, preserving other entries, and
+/// creates the file if absent. Best-effort: on any failure it prints a hint to
+/// set it manually rather than aborting the launch, and it never clobbers a file
+/// it can't parse (e.g. one with `//` comments).
+fn ensure_cursor_http1() {
+    const KEY: &str = "cursor.general.disableHttp2";
+    let manual = || {
+        eprintln!(
+            "{}",
+            style(format!(
+                "  Could not update Cursor settings automatically — set \
+                 \"{KEY}\": true (Settings → Network → HTTP Compatibility Mode → \
+                 HTTP/1.1) so relay traffic is intercepted."
+            ))
+            .dim()
+        );
+    };
+
+    let Some(path) = cursor_settings_path() else {
+        manual();
+        return;
+    };
+
+    let current = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => {
+            manual();
+            return;
+        }
+    };
+
+    // `None` => already set (nothing to write); `Err` => unparseable, leave as-is.
+    let body = match cursor_settings_with_http1(&current) {
+        Ok(Some(body)) => body,
+        Ok(None) => return,
+        Err(()) => {
+            manual();
+            return;
+        }
+    };
+
+    let write = || -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&path, &body)
+    };
+    if write().is_err() {
+        manual();
+    }
+}
+
+/// Merge `cursor.general.disableHttp2: true` into Cursor's `settings.json` body.
+/// `current` is the existing file contents (empty string when absent). Returns
+/// `Ok(Some(new_body))` to write, `Ok(None)` when it's already set (no write
+/// needed), or `Err(())` when `current` isn't a JSON object (don't clobber it).
+fn cursor_settings_with_http1(current: &str) -> Result<Option<String>, ()> {
+    const KEY: &str = "cursor.general.disableHttp2";
+    let mut obj = if current.trim().is_empty() {
+        serde_json::Map::new()
+    } else {
+        match serde_json::from_str::<serde_json::Value>(current) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return Err(()),
+        }
+    };
+    if obj.get(KEY) == Some(&serde_json::Value::Bool(true)) {
+        return Ok(None);
+    }
+    obj.insert(KEY.to_string(), serde_json::Value::Bool(true));
+    let mut body = serde_json::to_string_pretty(&serde_json::Value::Object(obj)).map_err(|_| ())?;
+    body.push('\n');
+    Ok(Some(body))
+}
+
 /// Spawn the named agent wired through the proxy. The proxy injects Edgee auth on
 /// reroute, so no base-URL / custom-header env is needed here.
 async fn run_agent(
@@ -320,11 +434,13 @@ async fn run_agent(
     ca_path: &Path,
     session_id: &str,
 ) -> Result<std::process::ExitStatus> {
-    // VS Code Copilot launches the `code` binary. `--wait` keeps this process
-    // alive (and the proxy with it) until the editor window is closed, instead of
-    // `code` forking and returning immediately.
+    // GUI editors launch their own binary (VS Code Copilot → `code`, Cursor →
+    // `cursor`). `--wait` keeps this process alive (and the proxy with it) until the
+    // editor window is closed, instead of the launcher forking and returning at once.
     let (bin_name, args): (&str, &[&str]) = if is_copilot(agent) {
         ("code", &["--wait"])
+    } else if is_cursor(agent) {
+        ("cursor", &["--wait"])
     } else {
         (agent, &[])
     };
@@ -333,12 +449,24 @@ async fn run_agent(
 
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(args);
+    // Cursor's Electron net module ignores HTTPS_PROXY; --proxy-server routes
+    // all HTTPS traffic through the relay so BidiAppend / RunSSE are intercepted.
+    // NB: Cursor's AI calls don't use Chromium's net stack — they go through a
+    // Node `http2` transport in the `cursor-always-local` extension, which reads
+    // NODE_EXTRA_CA_CERTS (set below) but speaks HTTP/2 by default, which the relay
+    // can't MITM. `ensure_cursor_http1` writes `cursor.general.disableHttp2` (the
+    // Settings → Network → HTTP Compatibility Mode → HTTP/1.1 toggle) so the
+    // transport downgrades to HTTP/1.1 and the relay can see it.
+    if is_cursor(agent) {
+        cmd.arg(format!("--proxy-server={proxy_url}"));
+        ensure_cursor_http1();
+    }
     cmd.env("HTTPS_PROXY", &proxy_url);
     cmd.env("HTTP_PROXY", &proxy_url);
     cmd.env("https_proxy", &proxy_url);
     cmd.env("http_proxy", &proxy_url);
     // Make each agent's TLS stack trust the relay CA without a system-store install:
-    //  - Node agents (Claude Code) and VS Code / Copilot read NODE_EXTRA_CA_CERTS.
+    //  - Node agents (Claude Code) and VS Code / Copilot / Cursor read NODE_EXTRA_CA_CERTS.
     //  - Codex (Rust) reads CODEX_CA_CERTIFICATE / SSL_CERT_FILE for its own client;
     //    it does NOT read NODE_EXTRA_CA_CERTS.
     cmd.env("NODE_EXTRA_CA_CERTS", ca_path);
@@ -380,15 +508,29 @@ fn print_banner(
     println!();
 }
 
-fn print_copilot_hint() {
-    println!("{}", style("Launching VS Code (code --wait) behind the relay.").bold());
+fn print_gui_editor_hint(agent: &str) {
+    let (app, launch, feature) = if is_cursor(agent) {
+        ("Cursor", "cursor --wait", "Cursor AI")
+    } else {
+        ("VS Code", "code --wait", "Copilot Chat")
+    };
     println!(
-        "  {}",
-        style("Quit any running VS Code first — the proxy env only applies to a freshly").dim()
+        "{}",
+        style(format!("Launching {app} ({launch}) behind the relay.")).bold()
     );
     println!(
         "  {}",
-        style("spawned instance. Copilot Chat traffic then reroutes through the gateway.").dim()
+        style(format!(
+            "Quit any running {app} first — the proxy env only applies to a freshly"
+        ))
+        .dim()
+    );
+    println!(
+        "  {}",
+        style(format!(
+            "spawned instance. {feature} traffic then reroutes through the gateway."
+        ))
+        .dim()
     );
     println!();
 }
@@ -450,11 +592,65 @@ mod tests {
     }
 
     #[test]
+    fn cursor_agent_recognized() {
+        assert!(is_cursor("cursor"));
+        assert!(!is_cursor("claude"));
+        assert!(!is_cursor("code"));
+        // Both Copilot and Cursor are GUI editors; TUI agents are not.
+        assert!(is_gui_editor("cursor"));
+        assert!(is_gui_editor("copilot"));
+        assert!(!is_gui_editor("claude"));
+        assert!(!is_gui_editor("codex"));
+    }
+
+    #[test]
+    fn cursor_reroute_uses_cursor_key() {
+        assert_eq!(key_provider("cursor"), "cursor");
+    }
+
+    #[test]
+    fn default_ports_are_distinct_per_agent() {
+        assert_eq!(default_port("claude"), 41100);
+        assert_eq!(default_port("codex"), 41200);
+        assert_eq!(default_port("cursor"), 41300);
+    }
+
+    #[test]
     fn rejects_url_without_host() {
         // A path-only URI has no authority → reroute target can't be built.
         assert!(
             build_gateway_target("/no/host", "k".into(), "s".into(), None, false, None).is_err()
         );
+    }
+
+    #[test]
+    fn cursor_http1_creates_settings_when_empty() {
+        let body = cursor_settings_with_http1("").unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["cursor.general.disableHttp2"], serde_json::json!(true));
+        assert!(body.ends_with('\n'));
+    }
+
+    #[test]
+    fn cursor_http1_merges_and_preserves_existing_keys() {
+        let existing = r#"{"editor.fontSize": 14, "cursor.general.disableHttp2": false}"#;
+        let body = cursor_settings_with_http1(existing).unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["cursor.general.disableHttp2"], serde_json::json!(true));
+        assert_eq!(v["editor.fontSize"], serde_json::json!(14));
+    }
+
+    #[test]
+    fn cursor_http1_noop_when_already_set() {
+        let existing = r#"{"cursor.general.disableHttp2": true}"#;
+        assert_eq!(cursor_settings_with_http1(existing), Ok(None));
+    }
+
+    #[test]
+    fn cursor_http1_refuses_to_clobber_unparseable() {
+        // A file with comments (valid JSONC, invalid JSON) must be left untouched.
+        let jsonc = "{\n  // proxy tweak\n  \"editor.fontSize\": 14\n}";
+        assert_eq!(cursor_settings_with_http1(jsonc), Err(()));
     }
 }
 

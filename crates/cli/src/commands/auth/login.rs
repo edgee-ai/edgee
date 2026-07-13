@@ -209,6 +209,7 @@ pub fn agent_label(provider: &str) -> &'static str {
         "opencode" => "OpenCode",
         "crush" => "Crush",
         "copilot" => "GitHub Copilot",
+        "cursor" => "Cursor",
         _ => "your agent",
     }
 }
@@ -303,6 +304,7 @@ fn coding_assistant_name(provider: &str) -> Result<&'static str> {
         "opencode" => Ok("opencode"),
         "crush" => Ok("crush"),
         "copilot" => Ok("copilot"),
+        "cursor" => Ok("cursor"),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
     }
 }
@@ -318,6 +320,7 @@ fn provider_config_mut<'a>(
         "opencode" => Ok(&mut creds.opencode),
         "crush" => Ok(&mut creds.crush),
         "copilot" => Ok(&mut creds.copilot),
+        "cursor" => Ok(&mut creds.cursor),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
     }
 }
@@ -333,6 +336,7 @@ fn provider_config<'a>(
         "opencode" => Ok(creds.opencode.as_ref()),
         "crush" => Ok(creds.crush.as_ref()),
         "copilot" => Ok(creds.copilot.as_ref()),
+        "cursor" => Ok(creds.cursor.as_ref()),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
     }
 }

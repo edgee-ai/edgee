@@ -20,6 +20,11 @@ use hudsucker::{Body, HttpContext, HttpHandler, RequestOrResponse};
 /// identity; Codex's ChatGPT backend (`/backend-api/codex/responses`) is remapped
 /// to the gateway's `/v1/responses`, and VS Code Copilot's `/chat/completions` to
 /// the gateway's `/v1/chat/completions`.
+///
+/// Cursor uses Connect-RPC over HTTPS (`api2.cursor.sh`). The two inference
+/// endpoints are mapped to `/v1/chat/completions` so the gateway routes them
+/// through its upstream-passthrough handler (path is irrelevant there — the
+/// handler fires on the presence of `x-edgee-upstream-url`, before path matching).
 const REROUTE_MAP: &[(&str, &str)] = &[
     ("/v1/messages", "/v1/messages"),
     ("/v1/responses", "/v1/responses"),
@@ -29,6 +34,19 @@ const REROUTE_MAP: &[(&str, &str)] = &[
     // uses the bare chat-completions path. Both map to the gateway's /v1 routes.
     ("/responses", "/v1/responses"),
     ("/chat/completions", "/v1/chat/completions"),
+    // Cursor Connect-RPC inference endpoints (api2.cursor.sh).
+    // BidiAppend sends the full agent context; RunSSE subscribes to the token stream.
+    // Paths map to themselves: the gateway routes these via the upstream-passthrough
+    // check (fires on x-edgee-upstream-url, before path matching) so the path value
+    // here only affects logs.
+    (
+        "/aiserver.v1.BidiService/BidiAppend",
+        "/aiserver.v1.BidiService/BidiAppend",
+    ),
+    (
+        "/agent.v1.AgentService/RunSSE",
+        "/agent.v1.AgentService/RunSSE",
+    ),
 ];
 
 /// Gateway path for a request path, or `None` if it isn't an inference path.
@@ -125,9 +143,6 @@ pub struct RelayHandler {
     sink: Sink,
     /// Whether to emit log blocks at all (reroute still applies when false).
     log_enabled: bool,
-    /// Print a concise one-line summary (with response status) to stdout for every
-    /// request. On when the terminal is free (GUI client / `--no-launch`).
-    announce: bool,
     /// Gateway to reroute inference requests to (with auth to inject).
     gateway: Arc<GatewayTarget>,
     /// Shared monotonic counter allocating one id per logged request.
@@ -138,8 +153,6 @@ pub struct RelayHandler {
     seq: u64,
     /// `METHOD url` of the in-flight request, echoed on its response.
     desc: String,
-    /// Concise `METHOD host/path` of the in-flight request, for the one-liner.
-    summary: String,
     /// Whether the in-flight request on this clone matched the filter.
     matched: bool,
     /// Whether the in-flight request was rerouted to the gateway.
@@ -151,17 +164,14 @@ impl RelayHandler {
         sink: Sink,
         gateway: Arc<GatewayTarget>,
         log_enabled: bool,
-        announce: bool,
     ) -> Self {
         Self {
             sink,
             log_enabled,
-            announce,
             gateway,
             counter: Arc::new(AtomicU64::new(1)),
             seq: 0,
             desc: String::new(),
-            summary: String::new(),
             matched: false,
             rerouted: false,
         }
@@ -179,27 +189,18 @@ impl HttpHandler for RelayHandler {
         req: Request<Body>,
     ) -> RequestOrResponse {
         // CONNECT is the tunnel-establishment request; the real request follows
-        // after TLS termination. We don't log/reroute it, but its authority is
-        // exactly the host hudsucker will mint a leaf cert for, so surface it.
+        // after TLS termination. We don't log/reroute it — just pass it through so
+        // hudsucker mints the leaf cert and terminates TLS.
         let host = request_host(&req);
         if req.method() == http::Method::CONNECT {
-            if self.announce {
-                if let Some(h) = host.as_deref() {
-                    println!("{} mint cert for {h}", style("⚿").dim());
-                }
-            }
             return RequestOrResponse::Request(req);
         }
         self.matched = true;
 
         let reroute = gateway_path_for(req.uri().path());
         self.rerouted = reroute.is_some();
-        // One id per matched request, used by both the one-liner and the file log.
+        // One id per matched request, used by the file log.
         self.seq = self.counter.fetch_add(1, Ordering::Relaxed);
-        if self.announce {
-            let h = host.as_deref().unwrap_or("");
-            self.summary = format!("{} {h}{}", req.method(), req.uri().path());
-        }
 
         // Logging disabled: reroute if needed, forward the body stream untouched
         // (no buffering).
@@ -268,28 +269,6 @@ impl HttpHandler for RelayHandler {
         }
 
         let status = res.status();
-
-        // One line per matched request: id, route marker, summary, response status.
-        if self.announce {
-            let marker = if self.rerouted {
-                style("→gw  ").green()
-            } else {
-                style("pass ").dim()
-            };
-            let code = status.as_u16();
-            let status_styled = if (200..300).contains(&code) {
-                style(status.to_string()).green()
-            } else if (400..600).contains(&code) {
-                style(status.to_string()).red()
-            } else {
-                style(status.to_string()).yellow()
-            };
-            println!(
-                "{} {marker} {}  → {status_styled}",
-                style(format!("#{}", self.seq)).dim(),
-                self.summary,
-            );
-        }
 
         if !self.log_enabled {
             return res;
@@ -688,6 +667,15 @@ mod tests {
             Some("/v1/chat/completions")
         );
         assert_eq!(gateway_path_for("/api/oauth/validate"), None);
+        // Cursor Connect-RPC paths map to themselves.
+        assert_eq!(
+            gateway_path_for("/aiserver.v1.BidiService/BidiAppend"),
+            Some("/aiserver.v1.BidiService/BidiAppend")
+        );
+        assert_eq!(
+            gateway_path_for("/agent.v1.AgentService/RunSSE"),
+            Some("/agent.v1.AgentService/RunSSE")
+        );
     }
 }
 
