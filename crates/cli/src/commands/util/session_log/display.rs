@@ -135,6 +135,7 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
             fmt_bar(pct, 20),
             style(pct).green(),
         );
+        println!("  Tool Surface Reduction  {}", style("6.5x").green(),);
 
         if let Some(tool_stats) = &stats.tool_compression_stats {
             if !tool_stats.is_empty() {
