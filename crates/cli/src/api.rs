@@ -185,6 +185,13 @@ pub struct SessionStats {
     pub total_uncompressed_tools_tokens: u64,
     pub total_compressed_tools_tokens: u64,
     pub tool_compression_stats: Option<HashMap<String, ToolCompressionStat>>,
+    /// Tool surface reduction (MCP tool catalog consolidated into a single virtual
+    /// search tool): tools-block token size before/after. Absent on session logs
+    /// stored before this field was added, hence the lenient default.
+    #[serde(default)]
+    pub total_mcp_surface_tokens_before: u64,
+    #[serde(default)]
+    pub total_mcp_surface_tokens_after: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
