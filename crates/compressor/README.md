@@ -4,10 +4,13 @@ Pure tool-output compression library for AI coding agents.
 
 ## Role in the stack
 
-This crate has no network I/O and no async runtime dependency. It is called by `edgee-compression-layer` to compress tool results before they are forwarded to LLM providers. Adding a new compression strategy only requires changes inside this crate.
+This crate has no network I/O and no async runtime dependency. The Edgee
+hosted / on-prem gateway depends on it (from crates.io) to compress tool
+results before they are forwarded to LLM providers. Adding a new compression
+strategy only requires changes inside this crate.
 
 ```
-edgee-compression-layer
+Edgee gateway (AWS / Fastly / on-prem)
         |
   edgee-compressor      <-- this crate
     strategy/claude/
@@ -95,7 +98,7 @@ Tool names differ by agent. The lookup functions map tool names to compressors:
 | Codex CLI   | snake_case (`read_file`, `shell_command`) | `codex_compressor_for(name)`    |
 | OpenCode    | lowercase (`read`, `bash`)                | `opencode_compressor_for(name)` |
 
-`edgee-compression-layer` selects the right lookup based on `AgentType`.
+The hosted / on-prem gateway selects the right lookup based on the agent type.
 
 ### System-reminder protection
 
@@ -116,5 +119,5 @@ The `Bash` tool compressor parses the command name from the tool arguments and d
 
 ## See also
 
-- [`edgee-compression-layer`](../compression-layer/): Tower middleware that calls this crate
+- [`doc/architecture.md`](../../doc/architecture.md): how this crate relates to the CLI and hosted gateway
 - [`CONTRIBUTING.md`](../../CONTRIBUTING.md#adding-a-compression-strategy): full contribution guide
