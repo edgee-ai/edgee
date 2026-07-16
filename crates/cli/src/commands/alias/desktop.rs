@@ -354,12 +354,14 @@ fn remove_macos_app(app: &AppSpec) -> Result<Option<PathBuf>> {
 }
 
 /// Quote a string for safe use inside a single-quoted bash literal.
+#[cfg(any(test, target_os = "macos"))]
 fn sh_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Launcher that re-opens in Terminal.app when double-clicked (no TTY), so the
 /// relay banner stays visible for the session.
+#[cfg(any(test, target_os = "macos"))]
 pub fn macos_launcher_script(edgee: &Path, launch_target: &str) -> String {
     let edgee_sh = sh_single_quote(&edgee.to_string_lossy());
     let target_sh = sh_single_quote(launch_target);
@@ -385,6 +387,7 @@ exec \"$EDGEE\" launch \"$TARGET\" \"$@\"\n"
     )
 }
 
+#[cfg(any(test, target_os = "macos"))]
 pub fn macos_info_plist(app: &AppSpec, executable: &str) -> String {
     let bundle_id = format!("ai.edgee.launch.{}", app.id.replace('-', "."));
     format!(
@@ -423,7 +426,7 @@ pub fn macos_info_plist(app: &AppSpec, executable: &str) -> String {
     )
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn write_executable(path: &Path, body: &str) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
