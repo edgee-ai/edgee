@@ -186,24 +186,23 @@ pub async fn run(opts: Options) -> Result<()> {
         &session_id,
     );
 
-    // Spawn the agent only when one is named; otherwise run proxy-only.
-    match opts.agent.clone() {
-        None => {
-            print_external_help(&addr, &cert_path);
-            proxy.start().await.context("relay proxy error")?;
+    // Spawn the agent only when one is named; otherwise run proxy-only. Launch
+    // uses the canonical `agent` (e.g. `vscode` → `copilot-vscode`), not the raw
+    // user input, so GUI-editor detection and binary resolution work.
+    if opts.agent.is_none() {
+        print_external_help(&addr, &cert_path);
+        proxy.start().await.context("relay proxy error")?;
+    } else {
+        if is_gui_editor(&agent) {
+            print_gui_editor_hint(&agent);
         }
-        Some(agent) => {
-            if is_gui_editor(&agent) {
-                print_gui_editor_hint(&agent);
-            }
-            let task = tokio::spawn(async move {
-                let _ = proxy.start().await;
-            });
-            let status = run_agent(&agent, port, &cert_path, &session_id).await?;
-            task.abort();
-            if let Some(code) = status.code() {
-                std::process::exit(code);
-            }
+        let task = tokio::spawn(async move {
+            let _ = proxy.start().await;
+        });
+        let status = run_agent(&agent, port, &cert_path, &session_id).await?;
+        task.abort();
+        if let Some(code) = status.code() {
+            std::process::exit(code);
         }
     }
 
