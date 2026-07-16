@@ -1,7 +1,8 @@
 //! `hudsucker` handler that logs LLM API traffic and reroutes inference requests
 //! (`/v1/messages`, `/v1/responses`, `/v1/chat/completions`) to the Edgee gateway,
-//! injecting Edgee auth headers. All HTTPS traffic is decrypted; non-inference
-//! traffic is forwarded untouched after optional logging.
+//! injecting Edgee auth headers. Only CONNECT tunnels to known LLM hosts (see
+//! [`INFERENCE_HOSTS`]) are MITM-decrypted; every other host is blind-tunneled so
+//! unrelated HTTPS traffic (telemetry, updates, auth) is never decrypted.
 
 use std::fmt::Write as _;
 use std::fs::File;
@@ -55,6 +56,38 @@ fn gateway_path_for(path: &str) -> Option<&'static str> {
         .iter()
         .find(|(from, _)| *from == path)
         .map(|(_, to)| *to)
+}
+
+/// Hosts that carry LLM inference traffic — plus the control-plane hosts the
+/// agents hit to authenticate and discover models, which must be visible for the
+/// flow to work end-to-end. Only CONNECT tunnels to these are MITM-decrypted (see
+/// [`should_intercept`]); every other host is blind-tunneled. Matched by exact host
+/// or dot-suffix, so `api.githubcopilot.com` and `api.business.githubcopilot.com`
+/// both match `githubcopilot.com`.
+///
+/// Covers every relay target:
+/// - `api.anthropic.com` — Claude (incl. Claude Code inside VS Code)
+/// - `api.openai.com` + `chatgpt.com` — Codex
+/// - `githubcopilot.com` — VS Code Copilot inference + `/models`
+/// - `api.github.com` — VS Code Copilot token/model discovery
+///   (`/copilot_internal/v2/token`); without it the Copilot model picker is empty
+/// - `cursor.sh` — Cursor Connect-RPC
+const INFERENCE_HOSTS: &[&str] = &[
+    "api.anthropic.com",
+    "api.openai.com",
+    "chatgpt.com",
+    "githubcopilot.com",
+    "api.github.com",
+    "cursor.sh",
+];
+
+/// True if `host` is (or is a subdomain of) a known inference host. Case- and
+/// trailing-dot-insensitive.
+fn is_inference_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    INFERENCE_HOSTS
+        .iter()
+        .any(|h| host == *h || host.ends_with(&format!(".{h}")))
 }
 
 /// The Anthropic path that Claude Code uses. When a VS Code relay sees this, the
@@ -179,8 +212,11 @@ impl RelayHandler {
 }
 
 impl HttpHandler for RelayHandler {
-    async fn should_intercept(&mut self, _ctx: &HttpContext, _req: &Request<Body>) -> bool {
-        true
+    /// Called by hudsucker on each CONNECT with the tunnel's target authority.
+    /// Intercept (terminate TLS to log/reroute) only known inference hosts; blind-
+    /// tunnel everything else so unrelated HTTPS traffic is never decrypted.
+    async fn should_intercept(&mut self, _ctx: &HttpContext, req: &Request<Body>) -> bool {
+        request_host(req).map(|h| is_inference_host(&h)).unwrap_or(false)
     }
 
     async fn handle_request(
@@ -645,6 +681,55 @@ mod tests {
             "/v1/responses?foo=1"
         );
         assert_eq!(parts.uri.authority().unwrap().as_str(), "edgee.io");
+    }
+
+    #[test]
+    fn connect_request_host_is_extracted() {
+        // hudsucker calls should_intercept on the CONNECT request, whose URI is in
+        // authority-form (host:port). Confirm request_host recovers the host so the
+        // allowlist actually sees it.
+        let req = Request::builder()
+            .method("CONNECT")
+            .uri("api.githubcopilot.com:443")
+            .body(Body::from(bytes::Bytes::new()))
+            .unwrap();
+        assert_eq!(request_host(&req).as_deref(), Some("api.githubcopilot.com"));
+        assert!(is_inference_host(&request_host(&req).unwrap()));
+    }
+
+    #[test]
+    fn inference_hosts_intercepted() {
+        // One host per relay target is intercepted (TLS-terminated).
+        for h in [
+            "api.anthropic.com",
+            "api.openai.com",
+            "chatgpt.com",
+            "api.githubcopilot.com",
+            "api.business.githubcopilot.com",
+            "api.github.com", // Copilot token / model discovery
+            "api2.cursor.sh",
+        ] {
+            assert!(is_inference_host(h), "{h} should be intercepted");
+        }
+        // Case- and trailing-dot-insensitive.
+        assert!(is_inference_host("API.Anthropic.com"));
+        assert!(is_inference_host("api.anthropic.com."));
+    }
+
+    #[test]
+    fn non_inference_hosts_blind_tunneled() {
+        for h in [
+            "statsig.anthropic.com", // telemetry, still under anthropic.com
+            "github.com",            // only api.github.com is intercepted, not all of github.com
+            "codeload.github.com",   // git data plane — not the Copilot control plane
+            "sentry.io",
+            "example.com",
+            "notcursor.sh",       // not a dot-suffix of cursor.sh
+            "evilgithubcopilot.com",
+            "",
+        ] {
+            assert!(!is_inference_host(h), "{h} should be blind-tunneled");
+        }
     }
 
     #[test]
