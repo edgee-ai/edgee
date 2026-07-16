@@ -6,7 +6,6 @@ use super::util;
 #[command(disable_help_flag = true)]
 pub struct Options {
     /// Launch through a local relay (MITM) proxy — same as `edgee relay claude`.
-    #[cfg(feature = "relay")]
     #[arg(long)]
     pub relay: bool,
 
@@ -16,7 +15,6 @@ pub struct Options {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    #[cfg(feature = "relay")]
     if opts.relay {
         return crate::commands::relay::run_for_agent("claude").await;
     }

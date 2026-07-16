@@ -115,7 +115,6 @@ pub fn global_data_dir() -> PathBuf {
 
 /// Directory holding the local MITM CA used by `edgee relay`.
 /// Linux/macOS: `~/.local/share/edgee/ca` (contains `edgee-ca.pem` + `edgee-ca.key`).
-#[cfg(feature = "relay")]
 pub fn relay_ca_dir() -> PathBuf {
     global_data_dir().join("ca")
 }

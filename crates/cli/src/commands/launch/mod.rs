@@ -8,9 +8,7 @@ pub mod claude;
 pub mod codebuddy;
 pub mod codex;
 pub mod crush;
-#[cfg(feature = "relay")]
 pub mod cursor;
-#[cfg(feature = "relay")]
 pub mod copilot_vscode;
 pub mod opencode;
 pub(crate) mod util;
@@ -36,11 +34,9 @@ enum Command {
     /// Crush CLI
     Crush(crush::Options),
     /// Cursor IDE
-    #[cfg(feature = "relay")]
     #[command(next_help_heading = "Apps & editors")]
     Cursor(cursor::Options),
     /// GitHub Copilot in VS Code
-    #[cfg(feature = "relay")]
     #[command(name = "copilot-vscode", alias = "vscode-copilot")]
     CopilotVscode(copilot_vscode::Options),
 }
@@ -58,9 +54,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Codex(o) => codex::run(o).await,
         Command::OpenCode(o) => opencode::run(o).await,
         Command::Crush(o) => crush::run(o).await,
-        #[cfg(feature = "relay")]
         Command::Cursor(o) => cursor::run(o).await,
-        #[cfg(feature = "relay")]
         Command::CopilotVscode(o) => copilot_vscode::run(o).await,
     }
 }
