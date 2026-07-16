@@ -9,8 +9,7 @@
   </a>
 </p>
 
-**Open-source LLM gateway written in Rust.**
-Route, observe, and compress your AI traffic.
+**Official Edgee CLI — route coding agents through Edgee and cut token spend.**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Edgee](https://img.shields.io/badge/discord-edgee-blueviolet.svg?logo=discord)](https://www.edgee.ai/discord)
@@ -20,19 +19,20 @@ Route, observe, and compress your AI traffic.
 
 ---
 
-Edgee is a lightweight LLM gateway that sits between your application and AI providers. It gives you a single control point for routing, observability, and cost optimization, without changing your existing code.
+This repository ships the **`edgee` command-line tool**. Install it, sign in, and launch your coding agent — Claude Code, Codex, Cursor, VS Code + Copilot, and more. Traffic goes through Edgee's hosted gateway, which trims tool outputs on the fly so you send fewer tokens without changing how the agent works.
 
-Think of it as an open-source alternative to LiteLLM or OpenRouter, written in Rust for speed and low resource usage, with a built-in token compression engine that reduces your AI costs automatically.
+Install the CLI, sign in, and launch your coding agent — Claude Code, Codex, Cursor, VS Code + Copilot, and more. Traffic goes through Edgee's hosted gateway, which compresses tool outputs on the fly so you send fewer tokens without changing how the agent works.
+
+The production gateway (routing, billing, observability) is operated by Edgee and is **not** built from this repo. Self-hosting is not supported here.
 
 <img width="1997" height="807" alt="ai-gateway-horizontal-light" src="https://github.com/user-attachments/assets/d68ff91d-a488-428e-b99d-f4e1c3ef9242" />
 
-
 ## Why Edgee
 
-- **One gateway, any provider:** Unified API for Anthropic, OpenAI, and other LLM providers. Switch models without touching your app code.
-- **Token compression:** Edgee analyzes request context and strips redundancy before it reaches the model. Same output, fewer tokens, lower bill.
-- **Real-time observability:** See exactly how many tokens you're sending, how many you're saving, and what it costs.
-- **Rust-native:** Fast startup, minimal memory footprint, no runtime dependencies. Runs anywhere Docker runs.
+- **Drop-in for coding agents:** `edgee launch claude` (or `edgee alias`) points your agent at Edgee — no code changes in your project.
+- **Token compression:** Tool outputs (file listings, build logs, test results, …) are trimmed before they reach the model. Same answers, leaner context, lower bill.
+- **Session visibility:** `edgee stats` and the Claude Code statusline show token usage and compression savings in real time.
+- **Rust-native CLI:** Fast install, small footprint, works on macOS, Linux, and Windows.
 
 ---
 
@@ -58,13 +58,17 @@ irm https://edgee.ai/install.ps1 | iex
 
 Installs to `%LOCALAPPDATA%\Programs\edgee\`. You can override the directory with `$env:INSTALL_DIR` before running.
 
+Sign in after install:
+
+```bash
+edgee auth login
+```
+
 ---
 
 ## Quickstart
 
-### Use with AI coding assistants
-
-Edgee can wrap your coding assistant and compress traffic automatically:
+### Launch a coding agent
 
 ```bash
 # Claude Code
@@ -73,7 +77,7 @@ edgee launch claude
 # Codex
 edgee launch codex
 
-# Opencode
+# OpenCode
 edgee launch opencode
 
 # CodeBuddy
@@ -81,18 +85,24 @@ edgee launch codebuddy
 
 # Crush
 edgee launch crush
+
+# Cursor (desktop app)
+edgee launch cursor
+
+# GitHub Copilot in VS Code
+edgee launch copilot-vscode
 ```
 
-Any extra flags you pass after the subcommand are forwarded straight to the underlying agent. For example, to resume the most recent session:
+Any extra flags after the subcommand are forwarded to the underlying agent:
 
 ```bash
-edgee launch claude --resume abcd # continue the last Claude Code session
-edgee launch codex resume         # resume the last Codex session
-edgee launch opencode -c          # continue the last OpenCode session
-edgee launch codebuddy --resume <id>  # resume the last CodeBuddy session
+edgee launch claude --resume abcd          # continue a Claude Code session
+edgee launch codex resume                  # resume the last Codex session
+edgee launch opencode -c                   # continue the last OpenCode session
+edgee launch codebuddy --resume <id>       # resume a CodeBuddy session
 ```
 
-### Route plain `claude` / apps through Edgee (`edgee alias`)
+### Route plain `claude` / desktop apps through Edgee (`edgee alias`)
 
 ```bash
 edgee alias                 # CLI shims + desktop wrappers (when the app is installed)
@@ -105,7 +115,13 @@ edgee alias remove          # undo
 This covers two kinds of targets:
 
 1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
-2. **Apps** (`cursor`, `copilot-vscode`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` (relay under the hood).
+2. **Apps** (`cursor`, `copilot-vscode`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
+
+### Check savings
+
+```bash
+edgee stats
+```
 
 ---
 
@@ -113,15 +129,19 @@ This covers two kinds of targets:
 
 ### Token compression
 
-Edgee's compression engine analyzes tool outputs (file listings, git logs, build output, test results) and removes noise before they enter the LLM context. The compression is lossless from the model's perspective: responses are identical, but prompts are leaner.
-
-### Multi-provider routing
-
-Route requests across Anthropic, OpenAI, and other providers through a single endpoint. Switch models, load-balance, or failover without code changes.
+Edgee's compression engine analyzes tool outputs and removes noise before they enter the LLM context. Compression runs on the **gateway** (via the gateway `tool-result-trimming` crate); the CLI routes your agent there. From the model's perspective the workflow is unchanged — prompts are just leaner.
 
 ### Usage tracking
 
-Real-time visibility into token consumption, compression savings, and cost per request.
+Real-time visibility into token consumption and compression savings per session (`edgee stats`, Claude Code statusline).
+
+### Agent settings
+
+Configure compression, fallback, and reroute options for your coding-agent key:
+
+```bash
+edgee settings
+```
 
 ---
 
@@ -181,7 +201,7 @@ The `SessionStart` hook installed by `edgee statusline claude install` (or by th
 
 ---
 
-## Supported setups
+## Supported agents
 
 | Tool | Setup command | Status |
 |---|---|---|
@@ -199,11 +219,11 @@ Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented
 
 ## Acknowledgments
 
-The token compression engine in Edgee is derived from [RTK](https://github.com/rtk-ai/rtk), created by [Patrick Szymkowiak](https://github.com/pszymkowiak) and contributors at rtk-ai Labs. RTK pioneered local tool-output compression for AI coding assistants, and we built on their work to bring the same optimizations to a gateway architecture.
+The token trimming engine in the [Edgee gateway](https://github.com/edgee-ai/gateway) (`tool-result-trimming` crate) is derived from [RTK](https://github.com/rtk-ai/rtk), created by [Patrick Szymkowiak](https://github.com/pszymkowiak) and contributors at rtk-ai Labs. RTK pioneered local tool-output compression for AI coding assistants; we extended that work for gateway-side compression at scale.
 
 RTK is licensed under the Apache License 2.0. All derived files retain the original copyright notice and are individually marked with a modification history. See [`LICENSE-APACHE`](./LICENSE-APACHE) and [`NOTICE`](./NOTICE) for full details.
 
-If you're looking for a local-first compression tool, [check out RTK directly](https://github.com/rtk-ai/rtk), it's excellent for individual developer workflows.
+If you're looking for a local-first compression tool, [check out RTK directly](https://github.com/rtk-ai/rtk) — it's excellent for individual developer workflows.
 
 ---
 
@@ -211,18 +231,16 @@ If you're looking for a local-first compression tool, [check out RTK directly](h
 
 ```
 crates/
-  cli/                 # edgee binary (auth, launch, stats, alias, relay)
-  compressor/          # pure compression library (published; used by the hosted gateway)
+  cli/                 # edgee binary (auth, launch, stats, alias, relay for GUI apps)
 doc/
-  architecture.md      # how the CLI and compressor relate to the gateway
+  architecture.md      # how the CLI relates to the hosted gateway
 ```
 
 | Crate | Purpose |
 |---|---|
-| `edgee-cli` | `edgee` binary; launches coding agents, manages auth and stats |
-| `edgee-compressor` | Pure compression library; per-tool and per-command strategies |
+| `edgee-cli` | `edgee` binary — launch agents, auth, stats, aliases |
 
-See [`doc/architecture.md`](doc/architecture.md) for how the CLI relates to the hosted / on-prem gateway.
+See [`doc/architecture.md`](doc/architecture.md) for how this repo relates to the hosted gateway.
 
 ---
 

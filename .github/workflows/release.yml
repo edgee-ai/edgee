@@ -16,7 +16,6 @@ on:
   push:
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
-      - "*-[0-9]*.[0-9]*.[0-9]*"
 jobs:
   setup:
     runs-on: ubuntu-latest
@@ -49,11 +48,16 @@ jobs:
             exit 1
           fi
 
-          # Normalize shorthand tag names: cli → edgee-cli, compressor → edgee-compressor, etc.
+          # Normalize shorthand tag names: cli → edgee-cli
           [[ "$CRATE" != edgee-* ]] && CRATE="edgee-${CRATE}"
 
           IS_CLI="false"
           [ "$CRATE" = "edgee-cli" ] && IS_CLI="true"
+
+          if [ "$IS_CLI" != "true" ]; then
+            echo "ERROR: only edgee-cli releases are supported (got '$CRATE')"
+            exit 1
+          fi
 
           echo "crate=${CRATE}"     >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -186,39 +190,6 @@ jobs:
         with:
           file: "edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }};edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}.sha256"
           tags: true
-
-  publish-crate:
-    needs: setup
-    if: needs.setup.outputs.is_cli != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set version in Cargo.toml
-        shell: bash
-        run: |
-          CRATE="${{ needs.setup.outputs.crate }}"
-          VERSION="${{ needs.setup.outputs.version }}"
-          MANIFEST=$(cargo metadata --format-version 1 --no-deps \
-            | jq -r --arg name "$CRATE" \
-              '.packages[] | select(.name == $name) | .manifest_path')
-          if [ -z "$MANIFEST" ]; then
-            echo "ERROR: no package named '$CRATE' found in workspace"
-            exit 1
-          fi
-          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" "$MANIFEST"
-          grep -q "^version = \"${VERSION}\"" "$MANIFEST" || \
-            { echo "ERROR: version patch did not apply to $MANIFEST"; exit 1; }
-
-      - name: Publish to crates.io
-        uses: katyo/publish-crates@v2
-        with:
-          args: -p ${{ needs.setup.outputs.crate }} --allow-dirty
-          registry-token: ${{ secrets.CRATES_IO_TOKEN }}
 
   update-homebrew-tap:
     needs: [setup, build-release-binaries]
