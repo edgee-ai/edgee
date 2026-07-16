@@ -48,7 +48,8 @@ ${_bold}FLAGS${_normal}:
     -h, --help      Print help information
 
 ${_bold}ENVIRONMENT${_normal}:
-    INSTALL_DIR     Override the install directory (default: /usr/local/bin or ~/.local/bin)
+    INSTALL_DIR             Override the install directory (default: /usr/local/bin or ~/.local/bin)
+    EDGEE_INSTALL_ALIASES   yes/no — auto-answer the launch-alias install prompt (skips it when unset and non-interactive)
 EOF
 }
 
@@ -63,6 +64,59 @@ step() {
 
 ok() {
     printf "  %s %s\n" "$_tick" "$*" >&2
+}
+
+# Reminder printed when aliases are not installed (declined or non-interactive).
+_alias_hint() {
+    printf "  %s Run %sedgee alias%s later to install launch aliases (%sclaude%s, %scodex%s, ...).\n" \
+        "$_arrow" "$_cyan" "$_normal" "$_cyan" "$_normal" "$_cyan" "$_normal" >&2
+}
+
+# Run `edgee alias`; never abort the installer if it fails (read-only rc, odd $HOME, ...).
+run_alias() {
+    if ! "$1" alias; then
+        step "Could not install aliases automatically. Run \`edgee alias\` later."
+    fi
+}
+
+# Offer to install launch aliases right after a successful install.
+# Honors EDGEE_INSTALL_ALIASES (yes/no); prompts via /dev/tty when interactive;
+# skips cleanly with a hint when piped (e.g. `curl ... | sh`) with no terminal.
+offer_alias_install() {
+    _bin="$1"
+
+    case "${EDGEE_INSTALL_ALIASES:-}" in
+        1|y|Y|yes|YES|true|TRUE)
+            run_alias "$_bin"
+            return
+            ;;
+        0|n|N|no|NO|false|FALSE)
+            _alias_hint
+            return
+            ;;
+    esac
+
+    # No controlling terminal (piped install / CI) → don't prompt. Probe by
+    # actually opening /dev/tty: the node can exist yet fail to open (CI),
+    # which a plain `[ -r /dev/tty ]` test does not catch.
+    if ! { exec 3</dev/tty; } 2>/dev/null; then
+        _alias_hint
+        return
+    fi
+
+    printf "\n  %s Install launch aliases now? (%sclaude%s → %sedgee launch claude%s, etc.) [Y/n] " \
+        "$_arrow" "$_cyan" "$_normal" "$_dim" "$_normal" >&2
+    _answer=""
+    read _answer <&3 || _answer=""
+    exec 3<&-
+    case "$_answer" in
+        [nN]|[nN][oO])
+            _alias_hint
+            ;;
+        *)
+            run_alias "$_bin"
+            ;;
+    esac
 }
 
 has_command() {
@@ -200,12 +254,13 @@ download_and_install() {
     printf '  ║  %s%*s║\n' "${_bold}${_green}Edgee v${_edgee_version} installed successfully!${_normal}" "$_success_pad" "" 1>&2
     printf '  ╚═══════════════════════════════════════════════╝\n' 1>&2
 
+    offer_alias_install "$_install_dir/edgee"
+
     cat 1>&2 <<EOF
 
   ${_bold}Get started:${_normal}
 
     ${_cyan}edgee auth login${_normal}   ${_dim}# authenticate with your Edgee account${_normal}
-    ${_cyan}edgee alias${_normal}        ${_dim}# optionally install shell aliases for launch commands${_normal}
     ${_cyan}edgee launch claude${_normal} ${_dim}# launch Claude Code with token compression${_normal}
     ${_cyan}edgee --help${_normal}        ${_dim}# show all available commands${_normal}
 
