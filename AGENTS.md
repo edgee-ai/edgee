@@ -1,6 +1,8 @@
 ## What this repo is
 
-Edgee is an **Agent Gateway** written in Rust. It sits between coding agents (Claude Code, CodeBuddy, Codex, OpenCode, Cursor, GitHub Copilot — more coming) or any llm client and LLM providers (Anthropic, OpenAI) and compresses token-heavy traffic on the fly. **This repository is the OSS CLI Edgee users can use to launch and configure their agents through Edgee**.
+
+Edgee is an **Agent Gateway** written in Rust. It sits between coding agents (Claude Code, CodeBuddy, Codex, OpenCode, Cursor, GitHub Copilot — more coming) or any llm client and LLM providers (Anthropic, OpenAI) and compresses token-heavy traffic on the fly. **This repository ships the `edgee` CLI (launch agents through Edgee, auth, stats, local relay for GUI apps)**.
+
 
 **Verify correct installation:**
 ```bash
@@ -68,10 +70,10 @@ cargo generate-rpm            # RPM package (needs cargo-generate-rpm, after rel
 - **`use` statement grouping**: order imports in blank-line-separated blocks:
   1. `std::...`
   2. external crates (crates.io dependencies)
-  3. workspace crates (`edgee_gateway_core`, `edgee_compressor`, `edgee_compression_layer`, `edgee_gateway_http`)
+  3. workspace crates (`edgee_compressor`)
   4. internal (`crate::...`, `super::...`)
 
-  This isn't yet consistently applied across the codebase (e.g. `crates/compression-layer/src/service.rs` mixes an external crate and a workspace crate in one block) — apply the four-block grouping to new and edited code going forward.
+  Apply the four-block grouping to new and edited code going forward.
 
 ## Workspace layout
 
@@ -79,42 +81,12 @@ Cargo workspace (resolver 3), members under `crates/`:
 
 | Crate | Path | Purpose |
 |---|---|---|
-| `edgee-cli` | `crates/cli` | The `edgee` binary. Launches coding agents, manages auth / profiles / session stats. |
-| `edgee-gateway-core` | `crates/gateway-core` | Canonical request/response types, `Provider` trait, passthrough services, `ProviderDispatchService`. No hard tokio/reqwest dependency — runs on WASM/Fastly too. |
-| `edgee-gateway-http` | `crates/gateway-http` | `axum-core`-only HTTP boundary. `PassthroughLayer`/`PassthroughService` read the raw request body, strip headers (via the `SKIP_HEADERS` list re-exported from `gateway-core`), and produce a `PassthroughRequest`. Errors serialize in the OpenAI error schema regardless of which provider failed. |
-| `edgee-compressor` | `crates/compressor` | Pure compression library. Per-tool and per-bash-command strategies. No I/O. |
-| `edgee-compression-layer` | `crates/compression-layer` | Tower `Layer` / `Service` that applies `edgee-compressor` to in-flight requests. |
+| `edgee-cli` | `crates/cli` | The `edgee` binary. Launches coding agents, manages auth / profiles / session stats, local MITM relay for GUI apps. |
+| `edgee-compressor` | `crates/compressor` | Pure compression library. Per-tool and per-bash-command strategies. No I/O. Published on crates.io; consumed by the hosted / on-prem gateway. |
 
-## Architecture — request flow
+## Architecture
 
-The gateway is a Tower `Service` chain:
-
-```text
-CompletionRequest
-      │
-      v
-┌──────────────────────┐
-│  [User layers]       │  ← Any tower::Layer (compression, logging, …)
-└──────┬───────────────┘
-       │
-       v
-┌──────────────────────┐
-│  ProviderDispatch    │  ← Service<CompletionRequest>
-│  Service             │
-└──────────────────────┘
-       │
-       v
- GatewayResponse
-```
-
-The canonical format is OpenAI-Chat-Completions-compatible. `ProviderDispatchService` is intended to translate that into each provider's native format — **today it is a stub** (`crates/gateway-core/src/service.rs`, `Service::call` unconditionally returns an `Error::HttpClient("ProviderDispatchService: not yet implemented")`).
-
-The working path today is **passthrough**: provider-native bodies are forwarded without translation. Two passthrough services:
-
-- `AnthropicPassthroughService` — `POST /v1/messages` (`crates/gateway-core/src/passthrough/anthropic.rs`)
-- `OpenAIPassthroughService` — `POST /v1/responses` (`crates/gateway-core/src/passthrough/openai.rs`)
-
-Neither service filters headers itself — both trust `req.headers` as already-clean and forward them as-is. Hop-by-hop and gateway-internal header stripping happens once, upstream, in `gateway-http`'s `PassthroughService` (using the `SKIP_HEADERS` list defined in `crates/gateway-core/src/passthrough/mod.rs`). The intended integration pattern for anyone embedding these crates is to stack `PassthroughLayer` (gateway-http) → `CompressionLayer` (compression-layer) → `Anthropic`/`OpenAIPassthroughService` (gateway-core) via `tower::ServiceBuilder`, one stack per route (`/v1/messages`, `/v1/responses`). The HTTP backend is abstracted behind `HttpClient` (`crates/gateway-core/src/backend/http.rs`); enable the `tokio` feature to get `ReqwestHttpClient`, or implement `HttpClient` yourself for a different runtime.
+See [`doc/architecture.md`](doc/architecture.md). In short: the CLI points agents at the Edgee gateway; compression of tool results runs **in the gateway** via `edgee-compressor`, not inside the CLI process.
 
 ## Token compression — current state & roadmap
 
@@ -131,9 +103,8 @@ Strategies live under `crates/compressor/src/strategy/`:
 
 Each compressor implements the `ToolCompressor` trait (`crates/compressor/src/strategy/mod.rs`). Bash sub-compressors implement `BashCompressor`; the `Bash` tool compressor parses out the command and dispatches.
 
-Agent-specific tool naming is selected by `AgentType` in `crates/compression-layer/src/config.rs` — `Claude` (PascalCase tool names), `Codex` (e.g. `shell_command`, `read_file`), or `OpenCode` (lowercase).
-
-The Tower integration lives in `crates/compression-layer/src/{layer.rs,service.rs}`: `CompressionLayer` wraps any `Service<CompletionRequest>`, `CompressionService` intercepts requests, mutates them in-place via the `compress/` module (`dispatch.rs` for tool-result compression, `passthrough.rs` for the passthrough body path), and forwards to the inner service.
+Agent-specific tool naming is selected by the gateway when it calls
+`claude_compressor_for` / `codex_compressor_for` / `opencode_compressor_for`.
 
 ## Build Verification (Mandatory)
 

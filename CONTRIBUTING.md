@@ -100,7 +100,7 @@ Steps to add a new compressor:
 
 ## Repository layout
 
-See the [Repository layout](../README.md#repository-layout) section in the README for the crate tree and purpose table, and [`doc/architecture.md`](doc/architecture.md) for the Tower service chain design and full request flow.
+See the [Repository layout](../README.md#repository-layout) section in the README for the crate tree and purpose table, and [`doc/architecture.md`](doc/architecture.md) for how the CLI and compressor relate to the hosted gateway.
 
 ## License
 

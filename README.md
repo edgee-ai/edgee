@@ -211,24 +211,18 @@ If you're looking for a local-first compression tool, [check out RTK directly](h
 
 ```
 crates/
-  cli/                 # edgee binary (auth, launch, stats, alias)
-  gateway-core/        # canonical types, Provider trait, passthrough services
-  compressor/          # pure compression library, no I/O
-  compression-layer/   # Tower Layer/Service applying compression in-flight
-  gateway-http/        # Axum HTTP boundary
+  cli/                 # edgee binary (auth, launch, stats, alias, relay)
+  compressor/          # pure compression library (published; used by the hosted gateway)
 doc/
-  architecture.md      # Tower service chain design document
+  architecture.md      # how the CLI and compressor relate to the gateway
 ```
 
 | Crate | Purpose |
 |---|---|
 | `edgee-cli` | `edgee` binary; launches coding agents, manages auth and stats |
-| `edgee-ai-gateway-core` | Canonical types, `Provider` trait, Anthropic and OpenAI passthrough services |
 | `edgee-compressor` | Pure compression library; per-tool and per-command strategies |
-| `edgee-compression-layer` | Tower `Layer`/`Service` that applies compression to in-flight requests |
-| `edgee-gateway-http` | axum-core HTTP boundary; converts raw HTTP into the internal `PassthroughRequest` type |
 
-See [`doc/architecture.md`](doc/architecture.md) for the full Tower service chain design and request flow.
+See [`doc/architecture.md`](doc/architecture.md) for how the CLI relates to the hosted / on-prem gateway.
 
 ---
 
