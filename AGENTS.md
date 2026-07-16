@@ -70,10 +70,9 @@ cargo generate-rpm            # RPM package (needs cargo-generate-rpm, after rel
 - **`use` statement grouping**: order imports in blank-line-separated blocks:
   1. `std::...`
   2. external crates (crates.io dependencies)
-  3. workspace crates (`edgee_compressor`)
-  4. internal (`crate::...`, `super::...`)
+  3. internal (`crate::...`, `super::...`)
 
-  Apply the four-block grouping to new and edited code going forward.
+  Apply the three-block grouping to new and edited code going forward.
 
 ## Workspace layout
 
@@ -82,29 +81,10 @@ Cargo workspace (resolver 3), members under `crates/`:
 | Crate | Path | Purpose |
 |---|---|---|
 | `edgee-cli` | `crates/cli` | The `edgee` binary. Launches coding agents, manages auth / profiles / session stats, local MITM relay for GUI apps. |
-| `edgee-compressor` | `crates/compressor` | Pure compression library. Per-tool and per-bash-command strategies. No I/O. Published on crates.io; consumed by the hosted / on-prem gateway. |
 
 ## Architecture
 
-See [`doc/architecture.md`](doc/architecture.md). In short: the CLI points agents at the Edgee gateway; compression of tool results runs **in the gateway** via `edgee-compressor`, not inside the CLI process.
-
-## Token compression — current state & roadmap
-
-### Today: tool-results compression
-
-Entry point: `compress_tool_output(tool_name, arguments, output)` in `crates/compressor/src/lib.rs`. It looks up a per-tool compressor and applies it, preserving `<system-reminder>` blocks verbatim via `compress_claude_tool_with_segment_protection` (`crates/compressor/src/util.rs`).
-
-Strategies live under `crates/compressor/src/strategy/`:
-
-- `claude/` — Claude Code tools: `Bash`, `Read`, `Grep`, `Glob`.
-- `codex/` — Codex CLI tools.
-- `opencode/` — OpenCode tools.
-- `bash/` — per-command bash output compressors, further grouped by category subdirectory (`fs/`, `rust/`, `js/`, `python/`, `go/`, `sys/`, `vcs/`), each with its own dispatch `mod.rs`.
-
-Each compressor implements the `ToolCompressor` trait (`crates/compressor/src/strategy/mod.rs`). Bash sub-compressors implement `BashCompressor`; the `Bash` tool compressor parses out the command and dispatches.
-
-Agent-specific tool naming is selected by the gateway when it calls
-`claude_compressor_for` / `codex_compressor_for` / `opencode_compressor_for`.
+See [`doc/architecture.md`](doc/architecture.md). In short: the CLI points agents at the Edgee gateway; tool-result trimming runs **in the gateway** (`tool-result-trimming` crate), not inside the CLI process.
 
 ## Build Verification (Mandatory)
 

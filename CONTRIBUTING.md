@@ -78,29 +78,16 @@ cargo fmt --all && cargo clippy --all-targets && cargo test --all
 
 For significant new features or architectural changes, open an issue first so we can discuss the approach before you invest time building.
 
-## Adding a compression strategy
+## Tool-result trimming strategies
 
-Tool-output compressors live under `crates/compressor/src/strategy/`. Each agent has its own subdirectory:
-
-| Directory            | Agent              | Example tool names             |
-| -------------------- | ------------------ | ------------------------------ |
-| `strategy/claude/`   | Claude Code        | `Bash`, `Read`, `Grep`, `Glob` |
-| `strategy/codex/`    | Codex CLI          | `shell_command`, `read_file`   |
-| `strategy/opencode/` | OpenCode           | `bash`, `read`                 |
-| `strategy/bash/`     | shared per-command | `ls`, `cargo`, `npm`, `pytest` |
-
-Steps to add a new compressor:
-
-1. Create a file in the appropriate directory, e.g. `strategy/claude/new_tool.rs`.
-2. Implement the `ToolCompressor` trait from `crates/compressor/src/strategy/mod.rs`.
-3. Register the new compressor in the `compressor_for` dispatch function in that directory's `mod.rs`.
-4. Add tests covering both the compressed output and `<system-reminder>` passthrough behavior.
-
-`crates/compressor/src/strategy/claude/read.rs` is a well-commented reference example.
+Tool-output trimmers live in the gateway repo under
+[`tool-result-trimming/`](https://github.com/edgee-ai/gateway/tree/develop/tool-result-trimming).
+See [`tool-result-trimming/README.md`](https://github.com/edgee-ai/gateway/blob/develop/tool-result-trimming/README.md)
+for how to add a new strategy.
 
 ## Repository layout
 
-See the [Repository layout](../README.md#repository-layout) section in the README for the crate tree and purpose table, and [`doc/architecture.md`](doc/architecture.md) for how the CLI and compressor relate to the hosted gateway.
+See the [Repository layout](../README.md#repository-layout) section in the README for the crate tree and purpose table, and [`doc/architecture.md`](doc/architecture.md) for how the CLI relates to the hosted gateway.
 
 ## License
 
