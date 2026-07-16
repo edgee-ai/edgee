@@ -1,0 +1,9 @@
+Edgee Gateway
+Copyright 2026 Edgee Cloud
+
+This product includes software derived from RTK (https://github.com/rtk-ai/rtk),
+Copyright 2024 rtk-ai and rtk-ai Labs, licensed under the Apache License 2.0.
+
+Specifically, the token compression modules for bash tool outputs (ls, cat, find,
+git, cargo, and related commands) are derived from RTK's compression implementation
+and have been adapted for server-side gateway compression.
