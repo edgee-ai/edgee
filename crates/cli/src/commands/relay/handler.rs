@@ -190,6 +190,8 @@ pub struct RelayHandler {
     log_enabled: bool,
     /// Gateway to reroute inference requests to (with auth to inject).
     gateway: Arc<GatewayTarget>,
+    /// Whether to also trace the raw request/response bodies in the log.
+    trace_body: bool,
     /// Shared monotonic counter allocating one id per logged request.
     /// hudsucker clones the handler per request, so this `Arc` is shared while
     /// the per-request fields below stay private to each request's clone.
@@ -209,11 +211,13 @@ impl RelayHandler {
         sink: Sink,
         gateway: Arc<GatewayTarget>,
         log_enabled: bool,
+        trace_body: bool,
     ) -> Self {
         Self {
             sink,
             log_enabled,
             gateway,
+            trace_body,
             counter: Arc::new(AtomicU64::new(1)),
             seq: 0,
             desc: String::new(),
@@ -300,7 +304,10 @@ impl HttpHandler for RelayHandler {
                 .green()
         );
         fmt_headers(&mut buf, &headers);
-        fmt_body(&mut buf, &bytes, json_body);
+        // Body tracing is opt-in (--trace-body, or EDGEE_TRACE_BODY != 0/false/off).
+        if self.trace_body {
+            fmt_body(&mut buf, &bytes, json_body);
+        }
         self.sink.emit(&buf);
 
         let req = Request::from_parts(parts, Body::from(bytes));
@@ -362,7 +369,9 @@ impl HttpHandler for RelayHandler {
                 .magenta()
         );
         fmt_headers(&mut buf, &headers);
-        fmt_body(&mut buf, &display, json_body);
+        if self.trace_body {
+            fmt_body(&mut buf, &display, json_body);
+        }
         self.sink.emit(&buf);
 
         Response::from_parts(parts, Body::from(raw))

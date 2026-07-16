@@ -91,6 +91,12 @@ setup_command! {
     /// Write relayed-traffic logs to this file (appended). If unset, logging is off.
     #[arg(long)]
     pub log_output: Option<PathBuf>,
+    /// Also trace the raw request/response bodies in the relay log. Bodies are
+    /// buffered in memory per request, so leave this off for high-volume/SSE
+    /// traffic unless you need to inspect payloads. Overridden to off when the
+    /// `EDGEE_TRACE_BODY` env var is `0`, `false`, or `off`.
+    #[arg(long, default_value_t = false)]
+    pub trace_body: bool,
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -168,7 +174,10 @@ pub async fn run(opts: Options) -> Result<()> {
         None => Sink::stdout(),
     };
 
-    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled);
+    // Body tracing is on with --trace-body unless explicitly disabled via the
+    // EDGEE_TRACE_BODY env var (0|false|off).
+    let trace_body = opts.trace_body && !env_disables_trace_body();
+    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled, trace_body);
 
     let proxy = Proxy::builder()
         .with_addr(addr)
@@ -218,8 +227,17 @@ pub async fn run_for_agent(agent: &str) -> Result<()> {
         no_launch: false,
         port: None,
         log_output: None,
+        trace_body: false,
     })
     .await
+}
+
+/// True when `EDGEE_TRACE_BODY` is set to a value that disables body logging
+/// (`0`, `false`, `off`, case-insensitive). Absent or anything else = no effect.
+fn env_disables_trace_body() -> bool {
+    std::env::var("EDGEE_TRACE_BODY")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"))
+        .unwrap_or(false)
 }
 
 /// Default listen port per agent, picked from an uncommon range so two relays
