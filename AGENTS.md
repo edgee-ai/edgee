@@ -82,10 +82,6 @@ Cargo workspace (resolver 3), members under `crates/`:
 |---|---|---|
 | `edgee-cli` | `crates/cli` | The `edgee` binary. Launches coding agents, manages auth / profiles / session stats, local MITM relay for GUI apps. |
 
-## Architecture
-
-See [`doc/architecture.md`](doc/architecture.md). In short: the CLI points agents at the Edgee gateway; tool-result trimming runs **in the gateway** (`tool-result-trimming` crate), not inside the CLI process.
-
 ## Build Verification (Mandatory)
 
 **CRITICAL**: After ANY Rust file edits, ALWAYS run the full quality check pipeline before committing:

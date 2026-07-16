@@ -232,15 +232,12 @@ If you're looking for a local-first compression tool, [check out RTK directly](h
 ```
 crates/
   cli/                 # edgee binary (auth, launch, stats, alias, relay for GUI apps)
-doc/
-  architecture.md      # how the CLI relates to the hosted gateway
 ```
 
 | Crate | Purpose |
 |---|---|
 | `edgee-cli` | `edgee` binary — launch agents, auth, stats, aliases |
 
-See [`doc/architecture.md`](doc/architecture.md) for how this repo relates to the hosted gateway.
 
 ---
 

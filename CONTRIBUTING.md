@@ -87,7 +87,7 @@ for how to add a new strategy.
 
 ## Repository layout
 
-See the [Repository layout](../README.md#repository-layout) section in the README for the crate tree and purpose table, and [`doc/architecture.md`](doc/architecture.md) for how the CLI relates to the hosted gateway.
+See the [Repository layout](../README.md#repository-layout) section in the README for the crate tree and purpose table.
 
 ## License
 
