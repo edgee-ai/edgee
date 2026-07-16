@@ -92,19 +92,20 @@ edgee launch opencode -c          # continue the last OpenCode session
 edgee launch codebuddy --resume <id>  # resume the last CodeBuddy session
 ```
 
-### Route plain `claude` / `codex` / `opencode` / `crush` through Edgee
-
-If you'd rather type `claude` (or have another tool spawn `claude` for you), install Edgee's shims:
+### Route plain `claude` / apps through Edgee (`edgee alias`)
 
 ```bash
-edgee alias            # installs all five; pass `claude`, `codebuddy`, `codex`, `opencode`, `crush` to scope
-edgee alias remove     # to undo
+edgee alias                 # CLI shims + desktop wrappers (when the app is installed)
+edgee alias claude          # one CLI agent
+edgee alias cursor          # Cursor.app wrapper (skipped if Cursor is not installed)
+edgee alias copilot-vscode  # VS Code wrapper (skipped if VS Code is not installed)
+edgee alias remove          # undo
 ```
 
-This does two things:
+This covers two kinds of targets:
 
-1. Adds a shell alias to `~/.bashrc`, `~/.zshrc`, and `~/.config/fish/config.fish` (`alias claude='edgee launch claude'`, etc.) so interactive shells route through Edgee.
-2. Writes executable shim scripts to `~/.edgee/bin/{claude,codebuddy,codex,opencode,crush}` and prepends `~/.edgee/bin` to `PATH` in the same rc block. This means **non-interactive** shells, including `bash -c '...'`, scripts, and tools that spawn Claude Code via `exec`, also get routed through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
+1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
+2. **Apps** (`cursor`, `copilot-vscode`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` (relay under the hood).
 
 ---
 
