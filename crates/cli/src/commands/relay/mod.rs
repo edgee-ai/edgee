@@ -470,16 +470,19 @@ async fn run_agent(
 
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(args);
-    // Cursor's Electron net module ignores HTTPS_PROXY; --proxy-server routes
-    // all HTTPS traffic through the relay so BidiAppend / RunSSE are intercepted.
-    // NB: Cursor's AI calls don't use Chromium's net stack — they go through a
-    // Node `http2` transport in the `cursor-always-local` extension, which reads
-    // NODE_EXTRA_CA_CERTS (set below) but speaks HTTP/2 by default, which the relay
-    // can't MITM. `ensure_cursor_http1` writes `cursor.general.disableHttp2` (the
-    // Settings → Network → HTTP Compatibility Mode → HTTP/1.1 toggle) so the
-    // transport downgrades to HTTP/1.1 and the relay can see it.
+    // Cursor's AI inference (BidiAppend / RunSSE) goes through a Node `http2`
+    // transport in the `cursor-always-local` extension, which honors HTTPS_PROXY
+    // (set below) and NODE_EXTRA_CA_CERTS — so pointing that env at the relay is
+    // enough to intercept inference. It speaks HTTP/2 by default, which the relay
+    // can't MITM, so `ensure_cursor_http1` writes `cursor.general.disableHttp2`
+    // (Settings → Network → HTTP Compatibility Mode → HTTP/1.1) to downgrade it.
+    //
+    // We deliberately do NOT set Chromium's `--proxy-server`: it blanket-routes
+    // ALL of Cursor's HTTPS (GitHub, marketplace, sign-in, telemetry) through the
+    // relay, which then MITMs/tunnels hosts we don't handle and breaks them (most
+    // visibly, GitHub access). Only the inference URLs should hit the relay;
+    // everything else keeps Cursor's normal, un-proxied, un-MITM'd path.
     if is_cursor(agent) {
-        cmd.arg(format!("--proxy-server={proxy_url}"));
         ensure_cursor_http1();
     }
     cmd.env("HTTPS_PROXY", &proxy_url);
