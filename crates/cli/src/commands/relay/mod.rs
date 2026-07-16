@@ -2,10 +2,11 @@
 //! inference requests through the Edgee gateway.
 //!
 //! Terminates TLS with a locally-generated CA so HTTPS headers and bodies are
-//! visible. Requests to inference paths (`/v1/messages`, `/v1/responses`,
-//! `/v1/chat/completions`) on known LLM hosts are rewritten to the Edgee gateway
-//! (with `x-edgee-*` auth injected); everything else is forwarded to its original
-//! upstream. All matching traffic is logged.
+//! visible — but only for known LLM inference hosts; all other HTTPS is tunneled
+//! without decryption (no leaf cert minted). Requests to inference paths
+//! (`/v1/messages`, `/v1/responses`, `/v1/chat/completions`) are rewritten to the
+//! Edgee gateway (with `x-edgee-*` auth injected); everything else is forwarded
+//! to its original upstream. All matching traffic is logged.
 
 mod handler;
 

@@ -1,7 +1,8 @@
 //! `hudsucker` handler that logs LLM API traffic and reroutes inference requests
 //! (`/v1/messages`, `/v1/responses`, `/v1/chat/completions`) to the Edgee gateway,
-//! injecting Edgee auth headers. All HTTPS traffic is decrypted; non-inference
-//! traffic is forwarded untouched after optional logging.
+//! injecting Edgee auth headers. Only traffic to known inference backends is
+//! decrypted (see `is_inference_host`); every other host is tunneled untouched,
+//! so we never mint a leaf cert for unrelated HTTPS.
 
 use std::fmt::Write as _;
 use std::fs::File;
@@ -55,6 +56,26 @@ fn gateway_path_for(path: &str) -> Option<&'static str> {
         .iter()
         .find(|(from, _)| *from == path)
         .map(|(_, to)| *to)
+}
+
+/// Hosts that serve the LLM inference backends we relay. The proxy only
+/// terminates TLS (and thus only mints a leaf cert) for CONNECT targets matching
+/// one of these; every other host is tunneled untouched, so unrelated HTTPS
+/// traffic never sees our CA. Cursor (`api2.cursor.sh`) and Copilot
+/// (`api.business.githubcopilot.com`, …) rotate subdomains, so those match by
+/// suffix; Anthropic/OpenAI/ChatGPT use a single known inference host each.
+const INFERENCE_HOSTS_EXACT: &[&str] =
+    &["api.anthropic.com", "api.openai.com", "chatgpt.com"];
+const INFERENCE_HOST_SUFFIXES: &[&str] = &[".cursor.sh", ".githubcopilot.com"];
+
+/// Whether `host` is a known LLM inference backend we should MITM. Case- and
+/// trailing-dot-insensitive; port must already be stripped.
+fn is_inference_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    INFERENCE_HOSTS_EXACT.contains(&host.as_str())
+        || INFERENCE_HOST_SUFFIXES
+            .iter()
+            .any(|suffix| host.ends_with(suffix))
 }
 
 /// The Anthropic path that Claude Code uses. When a VS Code relay sees this, the
@@ -179,8 +200,14 @@ impl RelayHandler {
 }
 
 impl HttpHandler for RelayHandler {
-    async fn should_intercept(&mut self, _ctx: &HttpContext, _req: &Request<Body>) -> bool {
-        true
+    async fn should_intercept(&mut self, _ctx: &HttpContext, req: &Request<Body>) -> bool {
+        // Only terminate TLS for known inference backends, so we mint leaf certs
+        // (and decrypt) solely for the hosts we actually reroute. Everything else
+        // is tunneled untouched — unrelated HTTPS never trusts our CA. When the
+        // host can't be determined, err toward tunneling.
+        request_host(req)
+            .map(|host| is_inference_host(&host))
+            .unwrap_or(false)
     }
 
     async fn handle_request(
@@ -676,6 +703,32 @@ mod tests {
             gateway_path_for("/agent.v1.AgentService/RunSSE"),
             Some("/agent.v1.AgentService/RunSSE")
         );
+    }
+
+    #[test]
+    fn inference_hosts_are_mitmd() {
+        // Known inference backends.
+        assert!(is_inference_host("api.anthropic.com"));
+        assert!(is_inference_host("api.openai.com"));
+        assert!(is_inference_host("chatgpt.com"));
+        // Rotating subdomains match by suffix.
+        assert!(is_inference_host("api2.cursor.sh"));
+        assert!(is_inference_host("api.business.githubcopilot.com"));
+        assert!(is_inference_host("api.githubcopilot.com"));
+        // Case- and trailing-dot-insensitive.
+        assert!(is_inference_host("API.Anthropic.com."));
+    }
+
+    #[test]
+    fn non_inference_hosts_are_tunneled() {
+        assert!(!is_inference_host("statsig.anthropic.com"));
+        assert!(!is_inference_host("example.com"));
+        assert!(!is_inference_host("update.googleapis.com"));
+        assert!(!is_inference_host("marketplace.visualstudio.com"));
+        // Suffix guard: a lookalike must not slip past the dot boundary.
+        assert!(!is_inference_host("evilcursor.sh"));
+        assert!(!is_inference_host("notgithubcopilot.com"));
+        assert!(!is_inference_host(""));
     }
 }
 
