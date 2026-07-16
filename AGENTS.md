@@ -1,8 +1,6 @@
 ## What this repo is
 
-Edgee is an **open-source AI Gateway** written in Rust. It sits between coding agents (Claude Code, CodeBuddy, Codex, OpenCode — Cursor and OpenClaw coming soon) or any llm client and LLM providers (Anthropic, OpenAI) and compresses token-heavy traffic on the fly. A hosted / edge version of the same gateway is available at [`www.edgee.ai`](https://www.edgee.ai); **this repository is the OSS core** you can self-host.
-
-The distinguishing feature is the compression engine. Today it ships a single technique — **tool-results compression** — but the architecture is explicitly designed to host **multiple composable techniques** that a developer selects and combines per request. When extending compression, add a new technique alongside the existing ones rather than threading a new code path through the provider dispatch layer.
+Edgee is an **Agent Gateway** written in Rust. It sits between coding agents (Claude Code, CodeBuddy, Codex, OpenCode, Cursor, GitHub Copilot — more coming) or any llm client and LLM providers (Anthropic, OpenAI) and compresses token-heavy traffic on the fly. **This repository is the OSS CLI Edgee users can use to launch and configure their agents through Edgee**.
 
 **Verify correct installation:**
 ```bash
@@ -16,14 +14,14 @@ If `edgee stats` fails, you have the wrong package installed.
 
 Entry point: `crates/cli/src/main.rs`. Subcommands declared in `crates/cli/src/commands/mod.rs`:
 
-- `edgee launch {claude|codebuddy|codex|opencode|crush}` — launches the agent with `ANTHROPIC_BASE_URL` and custom headers pointing at the local gateway. Implementation per agent under `crates/cli/src/commands/launch/`.
+- `edgee launch {claude|codebuddy|codex|opencode|crush|cursor|copilot}` — launches a coding agent or app through Edgee. CLI agents get gateway env/headers; app targets (`cursor`, `copilot`) use the hidden relay. Naming rules: [`crates/cli/src/commands/launch/README.md`](crates/cli/src/commands/launch/README.md). Implementation per target under `crates/cli/src/commands/launch/`.
 - `edgee auth {login|status|list|switch}` — OAuth-style flow against the Edgee console. See `crates/cli/src/api.rs` and `crates/cli/src/commands/auth/`.
 - `edgee settings` — configures compression, fallback, and reroute settings for a coding-agent key against the console API.
 - `edgee stats` (visible alias `report`) — prints session token counts and compression savings.
 - `edgee statusline` — renders/manages the Claude Code statusline integration (see README.md's Statusline section for the install/doctor/fix flow).
 - `edgee alias` — installs shell aliases for quick access.
 - `edgee reset` — clears credentials.
-- `edgee self-update` — compiled in only under the `self-update` feature.
+- `edgee update` — compiled in only under the `self-update` feature.
 
 Global flag: `-p/--profile` overrides the active profile.
 

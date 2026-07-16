@@ -1,7 +1,17 @@
+//! `edgee launch <target>` — public entry points for coding agents and apps.
+//!
+//! Naming rules for targets (CLI vs apps, suffixes, provider keys vs transport)
+//! live in [`README.md`](README.md) in this directory. Read that before adding
+//! a new agent.
+
 pub mod claude;
 pub mod codebuddy;
 pub mod codex;
 pub mod crush;
+#[cfg(feature = "relay")]
+pub mod cursor;
+#[cfg(feature = "relay")]
+pub mod copilot_vscode;
 pub mod opencode;
 pub(crate) mod util;
 
@@ -12,18 +22,27 @@ use super::util::session_log;
 
 #[derive(Debug, clap::Subcommand)]
 enum Command {
-    /// Launch Claude Code routed through Edgee
+    /// Claude Code CLI
+    #[command(next_help_heading = "CLI agents")]
     Claude(claude::Options),
-    /// Launch Codex routed through Edgee
+    /// Codex CLI
     Codex(codex::Options),
-    /// Launch OpenCode routed through Edgee
+    /// OpenCode CLI
     #[command(name = "opencode")]
     OpenCode(opencode::Options),
-    /// Launch CodeBuddy routed through Edgee
+    /// CodeBuddy CLI
     #[command(name = "codebuddy")]
     CodeBuddy(codebuddy::Options),
-    /// Launch Crush routed through Edgee
+    /// Crush CLI
     Crush(crush::Options),
+    /// Cursor IDE
+    #[cfg(feature = "relay")]
+    #[command(next_help_heading = "Apps & editors")]
+    Cursor(cursor::Options),
+    /// GitHub Copilot in VS Code
+    #[cfg(feature = "relay")]
+    #[command(name = "copilot-vscode", alias = "vscode-copilot")]
+    CopilotVscode(copilot_vscode::Options),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -39,6 +58,10 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Codex(o) => codex::run(o).await,
         Command::OpenCode(o) => opencode::run(o).await,
         Command::Crush(o) => crush::run(o).await,
+        #[cfg(feature = "relay")]
+        Command::Cursor(o) => cursor::run(o).await,
+        #[cfg(feature = "relay")]
+        Command::CopilotVscode(o) => copilot_vscode::run(o).await,
     }
 }
 

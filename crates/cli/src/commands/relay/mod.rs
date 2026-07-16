@@ -23,16 +23,35 @@ use hudsucker::Proxy;
 
 use handler::{GatewayTarget, RelayHandler, Sink};
 
-const PROVIDERS: &[&str] = &["claude", "codex", "vscode", "cursor"];
+/// Canonical relay targets (same public names as `edgee launch`). See
+/// `crates/cli/src/commands/launch/README.md` for naming rules.
+///
+/// Note: bare `copilot` is reserved for the future Copilot CLI launch target
+/// and is intentionally not a relay alias here.
+const TARGETS: &[&str] = &["claude", "codex", "copilot-vscode", "cursor"];
 
-/// True for the VS Code Copilot relay target (launches the `code` binary).
-fn is_copilot(agent: &str) -> bool {
-    matches!(agent, "vscode-copilot" | "copilot" | "code" | "vscode")
+/// Map a user-supplied agent name (including legacy aliases) to a canonical
+/// launch/relay target. Returns `None` for unknown names.
+fn canonicalize_target(agent: &str) -> Option<&'static str> {
+    match agent {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "cursor" => Some("cursor"),
+        // GitHub Copilot in VS Code — canonical name is `copilot-vscode`.
+        // `copilot` is reserved for the future Copilot CLI (not an alias here).
+        "copilot-vscode" | "vscode-copilot" | "vscode" | "code" => Some("copilot-vscode"),
+        _ => None,
+    }
+}
+
+/// True for the GitHub Copilot (VS Code) relay target (launches the `code` binary).
+fn is_copilot_vscode(agent: &str) -> bool {
+    agent == "copilot-vscode"
 }
 
 /// True for the Cursor relay target (launches the `cursor` binary).
 fn is_cursor(agent: &str) -> bool {
-    matches!(agent, "cursor")
+    agent == "cursor"
 }
 
 /// True for GUI editors relayed as passthrough providers (VS Code Copilot,
@@ -40,24 +59,25 @@ fn is_cursor(agent: &str) -> bool {
 /// announce per-request), and the gateway forwards to the editor's own backend
 /// rather than routing through an Edgee provider pipeline.
 fn is_gui_editor(agent: &str) -> bool {
-    is_copilot(agent) || is_cursor(agent)
+    is_copilot_vscode(agent) || is_cursor(agent)
 }
 
-/// The Edgee provider key that backs the gateway reroute for `agent`. The VS Code
-/// Copilot aliases map to the `copilot` Edgee provider, Cursor to `cursor`;
-/// everything else uses its own name.
-fn key_provider(agent: &str) -> &str {
-    if is_copilot(agent) {
-        "copilot"
-    } else if is_cursor(agent) {
-        "cursor"
-    } else {
-        agent
+/// Edgee credentials / console provider key for a **canonical** launch target.
+/// Today most targets map 1:1; surfaces of the same product share a key
+/// (e.g. `copilot-vscode` → `copilot`).
+fn key_provider(target: &str) -> &str {
+    match target {
+        "copilot-vscode" => "copilot",
+        // Future: "claude-desktop" | "claude-vscode" => "claude",
+        // Future: "codex-desktop" => "codex",
+        // Future: "copilot" (CLI) => "copilot",
+        other => other,
     }
 }
 
 setup_command! {
-    /// Agent / provider for the relay (claude|codex|vscode|cursor). Launched unless
+    /// Launch/relay target (claude|codex|copilot-vscode|cursor). Aliases for
+    /// Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
     /// Don't spawn the agent; just run the proxy (for external clients, e.g. Claude Desktop).
@@ -73,10 +93,10 @@ setup_command! {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    let agent = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
-    if !PROVIDERS.contains(&agent.as_str()) {
-        anyhow::bail!("unknown agent '{agent}' (expected claude|codex|vscode|cursor)");
-    }
+    let raw = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
+    let agent = canonicalize_target(&raw)
+        .ok_or_else(|| anyhow::anyhow!("unknown agent '{raw}' (expected {})", TARGETS.join("|")))?
+        .to_string();
     // The Edgee provider key backing the gateway reroute. GUI editors (VS Code
     // Copilot, Cursor) map to their own passthrough provider key.
     let provider = key_provider(&agent).to_string();
@@ -93,7 +113,7 @@ pub async fn run(opts: Options) -> Result<()> {
     }
     // VS Code can host Claude Code alongside Copilot chat. Provision the claude key
     // too so Claude's `/v1/messages` traffic reroutes through the claude pipeline.
-    if is_copilot(&agent) {
+    if is_copilot_vscode(&agent) {
         let reprov = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
         if reprov {
             crate::commands::auth::login::ensure_onboarded("claude").await?;
@@ -106,7 +126,7 @@ pub async fn run(opts: Options) -> Result<()> {
     })?;
     // Only wired for the VS Code relay; None elsewhere so `/v1/messages` keeps using
     // the relay's own key.
-    let claude_api_key = if is_copilot(&agent) {
+    let claude_api_key = if is_copilot_vscode(&agent) {
         provider_api_key(&creds, "claude")
     } else {
         None
@@ -437,7 +457,7 @@ async fn run_agent(
     // GUI editors launch their own binary (VS Code Copilot → `code`, Cursor →
     // `cursor`). `--wait` keeps this process alive (and the proxy with it) until the
     // editor window is closed, instead of the launcher forking and returning at once.
-    let (bin_name, args): (&str, &[&str]) = if is_copilot(agent) {
+    let (bin_name, args): (&str, &[&str]) = if is_copilot_vscode(agent) {
         ("code", &["--wait"])
     } else if is_cursor(agent) {
         ("cursor", &["--wait"])
@@ -573,18 +593,37 @@ mod tests {
     }
 
     #[test]
-    fn copilot_agent_aliases_recognized() {
-        for a in ["vscode-copilot", "copilot", "code", "vscode"] {
-            assert!(is_copilot(a), "{a} should be a copilot alias");
+    fn canonicalize_maps_copilot_vscode_aliases() {
+        for a in ["copilot-vscode", "vscode-copilot", "vscode", "code"] {
+            assert_eq!(canonicalize_target(a), Some("copilot-vscode"), "{a}");
         }
-        assert!(!is_copilot("claude"));
-        assert!(!is_copilot("codex"));
+        // Bare `copilot` is reserved for the future CLI — not a VS Code alias.
+        assert_eq!(canonicalize_target("copilot"), None);
+        assert_eq!(canonicalize_target("claude"), Some("claude"));
+        assert_eq!(canonicalize_target("codex"), Some("codex"));
+        assert_eq!(canonicalize_target("cursor"), Some("cursor"));
+        assert_eq!(canonicalize_target("unknown"), None);
     }
 
     #[test]
-    fn copilot_reroute_uses_copilot_key() {
-        for a in ["vscode-copilot", "copilot", "code", "vscode"] {
-            assert_eq!(key_provider(a), "copilot");
+    fn copilot_vscode_agent_aliases_recognized() {
+        for a in ["copilot-vscode", "vscode-copilot", "code", "vscode"] {
+            let canon = canonicalize_target(a).unwrap();
+            assert!(
+                is_copilot_vscode(canon),
+                "{a} should canonicalize to copilot-vscode"
+            );
+        }
+        assert!(!is_copilot_vscode("claude"));
+        assert!(!is_copilot_vscode("codex"));
+        assert!(!is_copilot_vscode("copilot"));
+    }
+
+    #[test]
+    fn copilot_vscode_reroute_uses_copilot_key() {
+        for a in ["copilot-vscode", "vscode-copilot", "code", "vscode"] {
+            let canon = canonicalize_target(a).unwrap();
+            assert_eq!(key_provider(canon), "copilot");
         }
         // Real providers back their own key.
         assert_eq!(key_provider("claude"), "claude");
@@ -596,9 +635,9 @@ mod tests {
         assert!(is_cursor("cursor"));
         assert!(!is_cursor("claude"));
         assert!(!is_cursor("code"));
-        // Both Copilot and Cursor are GUI editors; TUI agents are not.
+        // Both Copilot-in-VS-Code and Cursor are GUI editors; TUI agents are not.
         assert!(is_gui_editor("cursor"));
-        assert!(is_gui_editor("copilot"));
+        assert!(is_gui_editor("copilot-vscode"));
         assert!(!is_gui_editor("claude"));
         assert!(!is_gui_editor("codex"));
     }

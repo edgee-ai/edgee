@@ -184,12 +184,15 @@ The `SessionStart` hook installed by `edgee statusline claude install` (or by th
 
 | Tool | Setup command | Status |
 |---|---|---|
-| Claude Code | `edgee launch claude` | ✅ Supported |
-| Codex | `edgee launch codex` | ✅ Supported |
-| Opencode | `edgee launch opencode` | ✅ Supported |
-| CodeBuddy | `edgee launch codebuddy` | ✅ Supported |
-| Crush | `edgee launch crush` | ✅ Supported |
-| Cursor | `edgee launch cursor` | 🔜 Coming soon |
+| Claude Code (CLI) | `edgee launch claude` | ✅ Supported |
+| Codex (CLI) | `edgee launch codex` | ✅ Supported |
+| OpenCode (CLI) | `edgee launch opencode` | ✅ Supported |
+| CodeBuddy (CLI) | `edgee launch codebuddy` | ✅ Supported |
+| Crush (CLI) | `edgee launch crush` | ✅ Supported |
+| Cursor (app) | `edgee launch cursor` | ✅ Supported |
+| GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
+
+Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented in [`crates/cli/src/commands/launch/README.md`](crates/cli/src/commands/launch/README.md).
 
 ---
 
