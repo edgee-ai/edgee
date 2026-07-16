@@ -90,10 +90,20 @@ fn is_inference_host(host: &str) -> bool {
         .any(|h| host == *h || host.ends_with(&format!(".{h}")))
 }
 
-/// The Anthropic path that Claude Code uses. When a VS Code relay sees this, the
-/// request is Claude Code running inside the editor — not Copilot — so it routes
-/// through the claude pipeline with the claude key instead of Copilot passthrough.
+/// The Anthropic path Claude Code posts to. On its own this is ambiguous: Copilot's
+/// Claude models POST the same path to their `githubcopilot.com` backend. Only when
+/// it's paired with an Anthropic host (see [`is_anthropic_host`]) does a VS Code
+/// relay treat it as Claude Code and route through the claude pipeline.
 const CLAUDE_PATH: &str = "/v1/messages";
+
+/// True if `host` is Anthropic's API domain. Distinguishes real Claude Code traffic
+/// (`api.anthropic.com/v1/messages`) from Copilot's own Claude models, which POST
+/// the same path to a `githubcopilot.com` backend and must passthrough instead.
+/// Port- and case-insensitive.
+fn is_anthropic_host(host: &str) -> bool {
+    let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
+    host == "anthropic.com" || host.ends_with(".anthropic.com")
+}
 
 /// Where rerouted inference requests are sent, plus the Edgee auth to inject.
 /// The key is the active relay's provider key (claude when the agent is claude /
@@ -119,12 +129,14 @@ pub struct GatewayTarget {
 }
 
 impl GatewayTarget {
-    /// Resolve the `(api_key, passthrough_to_upstream)` to use for a request whose
-    /// original path is `orig_path`. Claude Code traffic (`/v1/messages`) in a VS
-    /// Code relay uses the claude key and the gateway pipeline; everything else uses
-    /// the relay's default key and passthrough setting.
-    fn auth_for(&self, orig_path: &str) -> (&str, bool) {
-        if orig_path == CLAUDE_PATH {
+    /// Resolve the `(api_key, passthrough_to_upstream)` to use for a request with
+    /// original host/path `orig_host`/`orig_path`. Claude Code (`/v1/messages` on an
+    /// Anthropic host) in a VS Code relay uses the claude key and the gateway
+    /// pipeline. Everything else — including Copilot's own Claude models, which POST
+    /// `/v1/messages` to their `githubcopilot.com` backend with a Copilot token —
+    /// uses the relay's default key and passthrough setting.
+    fn auth_for(&self, orig_host: Option<&str>, orig_path: &str) -> (&str, bool) {
+        if orig_path == CLAUDE_PATH && orig_host.is_some_and(is_anthropic_host) {
             if let Some(key) = &self.claude_api_key {
                 return (key, false);
             }
@@ -446,10 +458,12 @@ fn apply_reroute(parts: &mut http::request::Parts, gw: &GatewayTarget, gw_path: 
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| parts.uri.path().to_string());
 
-    // Pick the key + routing mode from the original path before it's rewritten:
-    // Claude Code (`/v1/messages`) in a VS Code relay uses the claude key + pipeline,
-    // everything else the relay's default key + passthrough setting.
-    let (api_key, passthrough_to_upstream) = gw.auth_for(parts.uri.path());
+    // Pick the key + routing mode from the original host + path before rewriting:
+    // Claude Code (`/v1/messages` on an Anthropic host) in a VS Code relay uses the
+    // claude key + pipeline; everything else (incl. Copilot's own Claude on its
+    // githubcopilot.com backend) uses the relay's default key + passthrough setting.
+    let (api_key, passthrough_to_upstream) =
+        gw.auth_for(upstream_host.as_deref(), parts.uri.path());
 
     let new_path = format!("{}{gw_path}{query}", gw.base_path);
 
@@ -631,6 +645,36 @@ mod tests {
         apply_reroute(&mut parts, &t, gateway_path_for("/responses").unwrap());
         assert_eq!(parts.headers.get("x-edgee-api-key").unwrap(), "sk-copilot");
         assert!(parts.headers.get("x-edgee-upstream-url").is_some());
+    }
+
+    #[test]
+    fn copilot_claude_v1_messages_passes_through_not_claude_pipeline() {
+        // Copilot's own Claude models POST /v1/messages to their githubcopilot.com
+        // backend with a Copilot token. Despite the path, this must use the Copilot
+        // key + passthrough — NOT the claude pipeline (which 401s). Regression test
+        // for the host-blind auth_for that only looked at the path.
+        let mut t = target();
+        t.api_key = "sk-copilot".into();
+        t.claude_api_key = Some("sk-claude".into());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://api.business.githubcopilot.com/v1/messages")
+            .body(Body::from(bytes::Bytes::new()))
+            .unwrap();
+        let (mut parts, _b) = req.into_parts();
+        apply_reroute(&mut parts, &t, gateway_path_for("/v1/messages").unwrap());
+        assert_eq!(parts.headers.get("x-edgee-api-key").unwrap(), "sk-copilot");
+        assert!(parts.headers.get("x-edgee-upstream-url").is_some());
+    }
+
+    #[test]
+    fn is_anthropic_host_matches_only_anthropic() {
+        assert!(is_anthropic_host("api.anthropic.com"));
+        assert!(is_anthropic_host("API.Anthropic.com:443"));
+        assert!(is_anthropic_host("anthropic.com"));
+        assert!(!is_anthropic_host("api.business.githubcopilot.com"));
+        assert!(!is_anthropic_host("anthropic.com.evil.com"));
     }
 
     #[test]
