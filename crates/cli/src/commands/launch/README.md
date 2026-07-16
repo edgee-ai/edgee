@@ -114,8 +114,11 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
    `relay::canonicalize_target` as aliases, not as new public targets. Never
    alias a reserved bare CLI name to an app surface.
 7. Update the root `README.md` supported-setups table.
-8. Shell aliases (`edgee alias`) are opt-in and usually CLI-only — do not add
-   app aliases unless product explicitly wants them.
+8. `edgee alias` covers both CLI and apps under one command:
+   - CLI → PATH shims / shell aliases
+   - Apps → desktop wrappers (macOS `.app`, Linux `.desktop`, Windows `.lnk`),
+     **only if the host app is already installed**
+   Register new app targets in `commands/alias/desktop.rs` (`AppSpec` + detection).
 
 ## Anti-patterns
 

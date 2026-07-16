@@ -19,7 +19,7 @@ Entry point: `crates/cli/src/main.rs`. Subcommands declared in `crates/cli/src/c
 - `edgee settings` — configures compression, fallback, and reroute settings for a coding-agent key against the console API.
 - `edgee stats` (visible alias `report`) — prints session token counts and compression savings.
 - `edgee statusline` — renders/manages the Claude Code statusline integration (see README.md's Statusline section for the install/doctor/fix flow).
-- `edgee alias` — installs shell aliases for quick access.
+- `edgee alias` — installs CLI PATH shims/shell aliases and desktop app wrappers (`cursor`, `copilot-vscode`) when the host app is installed.
 - `edgee reset` — clears credentials.
 - `edgee update` — compiled in only under the `self-update` feature.
 

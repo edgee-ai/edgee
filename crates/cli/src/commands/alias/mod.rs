@@ -1,7 +1,16 @@
+//! `edgee alias` — install CLI PATH shims / shell aliases **and** desktop app
+//! wrappers for GUI launch targets. See [`desktop`] and
+//! `crates/cli/src/commands/launch/README.md`.
+
+mod desktop;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use console::style;
+
+#[cfg(feature = "relay")]
+use desktop::{AppSpec, ALL_APPS, COPILOT_VSCODE_APP, CURSOR_APP};
 
 const MARKER_START: &str = "# >>> edgee launch aliases >>>";
 const MARKER_END: &str = "# <<< edgee launch aliases <<<";
@@ -18,7 +27,13 @@ const CODEX_ALIAS: AliasSpec = AliasSpec::new("codex", "edgee launch codex");
 const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch opencode");
 const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush");
 
-const ALL_ALIASES: [AliasSpec; 5] = [CLAUDE_ALIAS, CODEBUDDY_ALIAS, CODEX_ALIAS, OPENCODE_ALIAS, CRUSH_ALIAS];
+const ALL_ALIASES: [AliasSpec; 5] = [
+    CLAUDE_ALIAS,
+    CODEBUDDY_ALIAS,
+    CODEX_ALIAS,
+    OPENCODE_ALIAS,
+    CRUSH_ALIAS,
+];
 
 const PATH_EXPORT_POSIX: &str = "case \":$PATH:\" in\n  *\":$HOME/.edgee/bin:\"*) ;;\n  *) export PATH=\"$HOME/.edgee/bin:$PATH\" ;;\nesac\n";
 const PATH_EXPORT_FISH: &str = "fish_add_path -p \"$HOME/.edgee/bin\"\n";
@@ -30,10 +45,18 @@ pub enum Agent {
     Codex,
     Opencode,
     Crush,
+    /// Cursor IDE desktop wrapper (requires Cursor installed)
+    #[cfg(feature = "relay")]
+    Cursor,
+    /// GitHub Copilot in VS Code desktop wrapper (requires VS Code installed)
+    #[cfg(feature = "relay")]
+    #[value(name = "copilot-vscode")]
+    CopilotVscode,
     All,
 }
 
 impl Agent {
+    /// CLI targets → PATH shims / shell aliases.
     fn aliases(self) -> &'static [AliasSpec] {
         match self {
             Self::Claude => std::slice::from_ref(&CLAUDE_ALIAS),
@@ -41,7 +64,20 @@ impl Agent {
             Self::Codex => std::slice::from_ref(&CODEX_ALIAS),
             Self::Opencode => std::slice::from_ref(&OPENCODE_ALIAS),
             Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
+            #[cfg(feature = "relay")]
+            Self::Cursor | Self::CopilotVscode => &[],
             Self::All => &ALL_ALIASES,
+        }
+    }
+
+    /// GUI targets → desktop app wrappers (see [`desktop`]).
+    #[cfg(feature = "relay")]
+    fn apps(self) -> &'static [AppSpec] {
+        match self {
+            Self::Cursor => std::slice::from_ref(&CURSOR_APP),
+            Self::CopilotVscode => std::slice::from_ref(&COPILOT_VSCODE_APP),
+            Self::All => ALL_APPS,
+            _ => &[],
         }
     }
 
@@ -52,6 +88,15 @@ impl Agent {
             Self::Codex => "codex",
             Self::Opencode => "opencode",
             Self::Crush => "crush",
+            #[cfg(feature = "relay")]
+            Self::Cursor => "cursor",
+            #[cfg(feature = "relay")]
+            Self::CopilotVscode => "copilot-vscode",
+            #[cfg(feature = "relay")]
+            Self::All => {
+                "claude, codebuddy, codex, opencode, crush, cursor, and copilot-vscode"
+            }
+            #[cfg(not(feature = "relay"))]
             Self::All => "claude, codebuddy, codex, opencode, and crush",
         }
     }
@@ -102,6 +147,7 @@ impl Action {
 fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
     let home = home_dir()?;
     let shim_dir = home.join(SHIM_DIR_REL);
+    let cli = agent.aliases();
 
     let targets = [
         ShellConfig::new("bash", home.join(".bashrc"), ShellSyntax::Posix),
@@ -115,33 +161,47 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
 
     println!();
 
-    if USES_SHIMS {
-        match action {
-            Action::Install => write_shims(&shim_dir, agent.aliases())?,
-            Action::Remove => remove_shims(&shim_dir, agent.aliases())?,
+    // CLI agents → PATH shims + shell rc block.
+    if !cli.is_empty() {
+        if USES_SHIMS {
+            match action {
+                Action::Install => write_shims(&shim_dir, cli)?,
+                Action::Remove => remove_shims(&shim_dir, cli)?,
+            }
+            println!(
+                "  {} {} ({})",
+                style("updated").green(),
+                shim_dir.display(),
+                style("shims").dim()
+            );
         }
-        println!(
-            "  {} {} ({})",
-            style("updated").green(),
-            shim_dir.display(),
-            style("shims").dim()
-        );
+
+        for target in &targets {
+            let changed = sync_target(target, &shim_dir, agent, action)?;
+            let status = if changed {
+                style("updated").green()
+            } else {
+                style("unchanged").dim()
+            };
+            println!(
+                "  {} {} ({})",
+                status,
+                target.path.display(),
+                style(target.shell).dim()
+            );
+        }
     }
 
-    for target in &targets {
-        let changed = sync_target(target, &shim_dir, agent, action)?;
-        let status = if changed {
-            style("updated").green()
-        } else {
-            style("unchanged").dim()
+    // GUI agents → desktop wrappers (only if the host app is installed).
+    #[cfg(feature = "relay")]
+    {
+        let desktop_action = match action {
+            Action::Install => desktop::Action::Install,
+            Action::Remove => desktop::Action::Remove,
         };
-        println!(
-            "  {} {} ({})",
-            status,
-            target.path.display(),
-            style(target.shell).dim()
-        );
+        desktop::apply_apps(agent.apps(), desktop_action)?;
     }
+
     println!();
     println!(
         "  {} {}",
@@ -149,10 +209,18 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
         style(format!("Affected: {}.", agent.label())).dim()
     );
 
-    if matches!(action, Action::Install) && USES_SHIMS {
+    if matches!(action, Action::Install) && USES_SHIMS && !cli.is_empty() {
         println!();
         println!(
             "  {} Reopen your terminal (or `exec $SHELL -l`) so `$HOME/.edgee/bin` lands on PATH.",
+            style("Note:").bold()
+        );
+    }
+    #[cfg(feature = "relay")]
+    if matches!(action, Action::Install) && !agent.apps().is_empty() {
+        println!();
+        println!(
+            "  {} App wrappers appear in ~/Applications (macOS), your app menu (Linux), or the Start Menu (Windows). Desktop wrappers are skipped when the target app is not installed.",
             style("Note:").bold()
         );
     }
