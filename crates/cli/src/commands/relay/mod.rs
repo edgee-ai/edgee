@@ -2,10 +2,10 @@
 //! inference requests through the Edgee gateway.
 //!
 //! Terminates TLS with a locally-generated CA so HTTPS headers and bodies are
-//! visible. Requests to inference paths (`/v1/messages`, `/v1/responses`,
-//! `/v1/chat/completions`) on known LLM hosts are rewritten to the Edgee gateway
-//! (with `x-edgee-*` auth injected); everything else is forwarded to its original
-//! upstream. All matching traffic is logged.
+//! visible. Only known inference hosts are TLS-intercepted. Requests to inference
+//! paths (`/v1/messages`, `/v1/responses`, `/v1/chat/completions`) on those hosts
+//! are rewritten to the Edgee gateway (with `x-edgee-*` auth injected); all other
+//! HTTPS hosts pass through as opaque tunnels. All matching traffic is logged.
 
 mod handler;
 
@@ -167,7 +167,7 @@ pub async fn run(opts: Options) -> Result<()> {
         None => Sink::stdout(),
     };
 
-    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled);
+    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled, &agent);
 
     let proxy = Proxy::builder()
         .with_addr(addr)
@@ -692,4 +692,3 @@ mod tests {
         assert_eq!(cursor_settings_with_http1(jsonc), Err(()));
     }
 }
-

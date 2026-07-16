@@ -1,7 +1,7 @@
 //! `hudsucker` handler that logs LLM API traffic and reroutes inference requests
 //! (`/v1/messages`, `/v1/responses`, `/v1/chat/completions`) to the Edgee gateway,
-//! injecting Edgee auth headers. All HTTPS traffic is decrypted; non-inference
-//! traffic is forwarded untouched after optional logging.
+//! injecting Edgee auth headers. Only connections to the selected agent's known
+//! inference hosts are decrypted; all other HTTPS traffic stays an opaque tunnel.
 
 use std::fmt::Write as _;
 use std::fs::File;
@@ -15,7 +15,7 @@ use http::{Request, Response, Uri};
 use http_body_util::BodyExt;
 use hudsucker::{Body, HttpContext, HttpHandler, RequestOrResponse};
 
-/// Inference paths rerouted to the Edgee gateway (host-agnostic; gated by domain).
+/// Inference paths rerouted to the Edgee gateway (gated by domain below).
 /// Maps the client's request path to the gateway path it should hit. Most are
 /// identity; Codex's ChatGPT backend (`/backend-api/codex/responses`) is remapped
 /// to the gateway's `/v1/responses`, and VS Code Copilot's `/chat/completions` to
@@ -55,6 +55,68 @@ fn gateway_path_for(path: &str) -> Option<&'static str> {
         .iter()
         .find(|(from, _)| *from == path)
         .map(|(_, to)| *to)
+}
+
+/// Relay target controls which HTTPS hosts may be intercepted. A CONNECT request
+/// only exposes its host, not the eventual HTTP path, so this is the narrowest
+/// decision the proxy can make before TLS termination.
+#[derive(Clone, Copy)]
+enum RelayTarget {
+    Claude,
+    Codex,
+    CopilotVscode,
+    Cursor,
+}
+
+impl RelayTarget {
+    fn for_agent(agent: &str) -> Self {
+        match agent {
+            "codex" => Self::Codex,
+            "copilot-vscode" => Self::CopilotVscode,
+            "cursor" => Self::Cursor,
+            _ => Self::Claude,
+        }
+    }
+
+    fn intercepts_host(self, host: &str) -> bool {
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
+        match self {
+            Self::Claude => host == "api.anthropic.com",
+            Self::Codex => matches!(host.as_str(), "api.openai.com" | "chatgpt.com"),
+            // Claude Code can run inside VS Code alongside Copilot.
+            Self::CopilotVscode => {
+                host == "api.anthropic.com" || host.ends_with(".githubcopilot.com")
+            }
+            Self::Cursor => host == "api2.cursor.sh",
+        }
+    }
+}
+
+/// Resolve an inference path only when it belongs to a known inference host.
+/// This also protects plaintext proxy requests, which do not pass through the
+/// CONNECT interception decision.
+fn gateway_path_for_request(host: &str, path: &str) -> Option<&'static str> {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let valid = match host.as_str() {
+        "api.anthropic.com" => path == "/v1/messages",
+        "api.openai.com" => matches!(path, "/v1/responses" | "/v1/chat/completions"),
+        "chatgpt.com" => path == "/backend-api/codex/responses",
+        "api2.cursor.sh" => matches!(
+            path,
+            "/aiserver.v1.BidiService/BidiAppend" | "/agent.v1.AgentService/RunSSE"
+        ),
+        _ if host.ends_with(".githubcopilot.com") => matches!(
+            path,
+            "/responses" | "/chat/completions" | "/v1/responses" | "/v1/chat/completions"
+        ),
+        _ => false,
+    };
+
+    if valid {
+        gateway_path_for(path)
+    } else {
+        None
+    }
 }
 
 /// The Anthropic path that Claude Code uses. When a VS Code relay sees this, the
@@ -145,6 +207,8 @@ pub struct RelayHandler {
     log_enabled: bool,
     /// Gateway to reroute inference requests to (with auth to inject).
     gateway: Arc<GatewayTarget>,
+    /// Agent-specific inference hosts that are safe to TLS-intercept.
+    target: RelayTarget,
     /// Shared monotonic counter allocating one id per logged request.
     /// hudsucker clones the handler per request, so this `Arc` is shared while
     /// the per-request fields below stay private to each request's clone.
@@ -164,11 +228,13 @@ impl RelayHandler {
         sink: Sink,
         gateway: Arc<GatewayTarget>,
         log_enabled: bool,
+        agent: &str,
     ) -> Self {
         Self {
             sink,
             log_enabled,
             gateway,
+            target: RelayTarget::for_agent(agent),
             counter: Arc::new(AtomicU64::new(1)),
             seq: 0,
             desc: String::new(),
@@ -179,8 +245,9 @@ impl RelayHandler {
 }
 
 impl HttpHandler for RelayHandler {
-    async fn should_intercept(&mut self, _ctx: &HttpContext, _req: &Request<Body>) -> bool {
-        true
+    async fn should_intercept(&mut self, _ctx: &HttpContext, req: &Request<Body>) -> bool {
+        request_host(req)
+            .is_some_and(|host| self.target.intercepts_host(&host))
     }
 
     async fn handle_request(
@@ -197,7 +264,9 @@ impl HttpHandler for RelayHandler {
         }
         self.matched = true;
 
-        let reroute = gateway_path_for(req.uri().path());
+        let reroute = host
+            .as_deref()
+            .and_then(|host| gateway_path_for_request(host, req.uri().path()));
         self.rerouted = reroute.is_some();
         // One id per matched request, used by the file log.
         self.seq = self.counter.fetch_add(1, Ordering::Relaxed);
@@ -677,5 +746,52 @@ mod tests {
             Some("/agent.v1.AgentService/RunSSE")
         );
     }
-}
 
+    #[test]
+    fn relay_targets_only_intercept_their_inference_hosts() {
+        let claude = RelayTarget::for_agent("claude");
+        assert!(claude.intercepts_host("api.anthropic.com"));
+        assert!(claude.intercepts_host("API.ANTHROPIC.COM."));
+        assert!(!claude.intercepts_host("console.anthropic.com"));
+        assert!(!claude.intercepts_host("example.com"));
+
+        let codex = RelayTarget::for_agent("codex");
+        assert!(codex.intercepts_host("api.openai.com"));
+        assert!(codex.intercepts_host("chatgpt.com"));
+        assert!(!codex.intercepts_host("auth.openai.com"));
+
+        let copilot = RelayTarget::for_agent("copilot-vscode");
+        assert!(copilot.intercepts_host("api.githubcopilot.com"));
+        assert!(copilot.intercepts_host("api.business.githubcopilot.com"));
+        assert!(copilot.intercepts_host("api.anthropic.com"));
+        assert!(!copilot.intercepts_host("github.com"));
+
+        let cursor = RelayTarget::for_agent("cursor");
+        assert!(cursor.intercepts_host("api2.cursor.sh"));
+        assert!(!cursor.intercepts_host("api.cursor.sh"));
+    }
+
+    #[test]
+    fn reroute_mapping_is_host_and_path_scoped() {
+        assert_eq!(
+            gateway_path_for_request("api.anthropic.com", "/v1/messages"),
+            Some("/v1/messages")
+        );
+        assert_eq!(
+            gateway_path_for_request("api.openai.com", "/v1/messages"),
+            None
+        );
+        assert_eq!(
+            gateway_path_for_request("example.com", "/v1/responses"),
+            None
+        );
+        assert_eq!(
+            gateway_path_for_request("api.githubcopilot.com", "/responses"),
+            Some("/v1/responses")
+        );
+        assert_eq!(
+            gateway_path_for_request("api2.cursor.sh", "/agent.v1.AgentService/RunSSE"),
+            Some("/agent.v1.AgentService/RunSSE")
+        );
+    }
+}
