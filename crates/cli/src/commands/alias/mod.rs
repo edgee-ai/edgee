@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use console::style;
 
-#[cfg(feature = "relay")]
 use desktop::{AppSpec, ALL_APPS, COPILOT_VSCODE_APP, CURSOR_APP};
 
 const MARKER_START: &str = "# >>> edgee launch aliases >>>";
@@ -46,10 +45,8 @@ pub enum Agent {
     Opencode,
     Crush,
     /// Cursor IDE desktop wrapper (requires Cursor installed)
-    #[cfg(feature = "relay")]
     Cursor,
     /// GitHub Copilot in VS Code desktop wrapper (requires VS Code installed)
-    #[cfg(feature = "relay")]
     #[value(name = "copilot-vscode")]
     CopilotVscode,
     All,
@@ -64,14 +61,12 @@ impl Agent {
             Self::Codex => std::slice::from_ref(&CODEX_ALIAS),
             Self::Opencode => std::slice::from_ref(&OPENCODE_ALIAS),
             Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
-            #[cfg(feature = "relay")]
             Self::Cursor | Self::CopilotVscode => &[],
             Self::All => &ALL_ALIASES,
         }
     }
 
     /// GUI targets → desktop app wrappers (see [`desktop`]).
-    #[cfg(feature = "relay")]
     fn apps(self) -> &'static [AppSpec] {
         match self {
             Self::Cursor => std::slice::from_ref(&CURSOR_APP),
@@ -88,16 +83,9 @@ impl Agent {
             Self::Codex => "codex",
             Self::Opencode => "opencode",
             Self::Crush => "crush",
-            #[cfg(feature = "relay")]
             Self::Cursor => "cursor",
-            #[cfg(feature = "relay")]
             Self::CopilotVscode => "copilot-vscode",
-            #[cfg(feature = "relay")]
-            Self::All => {
-                "claude, codebuddy, codex, opencode, crush, cursor, and copilot-vscode"
-            }
-            #[cfg(not(feature = "relay"))]
-            Self::All => "claude, codebuddy, codex, opencode, and crush",
+            Self::All => "claude, codebuddy, codex, opencode, crush, cursor, and copilot-vscode",
         }
     }
 }
@@ -193,14 +181,11 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
     }
 
     // GUI agents → desktop wrappers (only if the host app is installed).
-    #[cfg(feature = "relay")]
-    {
-        let desktop_action = match action {
-            Action::Install => desktop::Action::Install,
-            Action::Remove => desktop::Action::Remove,
-        };
-        desktop::apply_apps(agent.apps(), desktop_action)?;
-    }
+    let desktop_action = match action {
+        Action::Install => desktop::Action::Install,
+        Action::Remove => desktop::Action::Remove,
+    };
+    desktop::apply_apps(agent.apps(), desktop_action)?;
 
     println!();
     println!(
@@ -216,7 +201,6 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
             style("Note:").bold()
         );
     }
-    #[cfg(feature = "relay")]
     if matches!(action, Action::Install) && !agent.apps().is_empty() {
         println!();
         println!(
