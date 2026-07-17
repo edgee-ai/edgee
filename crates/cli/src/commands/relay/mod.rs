@@ -1,11 +1,12 @@
 //! `edgee relay` — a local MITM proxy that logs LLM API traffic and reroutes
 //! inference requests through the Edgee gateway.
 //!
-//! Terminates TLS with a locally-generated CA so HTTPS headers and bodies are
-//! visible. Requests to inference paths (`/v1/messages`, `/v1/responses`,
-//! `/v1/chat/completions`) on known LLM hosts are rewritten to the Edgee gateway
-//! (with `x-edgee-*` auth injected); everything else is forwarded to its original
-//! upstream. All matching traffic is logged.
+//! Only CONNECT tunnels to known LLM hosts are MITM-decrypted (with a locally-
+//! generated CA) so HTTPS headers and bodies are visible; every other host is
+//! blind-tunneled and never decrypted. On the decrypted hosts, requests to
+//! inference paths (`/v1/messages`, `/v1/responses`, `/v1/chat/completions`) are
+//! rewritten to the Edgee gateway (with `x-edgee-*` auth injected); other paths
+//! are forwarded to their original upstream. All decrypted traffic is logged.
 
 mod handler;
 
@@ -188,24 +189,23 @@ pub async fn run(opts: Options) -> Result<()> {
         &session_id,
     );
 
-    // Spawn the agent only when one is named; otherwise run proxy-only.
-    match opts.agent.clone() {
-        None => {
-            print_external_help(&addr, &cert_path);
-            proxy.start().await.context("relay proxy error")?;
+    // Spawn the agent only when one is named; otherwise run proxy-only. Launch
+    // uses the canonical `agent` (e.g. `vscode` → `copilot-vscode`), not the raw
+    // user input, so GUI-editor detection and binary resolution work.
+    if opts.agent.is_none() {
+        print_external_help(&addr, &cert_path);
+        proxy.start().await.context("relay proxy error")?;
+    } else {
+        if is_gui_editor(&agent) {
+            print_gui_editor_hint(&agent);
         }
-        Some(agent) => {
-            if is_gui_editor(&agent) {
-                print_gui_editor_hint(&agent);
-            }
-            let task = tokio::spawn(async move {
-                let _ = proxy.start().await;
-            });
-            let status = run_agent(&agent, port, &cert_path, &session_id).await?;
-            task.abort();
-            if let Some(code) = status.code() {
-                std::process::exit(code);
-            }
+        let task = tokio::spawn(async move {
+            let _ = proxy.start().await;
+        });
+        let status = run_agent(&agent, port, &cert_path, &session_id).await?;
+        task.abort();
+        if let Some(code) = status.code() {
+            std::process::exit(code);
         }
     }
 
