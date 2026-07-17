@@ -97,22 +97,31 @@ fn build_edgee_provider(
     session_id: &str,
     gateway_url: &str,
     models: &[String],
+    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 ) -> Value {
     // The provider is an OpenAI-compatible endpoint pointed at the gateway's
     // `/v1`. The gateway `id` (e.g. `anthropic/claude-opus-4-8`) is already the
     // routing identifier the gateway accepts, so it serves as both the model id
     // and the display name. When the listing is empty we leave `models` off and
     // set `discover_models` so Crush populates the picker from `/v1/models`.
+    let mut extra_headers = serde_json::json!({
+        "x-edgee-api-key": api_key,
+        "x-edgee-session-id": session_id,
+    });
+    if let (Some(headers_obj), Some(debug_headers)) =
+        (extra_headers.as_object_mut(), debug_log_headers)
+    {
+        headers_obj.insert("x-edgee-debug-pubkey".to_string(), Value::String(debug_headers.pubkey));
+        headers_obj.insert("x-edgee-debug-salt".to_string(), Value::String(debug_headers.salt));
+    }
+
     let mut provider = serde_json::json!({
         "id": "edgee",
         "name": "Edgee",
         "type": "openai-compat",
         "base_url": format!("{}/v1", gateway_url),
         "api_key": api_key,
-        "extra_headers": {
-            "x-edgee-api-key": api_key,
-            "x-edgee-session-id": session_id,
-        },
+        "extra_headers": extra_headers,
         "discover_models": true,
     });
 
@@ -196,7 +205,9 @@ pub async fn run(opts: Options) -> Result<()> {
     });
 
     let models = fetch_gateway_models(&gateway_url, api_key).await;
-    let edgee_provider = build_edgee_provider(api_key, &session_id, &gateway_url, &models);
+    let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
+    let edgee_provider =
+        build_edgee_provider(api_key, &session_id, &gateway_url, &models, debug_log_headers);
     insert_edgee_provider(&mut config, edgee_provider);
 
     // Crush reads `crush.json` from the directory named by CRUSH_GLOBAL_CONFIG,

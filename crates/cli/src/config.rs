@@ -32,6 +32,9 @@ pub struct Profile {
     /// Whether to enable Edgee MCP integration (GitHub repo detection, session naming, PR tracking).
     /// When false, no MCP config or system prompt is injected into the coding assistant.
     pub enable_mcp: Option<bool>,
+    /// Passphrase for this profile's E2EE debug-log encryption. Overridden by
+    /// `EDGEE_DEBUG_LOG_E2EE_PASSPHRASE`
+    pub debug_log_e2ee_passphrase: Option<String>,
     pub claude: Option<ProviderConfig>,
     pub codebuddy: Option<ProviderConfig>,
     pub codex: Option<ProviderConfig>,
@@ -314,6 +317,17 @@ pub fn mcp_base_url() -> String {
         .ok()
         .and_then(|p| p.mcp_url)
         .unwrap_or_else(|| "https://api.edgee.app/mcp".to_string())
+}
+
+/// The active profile's persisted `debug_log_e2ee_passphrase`, if set and
+/// non-empty. Precedence for the E2EE debug-log passphrase (highest first):
+/// `EDGEE_DEBUG_LOG_E2EE_PASSPHRASE` env var > this profile setting; see
+/// `commands::launch::util::resolve_debug_log_keypair`.
+pub fn debug_log_e2ee_passphrase_profile_override() -> Option<String> {
+    read()
+        .ok()
+        .and_then(|p| p.debug_log_e2ee_passphrase)
+        .filter(|s| !s.is_empty())
 }
 
 // ---------------------------------------------------------------------------

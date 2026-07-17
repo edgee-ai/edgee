@@ -70,11 +70,19 @@ pub async fn run(opts: Options) -> Result<()> {
     util::spawn_cli_version_report(&creds, &session_id);
 
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let debug_log_header = util::resolve_debug_log_keypair()?
+        .map(|keypair| {
+            let headers = keypair.header_values();
+            format!("\nx-edgee-debug-pubkey: {}\nx-edgee-debug-salt: {}", headers.pubkey, headers.salt)
+        })
+        .unwrap_or_default();
     let mut cmd = std::process::Command::new(util::resolve_binary("claude"));
     cmd.env("ANTHROPIC_BASE_URL", &gateway_url);
     cmd.env(
         "ANTHROPIC_CUSTOM_HEADERS",
-        format!("x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}"),
+        format!(
+            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}"
+        ),
     );
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env(
