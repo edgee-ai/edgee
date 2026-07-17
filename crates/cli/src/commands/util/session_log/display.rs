@@ -121,8 +121,9 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
         && stats.total_compressed_tools_tokens < stats.total_uncompressed_tools_tokens;
     let has_mcp_surface_reduction = stats.total_mcp_surface_tokens_before > 0
         && stats.total_mcp_surface_tokens_after < stats.total_mcp_surface_tokens_before;
+    let has_brevity = stats.total_brevity_requests > 0 && stats.total_brevity_rate > 0.0;
 
-    if has_tool_compression || has_mcp_surface_reduction {
+    if has_tool_compression || has_mcp_surface_reduction || has_brevity {
         println!();
         println!("  {}", style("Compression").bold().underlined());
 
@@ -149,6 +150,17 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
                 "  Surface {} -> {}  {} {}% saved",
                 style(fmt_tokens(stats.total_mcp_surface_tokens_before)).dim(),
                 style(fmt_tokens(stats.total_mcp_surface_tokens_after)).cyan(),
+                fmt_bar(pct, 20),
+                style(pct).green(),
+            );
+        }
+
+        if has_brevity {
+            let avg_rate = stats.total_brevity_rate / stats.total_brevity_requests as f64;
+            let pct = (avg_rate * 100.0).round().clamp(0.0, 100.0) as u64;
+            println!(
+                "  Brevity {} requests  {} ~{}% saved (est.)",
+                style(fmt_tokens(stats.total_brevity_requests)).cyan(),
                 fmt_bar(pct, 20),
                 style(pct).green(),
             );

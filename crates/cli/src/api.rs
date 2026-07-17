@@ -185,6 +185,16 @@ pub struct SessionStats {
     pub total_uncompressed_tools_tokens: u64,
     pub total_compressed_tools_tokens: u64,
     pub tool_compression_stats: Option<HashMap<String, ToolCompressionStat>>,
+    /// Output brevity (prompt nudging the model toward shorter responses): count of
+    /// requests with brevity enabled and the summed assumed output-reduction
+    /// fraction. There's no counterfactual for what a response would have been
+    /// without the nudge, so this is estimated, not measured — average rate =
+    /// `total_brevity_rate / total_brevity_requests`. Absent on session logs
+    /// stored before this field was added, hence the lenient default.
+    #[serde(default)]
+    pub total_brevity_requests: u64,
+    #[serde(default)]
+    pub total_brevity_rate: f64,
     /// Tool surface reduction (MCP tool catalog consolidated into a single virtual
     /// search tool): tools-block token size before/after. Absent on session logs
     /// stored before this field was added, hence the lenient default.
