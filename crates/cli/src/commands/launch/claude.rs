@@ -82,6 +82,13 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::config::console_api_base_url(),
     );
 
+    // Claude Code's client-side "MCP Tool Search" conflicts with the gateway's
+    // own tool-surface reduction when both are active. Default it off unless
+    // the user has explicitly set it themselves.
+    if std::env::var_os("ENABLE_TOOL_SEARCH").is_none() {
+        cmd.env("ENABLE_TOOL_SEARCH", "false");
+    }
+
     // Step 5: conditionally set up MCP integration
     let use_mcp = creds.enable_mcp.unwrap_or(false);
     if use_mcp {
