@@ -31,8 +31,8 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // Step 2: ensure we have a live api_key for Claude. Re-provisions if the
     // cached key was deleted in the console; re-runs onboarding for a fresh key.
-    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
-    if reprovisioned {
+    let key_status = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
+    if key_status.created {
         crate::commands::auth::login::ensure_onboarded("claude").await?;
     }
     creds = crate::config::read()?;
@@ -83,9 +83,15 @@ pub async fn run(opts: Options) -> Result<()> {
     );
 
     // Claude Code's client-side "MCP Tool Search" conflicts with the gateway's
-    // own tool-surface reduction when both are active. Default it off unless
-    // the user has explicitly set it themselves.
-    if std::env::var_os("ENABLE_TOOL_SEARCH").is_none() {
+    // own tool-surface reduction when both are active. Default it off when the
+    // key has tool_surface_reduction enabled, unless the user has explicitly
+    // set it themselves. Reuses the compression settings already fetched by
+    // `ensure_valid_provider_key` above instead of a second `get_key_by_id` call.
+    let tool_surface_reduction_enabled = key_status
+        .compression
+        .map(|c| c.tool_surface_reduction)
+        .unwrap_or(false);
+    if tool_surface_reduction_enabled && std::env::var_os("ENABLE_TOOL_SEARCH").is_none() {
         cmd.env("ENABLE_TOOL_SEARCH", "false");
     }
 
