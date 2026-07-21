@@ -172,7 +172,15 @@ pub async fn run(opts: Options) -> Result<()> {
         None => Sink::stdout(),
     };
 
-    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled);
+    // Only the Copilot-VS-Code relay needs GitHub's control-plane host
+    // (api.github.com) MITM'd for token/model discovery; other relays blind-tunnel
+    // it so their MCP servers can reach GitHub with GitHub's real certificate.
+    let handler = RelayHandler::new(
+        sink,
+        Arc::new(gateway.clone()),
+        log_enabled,
+        is_copilot_vscode(&agent),
+    );
 
     let proxy = Proxy::builder()
         .with_addr(addr)
@@ -489,6 +497,16 @@ async fn run_agent(
     cmd.env("HTTP_PROXY", &proxy_url);
     cmd.env("https_proxy", &proxy_url);
     cmd.env("http_proxy", &proxy_url);
+    // Exempt loopback from the proxy. The proxy env is inherited by every child
+    // process the agent spawns — notably MCP servers, which commonly talk to a
+    // local endpoint (`http://127.0.0.1:PORT`). Without a bypass, Node-based MCP
+    // transports honor HTTP_PROXY and route those loopback calls back through the
+    // relay (which can't forward arbitrary loopback plain-HTTP), so the MCP fails
+    // to connect. Chromium's own `--proxy-server` already bypasses loopback; this
+    // covers the env-var path the subprocesses use.
+    let no_proxy = build_no_proxy();
+    cmd.env("NO_PROXY", &no_proxy);
+    cmd.env("no_proxy", &no_proxy);
     // Make each agent's TLS stack trust the relay CA without a system-store install:
     //  - Node agents (Claude Code) and VS Code / Copilot / Cursor read NODE_EXTRA_CA_CERTS.
     //  - Codex (Rust) reads CODEX_CA_CERTIFICATE / SSL_CERT_FILE for its own client;
@@ -500,6 +518,25 @@ async fn run_agent(
     cmd.status()
         .await
         .with_context(|| format!("failed to launch '{bin_name}'"))
+}
+
+/// The proxy-bypass list for relayed agents: loopback (so local MCP servers and
+/// other localhost services connect directly) plus any `NO_PROXY`/`no_proxy` the
+/// user already had in the environment, deduplicated and order-preserving.
+fn build_no_proxy() -> String {
+    const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1"];
+    let inherited = std::env::var("NO_PROXY")
+        .or_else(|_| std::env::var("no_proxy"))
+        .unwrap_or_default();
+
+    let mut entries: Vec<String> = LOOPBACK.iter().map(|s| s.to_string()).collect();
+    for part in inherited.split(',') {
+        let part = part.trim();
+        if !part.is_empty() && !entries.iter().any(|e| e.eq_ignore_ascii_case(part)) {
+            entries.push(part.to_string());
+        }
+    }
+    entries.join(",")
 }
 
 async fn shutdown_signal() {
@@ -664,6 +701,14 @@ mod tests {
         assert!(
             build_gateway_target("/no/host", "k".into(), "s".into(), None, false, None).is_err()
         );
+    }
+
+    #[test]
+    fn no_proxy_includes_loopback() {
+        let list = build_no_proxy();
+        for h in ["localhost", "127.0.0.1", "::1"] {
+            assert!(list.split(',').any(|e| e == h), "missing {h} in {list}");
+        }
     }
 
     #[test]
