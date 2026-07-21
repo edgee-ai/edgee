@@ -34,6 +34,7 @@ bytes.workspace = true
 http-body-util.workspace = true
 hudsucker.workspace = true
 rcgen.workspace = true
+tokio-stream.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
