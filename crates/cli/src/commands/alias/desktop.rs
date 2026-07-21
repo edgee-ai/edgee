@@ -39,7 +39,14 @@ pub const COPILOT_VSCODE_APP: AppSpec = AppSpec {
     launch_target: "copilot-vscode",
 };
 
-pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, COPILOT_VSCODE_APP];
+pub const CLAUDE_DESKTOP_APP: AppSpec = AppSpec {
+    id: "claude-desktop",
+    display_name: "Claude Desktop (Edgee)",
+    host_label: "Claude Desktop",
+    launch_target: "claude-desktop",
+};
+
+pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, COPILOT_VSCODE_APP, CLAUDE_DESKTOP_APP];
 
 #[derive(Clone, Copy)]
 pub enum Action {
@@ -109,7 +116,26 @@ pub fn target_app_installed(app: &AppSpec) -> bool {
     match app.id {
         "cursor" => cursor_installed(),
         "copilot-vscode" => vscode_installed(),
+        "claude-desktop" => claude_desktop_installed(),
         _ => false,
+    }
+}
+
+fn claude_desktop_installed() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos_app_exists("Claude.app")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(|a| PathBuf::from(a).join("AnthropicClaude").join("claude.exe"))
+            .is_some_and(|p| p.is_file())
+    }
+    // Claude Desktop ships on macOS and Windows only.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        false
     }
 }
 

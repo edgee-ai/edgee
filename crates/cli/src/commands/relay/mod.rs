@@ -29,13 +29,15 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 ///
 /// Note: bare `copilot` is reserved for the future Copilot CLI launch target
 /// and is intentionally not a relay alias here.
-const TARGETS: &[&str] = &["claude", "codex", "copilot-vscode", "cursor"];
+const TARGETS: &[&str] = &["claude", "claude-desktop", "codex", "copilot-vscode", "cursor"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
 fn canonicalize_target(agent: &str) -> Option<&'static str> {
     match agent {
         "claude" => Some("claude"),
+        // Claude Desktop — its own surface of Claude, relayed like the GUI editors.
+        "claude-desktop" | "claude_desktop" => Some("claude-desktop"),
         "codex" => Some("codex"),
         "cursor" => Some("cursor"),
         // GitHub Copilot in VS Code — canonical name is `copilot-vscode`.
@@ -55,6 +57,11 @@ fn is_cursor(agent: &str) -> bool {
     agent == "cursor"
 }
 
+/// True for the Claude Desktop relay target (launches the Claude app bundle).
+fn is_claude_desktop(agent: &str) -> bool {
+    agent == "claude-desktop"
+}
+
 /// True for GUI editors relayed as passthrough providers (VS Code Copilot,
 /// Cursor). These launch their own binary, leave the terminal free (so we
 /// announce per-request), and the gateway forwards to the editor's own backend
@@ -63,13 +70,25 @@ fn is_gui_editor(agent: &str) -> bool {
     is_copilot_vscode(agent) || is_cursor(agent)
 }
 
+/// True for GUI apps we launch ourselves (the passthrough editors plus Claude
+/// Desktop). These share launch ergonomics — we spawn the app's own binary and
+/// leave the terminal free — but only [`is_gui_editor`] targets are passthrough.
+/// Claude Desktop routes through the real Claude provider pipeline like the CLI.
+fn is_gui_app(agent: &str) -> bool {
+    is_gui_editor(agent) || is_claude_desktop(agent)
+}
+
 /// Edgee credentials / console provider key for a **canonical** launch target.
 /// Today most targets map 1:1; surfaces of the same product share a key
 /// (e.g. `copilot-vscode` → `copilot`).
 fn key_provider(target: &str) -> &str {
     match target {
         "copilot-vscode" => "copilot",
-        // Future: "claude-desktop" | "claude-vscode" => "claude",
+        // Claude Desktop is a dedicated backend agent with its own key/compression
+        // (coding_assistant `claude_desktop`), so it maps to its own provider slot
+        // rather than sharing the `claude` (Claude Code) key.
+        "claude-desktop" => "claude_desktop",
+        // Future: "claude-vscode" => "claude",
         // Future: "codex-desktop" => "codex",
         // Future: "copilot" (CLI) => "copilot",
         other => other,
@@ -77,15 +96,15 @@ fn key_provider(target: &str) -> &str {
 }
 
 setup_command! {
-    /// Launch/relay target (claude|codex|copilot-vscode|cursor). Aliases for
-    /// Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-vscode|cursor).
+    /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
     /// Don't spawn the agent; just run the proxy (for external clients, e.g. Claude Desktop).
     #[arg(long)]
     pub no_launch: bool,
-    /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200)
-    /// so `relay claude` and `relay codex` can run side by side.
+    /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200,
+    /// cursor 41300, claude-desktop 41400) so multiple relays can run side by side.
     #[arg(long)]
     pub port: Option<u16>,
     /// Write relayed-traffic logs to this file (appended). If unset, logging is off.
@@ -152,7 +171,13 @@ pub async fn run(opts: Options) -> Result<()> {
         claude_api_key,
     )?;
 
-    let (cert_pem, key_pem, cert_path) = ensure_ca()?;
+    // claude-desktop uses its own name-constrained CA (it's the only target trusted
+    // in a system keychain); every other target uses the shared unconstrained CA.
+    let (cert_pem, key_pem, cert_path) = if is_claude_desktop(&agent) {
+        ensure_claude_desktop_ca()?
+    } else {
+        ensure_ca()?
+    };
     let ca = build_ca(&cert_pem, &key_pem)?;
     let port = opts.port.unwrap_or_else(|| default_port(&provider));
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -206,14 +231,36 @@ pub async fn run(opts: Options) -> Result<()> {
         print_external_help(&addr, &cert_path);
         proxy.start().await.context("relay proxy error")?;
     } else {
-        if is_gui_editor(&agent) {
-            print_gui_editor_hint(&agent);
+        if is_gui_app(&agent) {
+            print_gui_app_hint(&agent);
         }
+        // Claude Desktop (Chromium) verifies API certs against the macOS system
+        // trust store — it ignores NODE_EXTRA_CA_CERTS and the --ignore-certificate-*
+        // switches. Trust our CA there for the lifetime of this session only, then
+        // remove it on exit, so the machine-wide MITM root never outlives the relay.
+        // `SessionTrust`'s Drop and the Ctrl-C branch below both tear it down; a hard
+        // kill can't run cleanup, so install also purges any stale copy first.
+        let _session_trust = if is_claude_desktop(&agent) {
+            Some(SessionTrust::install(&cert_path)?)
+        } else {
+            None
+        };
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
-        let status = run_agent(&agent, port, &cert_path, &session_id).await?;
+        let status = tokio::select! {
+            r = run_agent(&agent, port, &cert_path, &session_id) => r?,
+            _ = tokio::signal::ctrl_c() => {
+                // Explicit teardown before exit: `process::exit` skips Drop, so the
+                // SessionTrust guard would not otherwise remove the cert.
+                drop(_session_trust);
+                std::process::exit(130);
+            }
+        };
         task.abort();
+        // The app exited on its own. `process::exit` below also skips Drop, so
+        // remove the session trust explicitly before leaving.
+        drop(_session_trust);
         if let Some(code) = status.code() {
             std::process::exit(code);
         }
@@ -240,6 +287,7 @@ fn default_port(provider: &str) -> u16 {
     match provider {
         "codex" => 41200,
         "cursor" => 41300,
+        "claude_desktop" => 41400,
         _ => 41100, // claude / copilot / proxy-only
     }
 }
@@ -248,6 +296,7 @@ fn default_port(provider: &str) -> u16 {
 fn provider_api_key(creds: &crate::config::Credentials, provider: &str) -> Option<String> {
     let p = match provider {
         "claude" => creds.claude.as_ref(),
+        "claude_desktop" => creds.claude_desktop.as_ref(),
         "codex" => creds.codex.as_ref(),
         "opencode" => creds.opencode.as_ref(),
         "crush" => creds.crush.as_ref(),
@@ -290,11 +339,41 @@ fn build_gateway_target(
     })
 }
 
-/// Load the persisted CA, generating it on first use.
+/// Common Name of the dedicated, name-constrained CA used only for the
+/// `claude-desktop` relay. Kept distinct from the shared `Edgee CA` so
+/// [`SessionTrust`] can add/remove exactly this cert in the keychain, and so it
+/// never gets trusted for anything but Anthropic.
+const CLAUDE_DESKTOP_CA_CN: &str = "Edgee Claude Desktop CA";
+
+/// The shared, unconstrained relay CA (used by every target except claude-desktop
+/// via per-process `NODE_EXTRA_CA_CERTS`, never installed in a system trust store).
 fn ensure_ca() -> Result<(String, String, PathBuf)> {
+    ensure_ca_named("edgee-ca", "Edgee CA", &[])
+}
+
+/// The dedicated CA for `claude-desktop`. Because this one gets **trusted in the
+/// macOS system keychain** (Chromium reads only the OS store), it's name-constrained
+/// to `anthropic.com` — Claude Desktop's only MITM'd host — so that even while
+/// trusted (or if its key leaked) it can't vouch for any other domain. Chromium
+/// enforces X.509 name constraints on locally-trusted roots.
+fn ensure_claude_desktop_ca() -> Result<(String, String, PathBuf)> {
+    ensure_ca_named(
+        "edgee-claude-desktop-ca",
+        CLAUDE_DESKTOP_CA_CN,
+        &["anthropic.com"],
+    )
+}
+
+/// Load the persisted CA at `<ca dir>/<file_stem>.{pem,key}`, generating it on
+/// first use with the given Common Name and DNS name-constraints (empty = none).
+fn ensure_ca_named(
+    file_stem: &str,
+    common_name: &str,
+    permitted_dns: &[&str],
+) -> Result<(String, String, PathBuf)> {
     let dir = crate::config::relay_ca_dir();
-    let cert_path = dir.join("edgee-ca.pem");
-    let key_path = dir.join("edgee-ca.key");
+    let cert_path = dir.join(format!("{file_stem}.pem"));
+    let key_path = dir.join(format!("{file_stem}.key"));
 
     if cert_path.exists() && key_path.exists() {
         let cert = std::fs::read_to_string(&cert_path)
@@ -305,7 +384,7 @@ fn ensure_ca() -> Result<(String, String, PathBuf)> {
     }
 
     std::fs::create_dir_all(&dir).with_context(|| format!("creating CA dir {}", dir.display()))?;
-    let (cert_pem, key_pem) = generate_ca()?;
+    let (cert_pem, key_pem) = generate_ca(common_name, permitted_dns)?;
     std::fs::write(&cert_path, &cert_pem)
         .with_context(|| format!("writing CA cert {}", cert_path.display()))?;
     std::fs::write(&key_path, &key_pem)
@@ -313,11 +392,14 @@ fn ensure_ca() -> Result<(String, String, PathBuf)> {
     Ok((cert_pem, key_pem, cert_path))
 }
 
-/// Generate a self-signed CA suitable for signing leaf certs at runtime.
-fn generate_ca() -> Result<(String, String)> {
+/// Generate a self-signed CA suitable for signing leaf certs at runtime. When
+/// `permitted_dns` is non-empty the CA carries an X.509 name-constraints extension
+/// limiting the DNS names it may issue certificates for (RFC 5280); a constraint of
+/// `anthropic.com` also permits `api.anthropic.com` and other subdomains.
+fn generate_ca(common_name: &str, permitted_dns: &[&str]) -> Result<(String, String)> {
     use rcgen::{
-        BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair,
-        KeyUsagePurpose,
+        BasicConstraints, CertificateParams, DistinguishedName, DnType, GeneralSubtree, IsCa,
+        KeyPair, KeyUsagePurpose, NameConstraints,
     };
 
     let mut params =
@@ -328,8 +410,17 @@ fn generate_ca() -> Result<(String, String)> {
         KeyUsagePurpose::DigitalSignature,
         KeyUsagePurpose::CrlSign,
     ];
+    if !permitted_dns.is_empty() {
+        params.name_constraints = Some(NameConstraints {
+            permitted_subtrees: permitted_dns
+                .iter()
+                .map(|d| GeneralSubtree::DnsName(d.to_string()))
+                .collect(),
+            excluded_subtrees: Vec::new(),
+        });
+    }
     let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "Edgee CA");
+    dn.push(DnType::CommonName, common_name);
     dn.push(DnType::OrganizationName, "Edgee");
     params.distinguished_name = dn;
 
@@ -349,6 +440,86 @@ fn build_ca(cert_pem: &str, key_pem: &str) -> Result<RcgenAuthority> {
         1_000,
         aws_lc_rs::default_provider(),
     ))
+}
+
+/// Session-scoped trust of the relay CA in the macOS system keychain. Claude
+/// Desktop (Chromium) only trusts the OS certificate store, so MITM'ing it means
+/// installing our CA as a trusted root — a machine-wide grant. To keep that grant
+/// from outliving the relay, [`install`](Self::install) adds it on launch and
+/// [`Drop`] removes it on exit, bounding the window to this session.
+///
+/// Adding an admin-domain (System keychain) trust root needs privilege, so this
+/// shells out to `sudo security` (prompts once; the purge + add + remove reuse the
+/// cached credential). A hard kill can't run `Drop`, so `install` first purges any
+/// stale copy left by a crashed prior run. On non-macOS this is a no-op.
+struct SessionTrust;
+
+impl SessionTrust {
+    fn install(ca_path: &Path) -> Result<Self> {
+        #[cfg(target_os = "macos")]
+        {
+            // Idempotent: clear any leftover from a prior (possibly crashed) session
+            // before adding a fresh trust root.
+            Self::remove_cert();
+            eprintln!(
+                "{}",
+                style("Trusting Edgee CA in the system keychain for this session (admin required)…")
+                    .dim()
+            );
+            let status = std::process::Command::new("sudo")
+                .args([
+                    "security",
+                    "add-trusted-cert",
+                    "-d",
+                    "-r",
+                    "trustRoot",
+                    "-k",
+                    "/Library/Keychains/System.keychain",
+                ])
+                .arg(ca_path)
+                .status()
+                .context("running `sudo security add-trusted-cert`")?;
+            if !status.success() {
+                anyhow::bail!(
+                    "failed to trust the Edgee CA in the system keychain \
+                     (Claude Desktop needs it to accept the relay). Left nothing installed."
+                );
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = ca_path;
+        }
+        Ok(SessionTrust)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn remove_cert() {
+        // Best-effort; a missing cert (nothing to remove) is fine. Targets the
+        // dedicated, name-constrained CA by CN — never the shared `Edgee CA`.
+        let _ = std::process::Command::new("sudo")
+            .args([
+                "security",
+                "delete-certificate",
+                "-c",
+                CLAUDE_DESKTOP_CA_CN,
+                "/Library/Keychains/System.keychain",
+            ])
+            .status();
+    }
+}
+
+impl Drop for SessionTrust {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            eprintln!(
+                "{}",
+                style("Removing Edgee CA trust from the system keychain…").dim()
+            );
+            Self::remove_cert();
+        }
+    }
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -466,33 +637,51 @@ async fn run_agent(
     ca_path: &Path,
     session_id: &str,
 ) -> Result<std::process::ExitStatus> {
-    // GUI editors launch their own binary (VS Code Copilot → `code`, Cursor →
-    // `cursor`). `--wait` keeps this process alive (and the proxy with it) until the
-    // editor window is closed, instead of the launcher forking and returning at once.
-    let (bin_name, args): (&str, &[&str]) = if is_copilot_vscode(agent) {
-        ("code", &["--wait"])
-    } else if is_cursor(agent) {
-        ("cursor", &["--wait"])
-    } else {
-        (agent, &[])
-    };
-    let bin = crate::commands::launch::util::resolve_binary(bin_name);
     let proxy_url = format!("http://127.0.0.1:{port}");
 
-    let mut cmd = tokio::process::Command::new(bin);
-    cmd.args(args);
-    // Cursor's Electron net module ignores HTTPS_PROXY; --proxy-server routes
-    // all HTTPS traffic through the relay so BidiAppend / RunSSE are intercepted.
-    // NB: Cursor's AI calls don't use Chromium's net stack — they go through a
-    // Node `http2` transport in the `cursor-always-local` extension, which reads
-    // NODE_EXTRA_CA_CERTS (set below) but speaks HTTP/2 by default, which the relay
-    // can't MITM. `ensure_cursor_http1` writes `cursor.general.disableHttp2` (the
-    // Settings → Network → HTTP Compatibility Mode → HTTP/1.1 toggle) so the
-    // transport downgrades to HTTP/1.1 and the relay can see it.
-    if is_cursor(agent) {
-        cmd.arg(format!("--proxy-server={proxy_url}"));
-        ensure_cursor_http1();
-    }
+    // Claude Desktop is a GUI Electron app with no CLI shim, so we spawn the app
+    // bundle's own binary directly (not `open`/a wrapper) — that keeps this process
+    // attached until the app quits (holding the proxy open) and lets the proxy env
+    // propagate into it. Like Cursor, its Electron net stack won't honor
+    // HTTPS_PROXY, so route it explicitly with Chromium's --proxy-server. Its API
+    // calls verify against the macOS system trust store (Chromium net ignores
+    // NODE_EXTRA_CA_CERTS *and* the --ignore-certificate-errors* switches when
+    // passed via argv), so the relay CA must be trusted in the keychain — handled
+    // for the session's lifetime by `SessionTrust` in `run`.
+    let mut cmd = if is_claude_desktop(agent) {
+        let bin = claude_desktop_binary()?;
+        let mut c = tokio::process::Command::new(bin);
+        c.arg(format!("--proxy-server={proxy_url}"));
+        c
+    } else {
+        // GUI editors launch their own binary (VS Code Copilot → `code`, Cursor →
+        // `cursor`). `--wait` keeps this process alive (and the proxy with it) until
+        // the editor window is closed, instead of the launcher forking and returning
+        // at once.
+        let (bin_name, args): (&str, &[&str]) = if is_copilot_vscode(agent) {
+            ("code", &["--wait"])
+        } else if is_cursor(agent) {
+            ("cursor", &["--wait"])
+        } else {
+            (agent, &[])
+        };
+        let bin = crate::commands::launch::util::resolve_binary(bin_name);
+        let mut c = tokio::process::Command::new(bin);
+        c.args(args);
+        // Cursor's Electron net module ignores HTTPS_PROXY; --proxy-server routes
+        // all HTTPS traffic through the relay so BidiAppend / RunSSE are intercepted.
+        // NB: Cursor's AI calls don't use Chromium's net stack — they go through a
+        // Node `http2` transport in the `cursor-always-local` extension, which reads
+        // NODE_EXTRA_CA_CERTS (set below) but speaks HTTP/2 by default, which the relay
+        // can't MITM. `ensure_cursor_http1` writes `cursor.general.disableHttp2` (the
+        // Settings → Network → HTTP Compatibility Mode → HTTP/1.1 toggle) so the
+        // transport downgrades to HTTP/1.1 and the relay can see it.
+        if is_cursor(agent) {
+            c.arg(format!("--proxy-server={proxy_url}"));
+            ensure_cursor_http1();
+        }
+        c
+    };
     cmd.env("HTTPS_PROXY", &proxy_url);
     cmd.env("HTTP_PROXY", &proxy_url);
     cmd.env("https_proxy", &proxy_url);
@@ -517,7 +706,48 @@ async fn run_agent(
 
     cmd.status()
         .await
-        .with_context(|| format!("failed to launch '{bin_name}'"))
+        .with_context(|| format!("failed to launch '{agent}'"))
+}
+
+/// Resolve the Claude Desktop executable to launch behind the relay. Claude
+/// Desktop ships on macOS and Windows; we spawn the app's own binary (not
+/// `open`/a shim) so the relay's proxy env and CA trust propagate to it.
+fn claude_desktop_binary() -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut candidates = vec![PathBuf::from("/Applications/Claude.app/Contents/MacOS/Claude")];
+        if let Some(home) = home_dir() {
+            candidates.push(home.join("Applications/Claude.app/Contents/MacOS/Claude"));
+        }
+        candidates.into_iter().find(|p| p.exists()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Claude Desktop not found. Install it from https://claude.ai/download \
+                 (looked in /Applications and ~/Applications)."
+            )
+        })
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let candidates = [
+            std::env::var_os("LOCALAPPDATA")
+                .map(|a| PathBuf::from(a).join("AnthropicClaude").join("claude.exe")),
+            std::env::var_os("PROGRAMFILES")
+                .map(|a| PathBuf::from(a).join("Claude").join("claude.exe")),
+        ];
+        candidates
+            .into_iter()
+            .flatten()
+            .find(|p| p.exists())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Claude Desktop not found. Install it from https://claude.ai/download."
+                )
+            })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        anyhow::bail!("Claude Desktop is not available on this platform (macOS/Windows only).")
+    }
 }
 
 /// The proxy-bypass list for relayed agents: loopback (so local MCP servers and
@@ -569,9 +799,11 @@ fn print_banner(
     println!();
 }
 
-fn print_gui_editor_hint(agent: &str) {
+fn print_gui_app_hint(agent: &str) {
     let (app, launch, feature) = if is_cursor(agent) {
         ("Cursor", "cursor --wait", "Cursor AI")
+    } else if is_claude_desktop(agent) {
+        ("Claude Desktop", "the Claude app", "Claude Desktop")
     } else {
         ("VS Code", "code --wait", "Copilot Chat")
     };
@@ -647,6 +879,45 @@ mod tests {
     }
 
     #[test]
+    fn canonicalize_maps_claude_desktop_aliases() {
+        for a in ["claude-desktop", "claude_desktop"] {
+            assert_eq!(canonicalize_target(a), Some("claude-desktop"), "{a}");
+        }
+    }
+
+    #[test]
+    fn claude_desktop_is_gui_app_not_passthrough_editor() {
+        assert!(is_claude_desktop("claude-desktop"));
+        // It's a GUI app we launch, but NOT a passthrough editor: it routes
+        // through the real Claude provider pipeline, so passthrough stays off.
+        assert!(is_gui_app("claude-desktop"));
+        assert!(!is_gui_editor("claude-desktop"));
+        assert!(!is_claude_desktop("cursor"));
+        assert!(!is_claude_desktop("claude"));
+    }
+
+    #[test]
+    fn claude_desktop_reroute_uses_claude_desktop_key() {
+        assert_eq!(key_provider("claude-desktop"), "claude_desktop");
+    }
+
+    #[test]
+    fn claude_desktop_ca_is_name_constrained() {
+        // The claude-desktop CA gets system-keychain trust, so it must be limited to
+        // Anthropic. The shared CA must stay unconstrained (it MITMs other providers).
+        let (constrained, _) = generate_ca(CLAUDE_DESKTOP_CA_CN, &["anthropic.com"]).unwrap();
+        assert!(constrained.contains("BEGIN CERTIFICATE"));
+        let (shared, _) = generate_ca("Edgee CA", &[]).unwrap();
+        // A name-constrained cert carries the extension, so its DER is meaningfully
+        // larger; the unconstrained one omits it. Guards against dropping the arg.
+        assert!(
+            constrained.len() > shared.len(),
+            "constrained CA should carry the name-constraints extension"
+        );
+    }
+
+
+    #[test]
     fn copilot_vscode_agent_aliases_recognized() {
         for a in ["copilot-vscode", "vscode-copilot", "code", "vscode"] {
             let canon = canonicalize_target(a).unwrap();
@@ -693,6 +964,7 @@ mod tests {
         assert_eq!(default_port("claude"), 41100);
         assert_eq!(default_port("codex"), 41200);
         assert_eq!(default_port("cursor"), 41300);
+        assert_eq!(default_port("claude_desktop"), 41400);
     }
 
     #[test]

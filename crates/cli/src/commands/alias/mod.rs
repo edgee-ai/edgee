@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use console::style;
 
-use desktop::{AppSpec, ALL_APPS, COPILOT_VSCODE_APP, CURSOR_APP};
+use desktop::{AppSpec, ALL_APPS, CLAUDE_DESKTOP_APP, COPILOT_VSCODE_APP, CURSOR_APP};
 
 const MARKER_START: &str = "# >>> edgee launch aliases >>>";
 const MARKER_END: &str = "# <<< edgee launch aliases <<<";
@@ -49,6 +49,9 @@ pub enum Agent {
     /// GitHub Copilot in VS Code desktop wrapper (requires VS Code installed)
     #[value(name = "copilot-vscode")]
     CopilotVscode,
+    /// Claude Desktop app wrapper (requires Claude Desktop installed)
+    #[value(name = "claude-desktop")]
+    ClaudeDesktop,
     All,
 }
 
@@ -61,7 +64,7 @@ impl Agent {
             Self::Codex => std::slice::from_ref(&CODEX_ALIAS),
             Self::Opencode => std::slice::from_ref(&OPENCODE_ALIAS),
             Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
-            Self::Cursor | Self::CopilotVscode => &[],
+            Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop => &[],
             Self::All => &ALL_ALIASES,
         }
     }
@@ -71,6 +74,7 @@ impl Agent {
         match self {
             Self::Cursor => std::slice::from_ref(&CURSOR_APP),
             Self::CopilotVscode => std::slice::from_ref(&COPILOT_VSCODE_APP),
+            Self::ClaudeDesktop => std::slice::from_ref(&CLAUDE_DESKTOP_APP),
             Self::All => ALL_APPS,
             _ => &[],
         }
@@ -85,7 +89,10 @@ impl Agent {
             Self::Crush => "crush",
             Self::Cursor => "cursor",
             Self::CopilotVscode => "copilot-vscode",
-            Self::All => "claude, codebuddy, codex, opencode, crush, cursor, and copilot-vscode",
+            Self::ClaudeDesktop => "claude-desktop",
+            Self::All => {
+                "claude, codebuddy, codex, opencode, crush, cursor, copilot-vscode, and claude-desktop"
+            }
         }
     }
 }

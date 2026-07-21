@@ -9,14 +9,16 @@ Read this before adding a new agent.
 
 | Layer | What it is | Examples |
 |---|---|---|
-| **Launch target** | Public CLI name (`edgee launch …`) | `claude`, `cursor`, `copilot-vscode`, later `copilot` / `claude-desktop` |
-| **Provider key** | Edgee credentials / console API key slot | `claude`, `cursor`, `copilot` |
+| **Launch target** | Public CLI name (`edgee launch …`) | `claude`, `cursor`, `copilot-vscode`, `claude-desktop`, later `copilot` |
+| **Provider key** | Edgee credentials / console API key slot | `claude`, `claude_desktop`, `cursor`, `copilot` |
 | **Transport** | How traffic reaches the gateway | CLI env-injection, MITM relay, … |
 
 Users only see **launch targets**. Transport stays an implementation detail
 (`edgee relay` remains `hide = true`). Several targets may share one provider
-key (e.g. `copilot-vscode` today and future `copilot` CLI → provider `copilot`;
-future `claude` + `claude-desktop` → provider `claude`).
+key (e.g. `copilot-vscode` today and future `copilot` CLI → provider `copilot`).
+Surfaces may instead be split into their own backend agent when their usage
+should be metered separately: `claude-desktop` is a dedicated `claude_desktop`
+agent (own key + compression), distinct from `claude` (Claude Code).
 
 ## Naming convention
 
@@ -83,6 +85,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 |---|---|---|---|
 | `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
+| `claude-desktop` | Claude Desktop | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code) |
 
 ## Planned targets (same rules)
 
@@ -91,7 +94,6 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `copilot` | GitHub Copilot CLI | `copilot` | CLI env |
 | `pi` | Pi CLI | `pi` | CLI env |
 | `kilo` | Kilo Code CLI | `kilo` | CLI env |
-| `claude-desktop` | Claude Desktop | `claude` | Relay |
 | `claude-vscode` | Claude Code in VS Code | `claude` | Relay or native config |
 | `codex-desktop` | ChatGPT / Codex desktop app | `codex` | Relay |
 
