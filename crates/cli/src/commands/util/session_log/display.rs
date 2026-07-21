@@ -119,46 +119,78 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
 
     let has_tool_compression = stats.total_uncompressed_tools_tokens > 0
         && stats.total_compressed_tools_tokens < stats.total_uncompressed_tools_tokens;
+    let has_mcp_surface_reduction = stats.total_mcp_surface_tokens_before > 0
+        && stats.total_mcp_surface_tokens_after < stats.total_mcp_surface_tokens_before;
+    let has_brevity = stats.total_brevity_requests > 0 && stats.total_brevity_rate > 0.0;
 
-    if has_tool_compression {
+    if has_tool_compression || has_mcp_surface_reduction || has_brevity {
         println!();
         println!("  {}", style("Compression").bold().underlined());
 
-        let pct = compression_pct(
-            stats.total_uncompressed_tools_tokens,
-            stats.total_compressed_tools_tokens,
-        );
-        println!(
-            "  Tools   {} -> {}  {} {}% saved",
-            style(fmt_tokens(stats.total_uncompressed_tools_tokens)).dim(),
-            style(fmt_tokens(stats.total_compressed_tools_tokens)).cyan(),
-            fmt_bar(pct, 20),
-            style(pct).green(),
-        );
+        if has_tool_compression {
+            let pct = compression_pct(
+                stats.total_uncompressed_tools_tokens,
+                stats.total_compressed_tools_tokens,
+            );
+            println!(
+                "  Tools   {} -> {}  {} {}% saved",
+                style(fmt_tokens(stats.total_uncompressed_tools_tokens)).dim(),
+                style(fmt_tokens(stats.total_compressed_tools_tokens)).cyan(),
+                fmt_bar(pct, 20),
+                style(pct).green(),
+            );
+        }
 
-        if let Some(tool_stats) = &stats.tool_compression_stats {
-            if !tool_stats.is_empty() {
-                let mut tools: Vec<_> = tool_stats.iter().collect();
-                tools.sort_by_key(|b| std::cmp::Reverse(b.1.before));
-                println!();
-                println!("  {}", style("Tool breakdown").bold().underlined());
-                println!(
-                    "  {} {} {} Savings",
-                    pad_right("Tool", 20),
-                    pad_left("Calls", 5),
-                    pad_right("Tokens", 20)
-                );
-                for (name, ts) in &tools {
-                    let pct = compression_pct(ts.before, ts.after);
+        if has_mcp_surface_reduction {
+            let pct = compression_pct(
+                stats.total_mcp_surface_tokens_before,
+                stats.total_mcp_surface_tokens_after,
+            );
+            println!(
+                "  Surface {} -> {}  {} {}% saved",
+                style(fmt_tokens(stats.total_mcp_surface_tokens_before)).dim(),
+                style(fmt_tokens(stats.total_mcp_surface_tokens_after)).cyan(),
+                fmt_bar(pct, 20),
+                style(pct).green(),
+            );
+        }
+
+        if has_brevity {
+            let avg_rate = stats.total_brevity_rate / stats.total_brevity_requests as f64;
+            let pct = (avg_rate * 100.0).round().clamp(0.0, 100.0) as u64;
+            println!(
+                "  Brevity {} requests  {} ~{}% saved (est.)",
+                style(fmt_tokens(stats.total_brevity_requests)).cyan(),
+                fmt_bar(pct, 20),
+                style(pct).green(),
+            );
+        }
+
+        if has_tool_compression {
+            if let Some(tool_stats) = &stats.tool_compression_stats {
+                if !tool_stats.is_empty() {
+                    let mut tools: Vec<_> = tool_stats.iter().collect();
+                    tools.sort_by_key(|b| std::cmp::Reverse(b.1.before));
+                    println!();
+                    println!("  {}", style("Tool breakdown").bold().underlined());
                     println!(
-                        "  {} {} {} -> {} {} {}% saved",
-                        style(pad_right(name.as_str(), 20)).cyan(),
-                        pad_left(&ts.count.to_string(), 5),
-                        style(pad_left(&fmt_tokens(ts.before), 9)).dim(),
-                        style(pad_left(&fmt_tokens(ts.after), 9)).cyan(),
-                        fmt_bar(pct, 10),
-                        style(pct).green(),
+                        "  {} {} {} Savings",
+                        pad_right("Tool", 20),
+                        pad_left("Calls", 5),
+                        pad_right("Tokens", 20)
                     );
+                    for (name, ts) in &tools {
+                        let pct = compression_pct(ts.before, ts.after);
+                        println!(
+                            "  {} {} {} -> {} {} {}% saved",
+                            style(pad_right(name.as_str(), 20)).cyan(),
+                            pad_left(&ts.count.to_string(), 5),
+                            style(pad_left(&fmt_tokens(ts.before), 9)).dim(),
+                            style(pad_left(&fmt_tokens(ts.after), 9)).cyan(),
+                            fmt_bar(pct, 10),
+                            style(pct).green(),
+                        );
+                    }
                 }
             }
         }
