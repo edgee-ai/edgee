@@ -108,14 +108,18 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::commands::auth::login::perform_login().await?;
     }
     crate::commands::auth::login::ensure_org_selected().await?;
-    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key(&provider).await?;
+    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key(&provider)
+        .await?
+        .created;
     if reprovisioned {
         crate::commands::auth::login::ensure_onboarded(&provider).await?;
     }
     // VS Code can host Claude Code alongside Copilot chat. Provision the claude key
     // too so Claude's `/v1/messages` traffic reroutes through the claude pipeline.
     if is_copilot_vscode(&agent) {
-        let reprov = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
+        let reprov = crate::commands::auth::login::ensure_valid_provider_key("claude")
+            .await?
+            .created;
         if reprov {
             crate::commands::auth::login::ensure_onboarded("claude").await?;
         }
