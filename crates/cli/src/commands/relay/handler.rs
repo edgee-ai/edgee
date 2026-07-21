@@ -15,6 +15,8 @@ use http::uri::{Authority, Scheme};
 use http::{Request, Response, Uri};
 use http_body_util::BodyExt;
 use hudsucker::{Body, HttpContext, HttpHandler, RequestOrResponse};
+use tokio_stream::StreamExt as _;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 /// Inference paths rerouted to the Edgee gateway (host-agnostic; gated by domain).
 /// Maps the client's request path to the gateway path it should hit. Most are
@@ -359,21 +361,49 @@ impl HttpHandler for RelayHandler {
 
         let headers = collect_headers(res.headers());
 
-        // Streaming responses (SSE) must not be buffered: log metadata, pass through.
+        // Streaming responses (SSE) must not be buffered — that would defeat
+        // streaming and can hang on a stream that never terminates. Instead, tee:
+        // log the header block now, then forward the body through a task that logs
+        // each chunk as it flows so we can see exactly what (and when) the relay
+        // emits downstream — the signal we need when a client stalls mid-stream.
         if is_event_stream(res.headers()) {
             let mut buf = String::new();
             let _ = writeln!(
                 buf,
                 "{}",
                 style(format!(
-                    "◀── #{} {} → {status}  (text/event-stream, not buffered)",
+                    "◀── #{} {} → {status}  (text/event-stream, streaming — chunks below)",
                     self.seq, self.desc
                 ))
                 .dim()
             );
             fmt_headers(&mut buf, &headers);
             self.sink.emit(&buf);
-            return res;
+
+            let (parts, body) = res.into_parts();
+            let sink = self.sink.clone();
+            let seq = self.seq;
+            let desc = self.desc.clone();
+            // The task drives the upstream body independently and relays each chunk
+            // through the channel. NB: the channel is unbounded, so if the client
+            // stops reading we lose upstream backpressure and buffer in memory — fine
+            // for chat-sized SSE, and this path is gated behind --log-output anyway.
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<bytes::Bytes, hudsucker::Error>>();
+            tokio::spawn(async move {
+                let mut stream = body.into_data_stream();
+                while let Some(item) = stream.next().await {
+                    match &item {
+                        Ok(chunk) => emit_sse_chunk(&sink, seq, &desc, chunk),
+                        Err(e) => emit_sse_event(&sink, seq, &desc, &format!("<stream error: {e}>")),
+                    }
+                    // Client hung up — stop pulling from upstream.
+                    if tx.send(item).is_err() {
+                        break;
+                    }
+                }
+                emit_sse_event(&sink, seq, &desc, "<stream closed>");
+            });
+            return Response::from_parts(parts, Body::from_stream(UnboundedReceiverStream::new(rx)));
         }
 
         let json_body = is_json(res.headers());
@@ -465,6 +495,52 @@ fn is_event_stream(map: &http::HeaderMap) -> bool {
 
 fn content_type(map: &http::HeaderMap) -> Option<&str> {
     map.get(http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok())
+}
+
+/// Log one SSE chunk as it streams through the relay, stamped with the wall-clock
+/// time and byte count. The timeline is the diagnostic: a client that hangs shows
+/// up as chunks that stop arriving, or a stream that keeps the connection open
+/// without a terminating event.
+fn emit_sse_chunk(sink: &Sink, seq: u64, desc: &str, chunk: &bytes::Bytes) {
+    let mut buf = String::new();
+    let _ = writeln!(
+        buf,
+        "{}",
+        style(format!(
+            "  ┈ #{seq} {desc}  [{}] +{} bytes",
+            now_hms(),
+            chunk.len()
+        ))
+        .dim()
+    );
+    // SSE frames are newline-delimited text; print verbatim minus trailing blank lines.
+    buf.push_str(String::from_utf8_lossy(chunk).trim_end_matches(['\r', '\n']));
+    buf.push('\n');
+    sink.emit(&buf);
+}
+
+/// Log a lifecycle marker for the SSE stream (close / error), timestamped so it
+/// lines up with the chunk timeline.
+fn emit_sse_event(sink: &Sink, seq: u64, desc: &str, msg: &str) {
+    let mut buf = String::new();
+    let _ = writeln!(
+        buf,
+        "{}",
+        style(format!("  ┈ #{seq} {desc}  [{}] {msg}", now_hms())).dim()
+    );
+    sink.emit(&buf);
+}
+
+/// `HH:MM:SS.mmmZ` (UTC) for the SSE chunk timeline.
+fn now_hms() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    format!(
+        "{:02}:{:02}:{:02}.{:03}Z",
+        now.hour(),
+        now.minute(),
+        now.second(),
+        now.millisecond()
+    )
 }
 
 /// Rewrite the request to target the Edgee gateway at `gw_path` (the client's
