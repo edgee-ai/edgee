@@ -58,36 +58,62 @@ fn gateway_path_for(path: &str) -> Option<&'static str> {
         .map(|(_, to)| *to)
 }
 
-/// Hosts that carry LLM inference traffic — plus the control-plane hosts the
-/// agents hit to authenticate and discover models, which must be visible for the
-/// flow to work end-to-end. Only CONNECT tunnels to these are MITM-decrypted (see
-/// [`should_intercept`]); every other host is blind-tunneled. Matched by exact host
-/// or dot-suffix, so `api.githubcopilot.com` and `api.business.githubcopilot.com`
-/// both match `githubcopilot.com`.
+/// Hosts always MITM-decrypted: each carries LLM inference traffic for some relay
+/// target that ALL relays may legitimately produce. Only CONNECT tunnels to these
+/// are TLS-terminated (see [`should_intercept`]); every other host is blind-
+/// tunneled. Matched by exact host or dot-suffix.
 ///
-/// Covers every relay target:
 /// - `api.anthropic.com` — Claude (incl. Claude Code inside VS Code)
 /// - `api.openai.com` + `chatgpt.com` — Codex
-/// - `githubcopilot.com` — VS Code Copilot inference + `/models`
-/// - `api.github.com` — VS Code Copilot token/model discovery
-///   (`/copilot_internal/v2/token`); without it the Copilot model picker is empty
 /// - `cursor.sh` — Cursor Connect-RPC
 const INFERENCE_HOSTS: &[&str] = &[
     "api.anthropic.com",
     "api.openai.com",
     "chatgpt.com",
-    "githubcopilot.com",
-    "api.github.com",
     "cursor.sh",
 ];
 
-/// True if `host` is (or is a subdomain of) a known inference host. Case- and
-/// trailing-dot-insensitive.
-fn is_inference_host(host: &str) -> bool {
+/// Hosts MITM'd **only** by the Copilot-VS-Code relay. They're the sole reason
+/// Copilot works, but every other relay (claude, codex, cursor) has no business
+/// decrypting them — and doing so breaks unrelated traffic to the same hosts:
+///
+/// - `githubcopilot.com` — Copilot inference + `/models`, **and** GitHub's remote
+///   MCP endpoint (`api.githubcopilot.com/mcp/`). Under a non-Copilot relay this
+///   host only ever carries the GitHub MCP; MITM'ing it makes the MCP fetch fail
+///   to validate the Edgee CA (`fetch failed`).
+/// - `api.github.com` — Copilot token/model discovery
+///   (`/copilot_internal/v2/token`); also a common MCP/tooling target.
+///
+/// We can't split by path at CONNECT time (only the host is known before TLS
+/// termination), so the split is per relay target instead: Copilot-VS-Code MITMs
+/// them; everyone else blind-tunnels them so their MCP servers reach the real host
+/// with the real certificate.
+const COPILOT_ONLY_HOSTS: &[&str] = &["githubcopilot.com", "api.github.com"];
+
+/// True if `host` matches (exactly or as a dot-suffix subdomain) any entry in
+/// `list`. Case- and trailing-dot-insensitive.
+fn host_matches(host: &str, list: &[&str]) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
-    INFERENCE_HOSTS
-        .iter()
+    list.iter()
         .any(|h| host == *h || host.ends_with(&format!(".{h}")))
+}
+
+/// True if `host` is (or is a subdomain of) an always-intercepted inference host.
+fn is_inference_host(host: &str) -> bool {
+    host_matches(host, INFERENCE_HOSTS)
+}
+
+/// True if `host` is (or is a subdomain of) a Copilot-only host — intercepted only
+/// by the Copilot-VS-Code relay.
+fn is_copilot_only_host(host: &str) -> bool {
+    host_matches(host, COPILOT_ONLY_HOSTS)
+}
+
+/// Whether a CONNECT tunnel to `host` should be TLS-terminated (MITM'd). Always-on
+/// inference hosts always are; Copilot-only hosts (`githubcopilot.com`,
+/// `api.github.com`) only when `intercept_copilot_hosts` is set (Copilot-VS-Code).
+fn should_intercept_host(host: &str, intercept_copilot_hosts: bool) -> bool {
+    is_inference_host(host) || (intercept_copilot_hosts && is_copilot_only_host(host))
 }
 
 /// The Anthropic path Claude Code posts to. On its own this is ambiguous: Copilot's
@@ -190,6 +216,11 @@ pub struct RelayHandler {
     log_enabled: bool,
     /// Gateway to reroute inference requests to (with auth to inject).
     gateway: Arc<GatewayTarget>,
+    /// Whether to also MITM Copilot-only hosts (`githubcopilot.com`,
+    /// `api.github.com`). Set only for the Copilot-VS-Code relay; other relays
+    /// blind-tunnel them so their MCP servers reach the real host without hitting
+    /// the Edgee CA.
+    intercept_copilot_hosts: bool,
     /// Shared monotonic counter allocating one id per logged request.
     /// hudsucker clones the handler per request, so this `Arc` is shared while
     /// the per-request fields below stay private to each request's clone.
@@ -209,11 +240,13 @@ impl RelayHandler {
         sink: Sink,
         gateway: Arc<GatewayTarget>,
         log_enabled: bool,
+        intercept_copilot_hosts: bool,
     ) -> Self {
         Self {
             sink,
             log_enabled,
             gateway,
+            intercept_copilot_hosts,
             counter: Arc::new(AtomicU64::new(1)),
             seq: 0,
             desc: String::new(),
@@ -228,7 +261,9 @@ impl HttpHandler for RelayHandler {
     /// Intercept (terminate TLS to log/reroute) only known inference hosts; blind-
     /// tunnel everything else so unrelated HTTPS traffic is never decrypted.
     async fn should_intercept(&mut self, _ctx: &HttpContext, req: &Request<Body>) -> bool {
-        request_host(req).map(|h| is_inference_host(&h)).unwrap_or(false)
+        request_host(req)
+            .map(|h| should_intercept_host(&h, self.intercept_copilot_hosts))
+            .unwrap_or(false)
     }
 
     async fn handle_request(
@@ -734,25 +769,17 @@ mod tests {
         // allowlist actually sees it.
         let req = Request::builder()
             .method("CONNECT")
-            .uri("api.githubcopilot.com:443")
+            .uri("api.anthropic.com:443")
             .body(Body::from(bytes::Bytes::new()))
             .unwrap();
-        assert_eq!(request_host(&req).as_deref(), Some("api.githubcopilot.com"));
+        assert_eq!(request_host(&req).as_deref(), Some("api.anthropic.com"));
         assert!(is_inference_host(&request_host(&req).unwrap()));
     }
 
     #[test]
     fn inference_hosts_intercepted() {
-        // One host per relay target is intercepted (TLS-terminated).
-        for h in [
-            "api.anthropic.com",
-            "api.openai.com",
-            "chatgpt.com",
-            "api.githubcopilot.com",
-            "api.business.githubcopilot.com",
-            "api.github.com", // Copilot token / model discovery
-            "api2.cursor.sh",
-        ] {
+        // One host per always-on relay target is intercepted (TLS-terminated).
+        for h in ["api.anthropic.com", "api.openai.com", "chatgpt.com", "api2.cursor.sh"] {
             assert!(is_inference_host(h), "{h} should be intercepted");
         }
         // Case- and trailing-dot-insensitive.
@@ -764,16 +791,38 @@ mod tests {
     fn non_inference_hosts_blind_tunneled() {
         for h in [
             "statsig.anthropic.com", // telemetry, still under anthropic.com
-            "github.com",            // only api.github.com is intercepted, not all of github.com
-            "codeload.github.com",   // git data plane — not the Copilot control plane
+            "github.com",            // only api.github.com is a Copilot-only host
+            "codeload.github.com",   // git data plane — not a Copilot host
             "sentry.io",
             "example.com",
             "notcursor.sh",       // not a dot-suffix of cursor.sh
             "evilgithubcopilot.com",
             "",
         ] {
-            assert!(!is_inference_host(h), "{h} should be blind-tunneled");
+            assert!(!is_inference_host(h), "{h} should not be an always-on inference host");
         }
+    }
+
+    #[test]
+    fn copilot_hosts_intercepted_only_for_copilot_relay() {
+        // githubcopilot.com (Copilot inference + GitHub's remote MCP) and
+        // api.github.com (token/model discovery) are Copilot-only, NOT always-on.
+        for h in ["api.githubcopilot.com", "api.business.githubcopilot.com", "api.github.com"] {
+            assert!(!is_inference_host(h), "{h} must not be always-on");
+            assert!(is_copilot_only_host(h), "{h} should be a Copilot-only host");
+        }
+        assert!(is_copilot_only_host("API.GitHub.com."));
+        // Copilot-VS-Code (flag true) MITMs them; every other relay blind-tunnels
+        // them so its MCP servers reach the real host with the real certificate.
+        assert!(should_intercept_host("api.githubcopilot.com", true));
+        assert!(!should_intercept_host("api.githubcopilot.com", false));
+        assert!(should_intercept_host("api.github.com", true));
+        assert!(!should_intercept_host("api.github.com", false));
+        // Always-on inference hosts are intercepted regardless of the flag.
+        assert!(should_intercept_host("api.anthropic.com", false));
+        // Unrelated hosts are never intercepted.
+        assert!(!should_intercept_host("github.com", true));
+        assert!(!should_intercept_host("evilgithubcopilot.com", true));
     }
 
     #[test]
