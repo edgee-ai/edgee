@@ -2,3 +2,6 @@
 /.claude
 .idea/
 .serena/
+
+# nix-direnv cache
+.direnv/
