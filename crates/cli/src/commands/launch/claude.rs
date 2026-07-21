@@ -82,17 +82,16 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::config::console_api_base_url(),
     );
 
-    // Claude Code's client-side "MCP Tool Search" conflicts with the gateway's
-    // own tool-surface reduction when both are active. Default it off when the
-    // key has tool_surface_reduction enabled, unless the user has explicitly
-    // set it themselves. Reuses the compression settings already fetched by
+    // Force-enable Claude Code's client-side "MCP Tool Search" when the key has
+    // tool_surface_reduction enabled, unless the user has explicitly set it
+    // themselves. Reuses the compression settings already fetched by
     // `ensure_valid_provider_key` above instead of a second `get_key_by_id` call.
     let tool_surface_reduction_enabled = key_status
         .compression
         .map(|c| c.tool_surface_reduction)
         .unwrap_or(false);
     if tool_surface_reduction_enabled && std::env::var_os("ENABLE_TOOL_SEARCH").is_none() {
-        cmd.env("ENABLE_TOOL_SEARCH", "false");
+        cmd.env("ENABLE_TOOL_SEARCH", "true");
     }
 
     // Step 5: conditionally set up MCP integration
