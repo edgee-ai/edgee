@@ -117,6 +117,46 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 }
 
+/// Re-install the shims and desktop wrappers that are *already* present so their
+/// embedded `edgee` path tracks the freshly-updated binary. Called by
+/// `edgee update`: desktop wrappers bake in an absolute path, so without this a
+/// version bump leaves `cursor` / `copilot` fast-launch links pointing at the
+/// old binary. Prints a one-line summary and returns the number of links
+/// refreshed. Best-effort — nothing installed means nothing to do.
+pub fn refresh_installed() -> Result<usize> {
+    let home = home_dir()?;
+    let shim_dir = home.join(SHIM_DIR_REL);
+
+    // Shims resolve `edgee` via PATH (no baked path), but rewrite any that exist
+    // so the script format stays current after an upgrade.
+    let present_shims: Vec<AliasSpec> = if USES_SHIMS {
+        ALL_ALIASES
+            .iter()
+            .copied()
+            .filter(|spec| shim_dir.join(spec.name).exists())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if !present_shims.is_empty() {
+        write_shims(&shim_dir, &present_shims)?;
+    }
+
+    // Desktop wrappers embed an absolute `edgee` path — refresh installed ones.
+    let refreshed_apps = desktop::refresh_installed(ALL_APPS)?;
+
+    let count = present_shims.len() + refreshed_apps.len();
+    if count > 0 {
+        println!(
+            "  {} refreshed {} fast-launch link{} to the updated binary",
+            style("updated").green(),
+            count,
+            if count == 1 { "" } else { "s" }
+        );
+    }
+    Ok(count)
+}
+
 #[derive(Clone, Copy)]
 enum Action {
     Install,
