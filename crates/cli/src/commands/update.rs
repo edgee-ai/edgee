@@ -28,6 +28,9 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
     if let Ok(exe) = std::env::current_exe() {
         if let Ok(real) = std::fs::canonicalize(&exe) {
             if is_homebrew_path(&real) {
+                // Stabilize any fast-launch links to the brew `bin/edgee` symlink
+                // now, so they survive the deletion of the old Cellar version.
+                refresh_launch_links();
                 println!(
                     "edgee was installed via Homebrew. Run {} to upgrade.",
                     "brew upgrade edgee".cyan()
@@ -38,7 +41,7 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
     }
 
     // self_update uses synchronous reqwest client so we need to run it in a blocking task
-    tokio::task::spawn_blocking(move || {
+    let updated = tokio::task::spawn_blocking(move || {
         use self_update::{backends::github::Update, Status};
 
         let updater = Update::configure()
@@ -49,14 +52,36 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
             .show_download_progress(true)
             .build()?;
 
-        match updater.update()? {
-            Status::Updated(version) => println!("Updated to {}", version.green()),
-            Status::UpToDate(version) => println!("Already up to date ({})", version.green()),
-        }
+        let updated = match updater.update()? {
+            Status::Updated(version) => {
+                println!("Updated to {}", version.green());
+                true
+            }
+            Status::UpToDate(version) => {
+                println!("Already up to date ({})", version.green());
+                false
+            }
+        };
 
-        Ok(())
+        anyhow::Ok(updated)
     })
-    .await?
+    .await??;
+
+    // Desktop wrappers (`cursor`, `copilot`) bake in an absolute `edgee` path, so
+    // refresh installed fast-launch links to point at the new binary.
+    if updated {
+        refresh_launch_links();
+    }
+
+    Ok(())
+}
+
+/// Best-effort refresh of installed fast-launch links (desktop wrappers + shims).
+/// A failure here must never fail the update itself.
+fn refresh_launch_links() {
+    if let Err(err) = crate::commands::alias::refresh_installed() {
+        eprintln!("Note: could not refresh fast-launch links: {err}");
+    }
 }
 
 #[cfg(test)]
