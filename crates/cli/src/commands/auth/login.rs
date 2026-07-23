@@ -220,17 +220,30 @@ fn key_is_expired(expires_at: time::OffsetDateTime) -> bool {
     expires_at.year() > 1 && expires_at <= time::OffsetDateTime::now_utc()
 }
 
+/// Result of [`ensure_valid_provider_key`]: whether the key was (re)created this
+/// call, plus the compression settings already fetched while validating it.
+/// Exposing `compression` here lets callers that need it (e.g. checking
+/// `tool_surface_reduction` before launching an agent) reuse the same
+/// `get_key_by_id` response instead of issuing a second, identical request.
+pub struct ProviderKeyStatus {
+    pub created: bool,
+    pub compression: Option<crate::api::Compression>,
+}
+
 /// Ensures the active profile holds an API key that still exists server-side
 /// and has not expired, re-provisioning it if the cached key was deleted or
 /// expired in the console.
 ///
-/// Returns `true` when a fresh key was minted this launch — either because the
-/// cache was empty (first run for this agent) or because the cached key is gone
-/// or expired — so callers can (re-)run first-run onboarding. A cached key is
-/// validated by id; only a definitive not-found or expiry triggers
-/// re-provisioning. Transient errors keep the existing key so a network blip
-/// never wipes a valid setup.
-pub async fn ensure_valid_provider_key(provider: &str) -> Result<bool> {
+/// Returns [`ProviderKeyStatus`]: `created` is `true` when a fresh key was
+/// minted this launch — either because the cache was empty (first run for
+/// this agent) or because the cached key is gone or expired — so callers can
+/// (re-)run first-run onboarding. `compression` carries the key's current
+/// server-side compression settings whenever they were fetched as part of
+/// this call (`None` when the key was validated purely from cache, or the
+/// server was unreachable). A cached key is validated by id; only a
+/// definitive not-found or expiry triggers re-provisioning. Transient errors
+/// keep the existing key so a network blip never wipes a valid setup.
+pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStatus> {
     let creds = crate::config::read()?;
 
     let cached = provider_config(&creds, provider)?;
@@ -239,7 +252,11 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<bool> {
 
     // No usable cached key → mint one (first run for this agent).
     if !cached_key_present {
-        return Ok(fetch_provider_key(provider).await?.created);
+        let key_item = fetch_provider_key(provider).await?;
+        return Ok(ProviderKeyStatus {
+            created: key_item.created,
+            compression: key_item.compression,
+        });
     }
 
     // Validate the cached key still exists. Without a key id (older configs) we
@@ -249,20 +266,42 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<bool> {
         creds.org_id.as_deref().filter(|o| !o.is_empty()),
         cached_key_id.as_deref(),
     ) else {
-        return Ok(false);
+        return Ok(ProviderKeyStatus {
+            created: false,
+            compression: None,
+        });
     };
 
     let client = crate::api::ApiClient::new(token)?;
     match client.get_key_by_id(org_id, key_id).await {
         // Key was deleted in the console → re-provision and signal the caller to
         // re-run onboarding for the fresh key.
-        Ok(None) => Ok(fetch_provider_key(provider).await?.created),
+        Ok(None) => {
+            let key_item = fetch_provider_key(provider).await?;
+            Ok(ProviderKeyStatus {
+                created: key_item.created,
+                compression: key_item.compression,
+            })
+        }
         // Key still exists but has expired → same re-provisioning path as deletion.
         Ok(Some(key_item)) if key_is_expired(key_item.expires_at) => {
-            Ok(fetch_provider_key(provider).await?.created)
+            let key_item = fetch_provider_key(provider).await?;
+            Ok(ProviderKeyStatus {
+                created: key_item.created,
+                compression: key_item.compression,
+            })
         }
-        // Key still exists and is valid, or the server was unreachable → keep the cached key.
-        Ok(Some(_)) | Err(_) => Ok(false),
+        // Key still exists and is valid → keep the cached key, surface its
+        // current compression settings from this same request.
+        Ok(Some(key_item)) => Ok(ProviderKeyStatus {
+            created: false,
+            compression: key_item.compression,
+        }),
+        // Server was unreachable → keep the cached key; compression unknown.
+        Err(_) => Ok(ProviderKeyStatus {
+            created: false,
+            compression: None,
+        }),
     }
 }
 

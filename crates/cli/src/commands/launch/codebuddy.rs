@@ -23,8 +23,9 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // Step 2: ensure we have a live api_key for CodeBuddy. Re-provisions if the
     // cached key was deleted in the console; re-runs onboarding for a fresh key.
-    let reprovisioned =
-        crate::commands::auth::login::ensure_valid_provider_key("codebuddy").await?;
+    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("codebuddy")
+        .await?
+        .created;
     if reprovisioned {
         crate::commands::auth::login::ensure_onboarded("codebuddy").await?;
     }

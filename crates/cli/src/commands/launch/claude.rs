@@ -31,8 +31,8 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // Step 2: ensure we have a live api_key for Claude. Re-provisions if the
     // cached key was deleted in the console; re-runs onboarding for a fresh key.
-    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
-    if reprovisioned {
+    let key_status = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
+    if key_status.created {
         crate::commands::auth::login::ensure_onboarded("claude").await?;
     }
     creds = crate::config::read()?;
@@ -89,6 +89,18 @@ pub async fn run(opts: Options) -> Result<()> {
         "EDGEE_CONSOLE_API_URL",
         crate::config::console_api_base_url(),
     );
+
+    // Force-enable Claude Code's client-side "MCP Tool Search" when the key has
+    // tool_surface_reduction enabled, unless the user has explicitly set it
+    // themselves. Reuses the compression settings already fetched by
+    // `ensure_valid_provider_key` above instead of a second `get_key_by_id` call.
+    let tool_surface_reduction_enabled = key_status
+        .compression
+        .map(|c| c.tool_surface_reduction)
+        .unwrap_or(false);
+    if tool_surface_reduction_enabled && std::env::var_os("ENABLE_TOOL_SEARCH").is_none() {
+        cmd.env("ENABLE_TOOL_SEARCH", "true");
+    }
 
     // Step 5: conditionally set up MCP integration
     let use_mcp = creds.enable_mcp.unwrap_or(false);
