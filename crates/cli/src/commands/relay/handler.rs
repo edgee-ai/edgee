@@ -152,6 +152,11 @@ pub struct GatewayTarget {
     /// alongside Copilot. When present, `/v1/messages` traffic uses this key and the
     /// gateway's claude pipeline instead of the default (Copilot) key + passthrough.
     pub claude_api_key: Option<String>,
+    /// Base64-encoded X25519 public key + Argon2id salt for this session's E2EE
+    /// debug-log encryption, derived from the user's debug-log passphrase.
+    /// `None` when no passphrase was resolved — debug logs then upload as
+    /// plaintext.
+    pub debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 }
 
 impl GatewayTarget {
@@ -522,6 +527,15 @@ fn apply_reroute(parts: &mut http::request::Parts, gw: &GatewayTarget, gw_path: 
             h.insert("x-edgee-repo", v);
         }
     }
+    if let Some(debug_headers) = &gw.debug_log_headers {
+        if let (Ok(pubkey_v), Ok(salt_v)) = (
+            http::HeaderValue::from_str(&debug_headers.pubkey),
+            http::HeaderValue::from_str(&debug_headers.salt),
+        ) {
+            h.insert("x-edgee-debug-pubkey", pubkey_v);
+            h.insert("x-edgee-debug-salt", salt_v);
+        }
+    }
     // For passthrough providers, tell the gateway where this inference call
     // originated so it can forward to the provider's own backend, preserving the
     // caller's `Authorization`. Omitted for claude/codex, which the gateway routes
@@ -601,6 +615,7 @@ mod tests {
             repo: Some("git@github.com:edgee-ai/edgee.git".into()),
             passthrough_to_upstream: true,
             claude_api_key: None,
+            debug_log_headers: None,
         }
     }
 

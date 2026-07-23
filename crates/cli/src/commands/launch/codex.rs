@@ -60,6 +60,12 @@ pub async fn run(opts: Options) -> Result<()> {
     let repo_entry = crate::git::detect_origin()
         .map(|url| format!(",\"x-edgee-repo\"=\"{url}\""))
         .unwrap_or_default();
+    let debug_log_entry = util::resolve_debug_log_keypair()?
+        .map(|keypair| {
+            let headers = keypair.header_values();
+            format!(",\"x-edgee-debug-pubkey\"=\"{}\",\"x-edgee-debug-salt\"=\"{}\"", headers.pubkey, headers.salt)
+        })
+        .unwrap_or_default();
     let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
     let mut cmd = std::process::Command::new(util::resolve_binary("codex"));
     cmd.env("EDGEE_SESSION_ID", &session_id);
@@ -67,7 +73,7 @@ pub async fn run(opts: Options) -> Result<()> {
         "-c", "model_provider=\"edgee-cli\"",
         "-c", "model_providers.edgee-cli.name=\"EDGEE\"",
         "-c", &format!("model_providers.edgee-cli.base_url=\"{base_url}\""),
-        "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"{repo_entry}}}"),
+        "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"{repo_entry}{debug_log_entry}}}"),
         "-c", "model_providers.edgee-cli.wire_api=\"responses\"",
     ]);
     cmd.args(&opts.args);

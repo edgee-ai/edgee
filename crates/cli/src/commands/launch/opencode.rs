@@ -171,22 +171,29 @@ fn build_edgee_provider(
     session_id: &str,
     gateway_url: &str,
     models: &[String],
+    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 ) -> Value {
     // The provider is `@ai-sdk/openai-compatible` pointed at the gateway's
     // `/v1`. We fill the `models` map from the gateway's `/v1/models` listing so
     // OpenCode's picker is populated with the live catalog. The gateway `id`
     // (e.g. `anthropic/claude-opus-4-8`) is already the routing identifier the
     // gateway accepts, so it serves as both the map key and the display name.
+    let mut headers = serde_json::json!({
+        "x-edgee-api-key": api_key,
+        "x-edgee-session-id": session_id,
+    });
+    if let (Some(headers_obj), Some(debug_headers)) = (headers.as_object_mut(), debug_log_headers) {
+        headers_obj.insert("x-edgee-debug-pubkey".to_string(), Value::String(debug_headers.pubkey));
+        headers_obj.insert("x-edgee-debug-salt".to_string(), Value::String(debug_headers.salt));
+    }
+
     let mut provider = serde_json::json!({
         "npm": "@ai-sdk/openai-compatible",
         "name": "Edgee",
         "options": {
             "baseURL": format!("{}/v1", gateway_url),
             "apiKey": api_key,
-            "headers": {
-                "x-edgee-api-key": api_key,
-                "x-edgee-session-id": session_id,
-            }
+            "headers": headers,
         }
     });
 
@@ -253,7 +260,9 @@ pub async fn run(opts: Options) -> Result<()> {
     });
 
     let models = fetch_gateway_models(&gateway_url, api_key).await;
-    let edgee_provider = build_edgee_provider(api_key, &session_id, &gateway_url, &models);
+    let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
+    let edgee_provider =
+        build_edgee_provider(api_key, &session_id, &gateway_url, &models, debug_log_headers);
 
     if let Some(obj) = config.as_object_mut() {
         if let Some(providers) = obj.get_mut("provider") {

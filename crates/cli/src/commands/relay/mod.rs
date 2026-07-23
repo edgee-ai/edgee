@@ -143,6 +143,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // GUI editors have no Edgee provider pipeline; the gateway forwards their
     // rerouted calls to the editor's own backend, so record the original upstream.
     let passthrough_to_upstream = is_gui_editor(&agent);
+    let debug_log_headers = crate::commands::launch::util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let gateway = build_gateway_target(
         &gateway_url,
         api_key,
@@ -150,6 +151,7 @@ pub async fn run(opts: Options) -> Result<()> {
         repo,
         passthrough_to_upstream,
         claude_api_key,
+        debug_log_headers,
     )?;
 
     let (cert_pem, key_pem, cert_path) = ensure_ca()?;
@@ -270,6 +272,7 @@ fn build_gateway_target(
     repo: Option<String>,
     passthrough_to_upstream: bool,
     claude_api_key: Option<String>,
+    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 ) -> Result<GatewayTarget> {
     let uri: Uri = url.parse().with_context(|| format!("parsing gateway url {url}"))?;
     let scheme = uri.scheme().cloned().unwrap_or(Scheme::HTTPS);
@@ -287,6 +290,7 @@ fn build_gateway_target(
         repo,
         passthrough_to_upstream,
         claude_api_key,
+        debug_log_headers,
     })
 }
 
@@ -616,7 +620,7 @@ mod tests {
     #[test]
     fn parses_default_gateway() {
         let gw =
-            build_gateway_target("https://edgee.io", "k".into(), "s".into(), None, false, None)
+            build_gateway_target("https://edgee.io", "k".into(), "s".into(), None, false, None, None)
                 .unwrap();
         assert_eq!(gw.scheme, Scheme::HTTPS);
         assert_eq!(gw.authority.as_str(), "edgee.io");
@@ -626,7 +630,7 @@ mod tests {
     #[test]
     fn parses_local_override() {
         let gw =
-            build_gateway_target("http://127.0.0.1:9999", "k".into(), "s".into(), None, false, None)
+            build_gateway_target("http://127.0.0.1:9999", "k".into(), "s".into(), None, false, None, None)
                 .unwrap();
         assert_eq!(gw.scheme.as_str(), "http");
         assert_eq!(gw.authority.as_str(), "127.0.0.1:9999");
@@ -699,7 +703,7 @@ mod tests {
     fn rejects_url_without_host() {
         // A path-only URI has no authority → reroute target can't be built.
         assert!(
-            build_gateway_target("/no/host", "k".into(), "s".into(), None, false, None).is_err()
+            build_gateway_target("/no/host", "k".into(), "s".into(), None, false, None, None).is_err()
         );
     }
 
