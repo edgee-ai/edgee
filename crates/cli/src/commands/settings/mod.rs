@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::builder::PossibleValuesParser;
 use dialoguer::{theme::ColorfulTheme, Select};
 
 use crate::commands::auth::login;
@@ -6,8 +7,17 @@ use crate::commands::auth::login;
 pub mod agent;
 pub mod profile;
 
-/// Coding agents whose keys can be configured. Order is reused for the interactive picker.
-const PROVIDERS: &[&str] = &["claude", "codebuddy", "codex", "opencode", "crush"];
+/// Coding agents whose keys can be configured. Single source of truth for
+/// the interactive picker and the `--agent` value parser below.
+///
+/// Deliberately distinct from `edgee launch`'s target list: launch uses
+/// `copilot-vscode` for today's GitHub Copilot (VS Code) target, reserving
+/// bare `copilot` for a future Copilot CLI, see `commands/launch/README.md`.
+/// Both map to the same provider key here via `copilot`, which is why this
+/// list uses the bare form.
+const PROVIDERS: &[&str] = &[
+    "claude", "codebuddy", "codex", "opencode", "crush", "cursor", "copilot",
+];
 
 /// Pseudo-agent value selecting profile-wide (non-agent-specific) settings.
 const PROFILE_TARGET: &str = "profile";
@@ -16,14 +26,9 @@ const PROFILE_TARGET: &str = "profile";
 pub struct Options {
     /// Coding agent whose key to configure, or `profile` for profile-wide settings.
     /// Prompts to pick one if omitted.
-    #[arg(value_parser = [
-        "profile",
-        "claude",
-        "codebuddy",
-        "codex",
-        "opencode",
-        "crush",
-    ])]
+    #[arg(value_parser = PossibleValuesParser::new(
+        std::iter::once(PROFILE_TARGET).chain(PROVIDERS.iter().copied())
+    ))]
     agent: Option<String>,
 }
 
