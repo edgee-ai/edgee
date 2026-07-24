@@ -14,10 +14,10 @@ If `edgee stats` fails, you have the wrong package installed.
 
 ## CLI surface
 
-Entry point: `crates/cli/src/main.rs`. Subcommands declared in `crates/cli/src/commands/mod.rs`:
+Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
 
-- `edgee launch {claude|codebuddy|codex|opencode|crush|cursor|copilot}` — launches a coding agent or app through Edgee. CLI agents get gateway env/headers; app targets (`cursor`, `copilot`) use the hidden relay. Naming rules: [`crates/cli/src/commands/launch/README.md`](crates/cli/src/commands/launch/README.md). Implementation per target under `crates/cli/src/commands/launch/`.
-- `edgee auth {login|status|list|switch}` — OAuth-style flow against the Edgee console. See `crates/cli/src/api.rs` and `crates/cli/src/commands/auth/`.
+- `edgee launch {claude|codebuddy|codex|opencode|crush|cursor|copilot}` — launches a coding agent or app through Edgee. CLI agents get gateway env/headers; app targets (`cursor`, `copilot`) use the hidden relay. Naming rules: [`src/commands/launch/README.md`](src/commands/launch/README.md). Implementation per target under `src/commands/launch/`.
+- `edgee auth {login|status|list|switch}` — OAuth-style flow against the Edgee console. See `src/api.rs` and `src/commands/auth/`.
 - `edgee settings` — configures compression, fallback, and reroute settings for a coding-agent key against the console API.
 - `edgee stats` (visible alias `report`) — prints session token counts and compression savings.
 - `edgee statusline` — renders/manages the Claude Code statusline integration (see README.md's Statusline section for the install/doctor/fix flow).
@@ -65,22 +65,13 @@ cargo generate-rpm            # RPM package (needs cargo-generate-rpm, after rel
 
 ## Code conventions
 
-- **Edition**: the workspace targets Rust edition 2024. `crates/cli` is still pinned to 2021 — check a crate's own `Cargo.toml` before relying on 2024-only syntax there.
-- **Dependency versions**: pinned once in the root `Cargo.toml`'s `[workspace.dependencies]`; every crate references them as `dep.workspace = true` (or `{ workspace = true, features = [...] }` to opt into extra features). Add a new dependency to the workspace table first — never as a version pin inside a crate's own `Cargo.toml`.
+- **Edition**: pinned to Rust edition 2021 in `Cargo.toml` — don't rely on edition-2024-only syntax.
 - **`use` statement grouping**: order imports in blank-line-separated blocks:
   1. `std::...`
   2. external crates (crates.io dependencies)
   3. internal (`crate::...`, `super::...`)
 
   Apply the three-block grouping to new and edited code going forward.
-
-## Workspace layout
-
-Cargo workspace (resolver 3), members under `crates/`:
-
-| Crate | Path | Purpose |
-|---|---|---|
-| `edgee-cli` | `crates/cli` | The `edgee` binary. Launches coding agents, manages auth / profiles / session stats, local MITM relay for GUI apps. |
 
 ## Build Verification (Mandatory)
 

@@ -153,10 +153,10 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ needs.setup.outputs.version }}"
-          sed -i.bak "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" crates/cli/Cargo.toml
-          rm -f crates/cli/Cargo.toml.bak
-          grep -q "^version = \"${VERSION}\"" crates/cli/Cargo.toml || \
-            { echo "ERROR: version patch did not apply to crates/cli/Cargo.toml"; exit 1; }
+          sed -i.bak "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+          grep -q "^version = \"${VERSION}\"" Cargo.toml || \
+            { echo "ERROR: version patch did not apply to Cargo.toml"; exit 1; }
 
       - name: Build binary
         uses: houseabsolute/actions-rust-cross@v1

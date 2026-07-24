@@ -213,7 +213,7 @@ The `SessionStart` hook installed by `edgee statusline claude install` (or by th
 | Cursor (app) | `edgee launch cursor` | ✅ Supported |
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
 
-Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented in [`crates/cli/src/commands/launch/README.md`](crates/cli/src/commands/launch/README.md).
+Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented in [`src/commands/launch/README.md`](src/commands/launch/README.md).
 
 ---
 

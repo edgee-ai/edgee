@@ -1,6 +1,6 @@
 //! `edgee alias` — install CLI PATH shims / shell aliases **and** desktop app
 //! wrappers for GUI launch targets. See [`desktop`] and
-//! `crates/cli/src/commands/launch/README.md`.
+//! `src/commands/launch/README.md`.
 
 mod desktop;
 
