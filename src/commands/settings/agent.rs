@@ -7,27 +7,6 @@ use dialoguer::{theme::ColorfulTheme, MultiSelect, Select};
 use crate::api::{ApiClient, Compression, GatewayModel, KeySettings, ModelRoute, ProviderKey};
 use crate::commands::auth::login;
 
-/// Coding agents whose keys can be configured. Order is reused for the interactive picker.
-const PROVIDERS: [&str; 5] = ["claude", "codebuddy", "codex", "opencode", "crush"];
-
-#[derive(Debug, clap::Parser)]
-pub struct Options {
-    /// Coding agent whose key to configure. Prompts to pick one if omitted.
-    #[arg(value_parser = PROVIDERS)]
-    agent: Option<String>,
-}
-
-pub async fn run(opts: Options) -> Result<()> {
-    // Reuse the auth flow's org gate so an unauthenticated user gets a clear hint.
-    login::ensure_org_selected().await?;
-
-    let provider = match opts.agent {
-        Some(a) => a,
-        None => prompt_for_provider()?,
-    };
-    configure(&provider, false).await
-}
-
 /// Runs the full settings wizard (compression + routing) for a single provider and
 /// persists the result. Shared by `edgee settings` and first-run onboarding;
 /// `first_run` switches the intro to a welcome banner.
@@ -235,16 +214,6 @@ fn model_uses_byok(model: &GatewayModel, byok_providers: &HashSet<String>) -> bo
         .providers
         .keys()
         .any(|p| byok_providers.contains(&resolve_provider_base(p)))
-}
-
-fn prompt_for_provider() -> Result<String> {
-    let items: Vec<&str> = PROVIDERS.iter().map(|p| login::agent_label(p)).collect();
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Which coding agent's key do you want to configure?")
-        .items(&items)
-        .default(0)
-        .interact()?;
-    Ok(PROVIDERS[selection].to_string())
 }
 
 /// The default ColorfulTheme uses a `⬚` glyph for unchecked items that renders

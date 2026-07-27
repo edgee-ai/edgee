@@ -18,7 +18,7 @@ Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
 
 - `edgee launch {claude|codebuddy|codex|opencode|crush|cursor|copilot}` — launches a coding agent or app through Edgee. CLI agents get gateway env/headers; app targets (`cursor`, `copilot`) use the hidden relay. Naming rules: [`src/commands/launch/README.md`](src/commands/launch/README.md). Implementation per target under `src/commands/launch/`.
 - `edgee auth {login|status|list|switch}` — OAuth-style flow against the Edgee console. See `src/api.rs` and `src/commands/auth/`.
-- `edgee settings` — configures compression, fallback, and reroute settings for a coding-agent key against the console API.
+- `edgee settings [claude|codebuddy|codex|opencode|crush]` — configures compression, fallback, and reroute settings for a coding-agent key against the console API. `edgee settings profile` manages profile-wide (non-agent-specific) settings instead — currently the E2EE debug-log encryption passphrase (`src/commands/settings/profile.rs`).
 - `edgee stats` (visible alias `report`) — prints session token counts and compression savings.
 - `edgee statusline` — renders/manages the Claude Code statusline integration (see README.md's Statusline section for the install/doctor/fix flow).
 - `edgee alias` — installs CLI PATH shims/shell aliases and desktop app wrappers (`cursor`, `copilot-vscode`) when the host app is installed.

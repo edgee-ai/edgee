@@ -227,20 +227,6 @@ If you're looking for a local-first compression tool, [check out RTK directly](h
 
 ---
 
-## Repository layout
-
-```
-crates/
-  cli/                 # edgee binary (auth, launch, stats, alias, relay for GUI apps)
-```
-
-| Crate | Purpose |
-|---|---|
-| `edgee-cli` | `edgee` binary — launch agents, auth, stats, aliases |
-
-
----
-
 ## Contributing
 
 Edgee is Apache 2.0 licensed and we genuinely want your contributions.

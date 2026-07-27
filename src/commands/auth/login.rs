@@ -189,7 +189,7 @@ pub async fn ensure_onboarded(provider: &str) -> Result<()> {
 
     // Run the same compression + routing wizard as `edgee settings`, with a
     // first-run welcome banner. Keep failures non-fatal so launch proceeds.
-    if let Err(e) = crate::commands::settings::configure(provider, true).await {
+    if let Err(e) = crate::commands::settings::agent::configure(provider, true).await {
         eprintln!(
             "  {} {}",
             style("Could not configure Edgee settings:").yellow(),
