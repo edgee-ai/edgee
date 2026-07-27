@@ -117,45 +117,28 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 }
 
-/// Re-install the shims and desktop wrappers that are *already* present so their
-/// embedded `edgee` path tracks the freshly-updated binary. Called by
-/// `edgee update`: desktop wrappers bake in an absolute path, so without this a
-/// version bump leaves `cursor` / `copilot` fast-launch links pointing at the
-/// old binary. Prints a one-line summary and returns the number of links
-/// refreshed. Best-effort — nothing installed means nothing to do.
-pub fn refresh_installed() -> Result<usize> {
-    let home = home_dir()?;
-    let shim_dir = home.join(SHIM_DIR_REL);
-
-    // Shims resolve `edgee` via PATH (no baked path), but rewrite any that exist
-    // so the script format stays current after an upgrade.
-    let present_shims: Vec<AliasSpec> = if USES_SHIMS {
-        ALL_ALIASES
-            .iter()
-            .copied()
-            .filter(|spec| shim_dir.join(spec.name).exists())
-            .collect()
-    } else {
-        Vec::new()
-    };
-    if !present_shims.is_empty() {
-        write_shims(&shim_dir, &present_shims)?;
-    }
-
-    // Desktop wrappers embed an absolute `edgee` path — refresh installed ones.
-    let refreshed_apps = desktop::refresh_installed(ALL_APPS)?;
-
-    let count = present_shims.len() + refreshed_apps.len();
+/// Re-install the desktop wrappers that are *already* present so their embedded
+/// absolute `edgee` path points at `edgee` — resolved by the caller *before* a
+/// self-update replaces the running binary. Called by `edgee update`: without
+/// this a version bump leaves `cursor` / `copilot` fast-launch links pointing at
+/// the old binary. CLI shims are untouched: they resolve `edgee` via PATH and
+/// bake no path, so they cannot go stale. Best-effort; prints a one-line summary
+/// when anything was refreshed.
+#[cfg(feature = "self-update")]
+pub fn refresh_installed(edgee: &Path) {
+    let count = desktop::refresh_wrappers(ALL_APPS, edgee);
     if count > 0 {
         println!(
-            "  {} refreshed {} fast-launch link{} to the updated binary",
-            style("updated").green(),
+            "  {} {} fast-launch link{}",
+            style("refreshed").green(),
             count,
             if count == 1 { "" } else { "s" }
         );
     }
-    Ok(count)
 }
+
+#[cfg(feature = "self-update")]
+pub(crate) use desktop::edgee_executable;
 
 #[derive(Clone, Copy)]
 enum Action {

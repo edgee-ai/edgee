@@ -19,9 +19,19 @@ fn is_homebrew_path(path: &Path) -> bool {
 }
 
 pub async fn run(_opts: Options) -> anyhow::Result<()> {
+    // Resolve the fast-launch link target *before* any self-replace: once
+    // self_update renames the new binary over the running one, Linux's
+    // /proc/self/exe reads "<path> (deleted)" and canonicalize fails — baking
+    // that bogus path into refreshed wrappers would break them.
+    let launch_target = crate::commands::alias::edgee_executable().ok();
+
     // Homebrew-managed installs live under a read-only Cellar symlink, so the
     // self_update in-place atomic replace fails with `os error 2`. Detect those
     // and redirect to `brew upgrade` instead (EOSS-67 / SUPD-01, SUPD-02).
+    //
+    // Detection inspects the *canonical* path, not `launch_target`: the latter
+    // may already be the stable `/usr/local/bin/edgee`, which is_homebrew_path
+    // deliberately does not match.
     //
     // Detection failure (no `current_exe`, or `canonicalize` error) falls through
     // to the existing direct-install flow so curl installs are never blocked.
@@ -30,7 +40,7 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
             if is_homebrew_path(&real) {
                 // Stabilize any fast-launch links to the brew `bin/edgee` symlink
                 // now, so they survive the deletion of the old Cellar version.
-                refresh_launch_links();
+                refresh_launch_links(launch_target.as_deref());
                 println!(
                     "edgee was installed via Homebrew. Run {} to upgrade.",
                     "brew upgrade edgee".cyan()
@@ -41,7 +51,7 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
     }
 
     // self_update uses synchronous reqwest client so we need to run it in a blocking task
-    let updated = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         use self_update::{backends::github::Update, Status};
 
         let updater = Update::configure()
@@ -52,35 +62,31 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
             .show_download_progress(true)
             .build()?;
 
-        let updated = match updater.update()? {
-            Status::Updated(version) => {
-                println!("Updated to {}", version.green());
-                true
-            }
-            Status::UpToDate(version) => {
-                println!("Already up to date ({})", version.green());
-                false
-            }
-        };
+        match updater.update()? {
+            Status::Updated(version) => println!("Updated to {}", version.green()),
+            Status::UpToDate(version) => println!("Already up to date ({})", version.green()),
+        }
 
-        anyhow::Ok(updated)
+        anyhow::Ok(())
     })
     .await??;
 
-    // Desktop wrappers (`cursor`, `copilot`) bake in an absolute `edgee` path, so
-    // refresh installed fast-launch links to point at the new binary.
-    if updated {
-        refresh_launch_links();
-    }
+    // Desktop wrappers (`cursor`, `copilot`) bake in an absolute `edgee` path.
+    // Refresh unconditionally: a wrapper can be stale even when the binary is
+    // already current (e.g. baked against a previous install location).
+    refresh_launch_links(launch_target.as_deref());
 
     Ok(())
 }
 
-/// Best-effort refresh of installed fast-launch links (desktop wrappers + shims).
+/// Best-effort refresh of installed fast-launch links (desktop wrappers).
 /// A failure here must never fail the update itself.
-fn refresh_launch_links() {
-    if let Err(err) = crate::commands::alias::refresh_installed() {
-        eprintln!("Note: could not refresh fast-launch links: {err}");
+fn refresh_launch_links(edgee: Option<&Path>) {
+    match edgee {
+        Some(edgee) => crate::commands::alias::refresh_installed(edgee),
+        None => eprintln!(
+            "Note: could not refresh fast-launch links: failed to resolve the edgee binary path"
+        ),
     }
 }
 
