@@ -25,7 +25,7 @@ cargo build --release
 Install the CLI locally:
 
 ```bash
-cargo install --path crates/cli
+cargo install --path .
 edgee --version
 ```
 
@@ -40,7 +40,7 @@ cargo run -- stats
 ## Tests
 
 ```bash
-# All tests across the workspace
+# All tests
 cargo test --all
 
 # A single test by name

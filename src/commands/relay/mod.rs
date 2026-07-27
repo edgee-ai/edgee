@@ -25,7 +25,7 @@ use hudsucker::Proxy;
 use handler::{GatewayTarget, RelayHandler, Sink};
 
 /// Canonical relay targets (same public names as `edgee launch`). See
-/// `crates/cli/src/commands/launch/README.md` for naming rules.
+/// `src/commands/launch/README.md` for naming rules.
 ///
 /// Note: bare `copilot` is reserved for the future Copilot CLI launch target
 /// and is intentionally not a relay alias here.
