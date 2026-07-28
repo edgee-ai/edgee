@@ -1,0 +1,17 @@
+[package]
+name = "edgee-menubar"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "edgee-menubar"
+path = "src/main.rs"
+
+[dependencies]
+edgee-cli = { path = "../cli" }
+anyhow.workspace = true
+eframe = "0.31"
+tray-icon = "0.21"
