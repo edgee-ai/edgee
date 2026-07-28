@@ -1,13 +1,68 @@
 use anyhow::{Context, Result};
 use console::style;
 use dialoguer::{theme::ColorfulTheme, Confirm};
+use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 #[derive(Debug, clap::Parser)]
-pub struct Options {}
+pub struct Options {
+    /// Run without interactive prompts: open the browser immediately and
+    /// auto-select the organization when the account has exactly one. Intended
+    /// for GUI front-ends that can't answer TTY prompts.
+    #[arg(long)]
+    pub non_interactive: bool,
+    /// Organization (id or slug) to select when the account has more than one.
+    /// Implies non-interactive selection.
+    #[arg(long)]
+    pub org: Option<String>,
+    /// Emit the login result as JSON on stdout (implies non-interactive).
+    #[arg(long)]
+    pub json: bool,
+}
 
-pub async fn run(_opts: Options) -> Result<()> {
+/// Machine-readable result of a non-interactive login. Consumed by GUI
+/// front-ends (e.g. the macOS menubar app).
+#[derive(Serialize)]
+pub struct LoginOutcome {
+    pub logged_in: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org_slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org_id: Option<String>,
+    /// True when the account has multiple orgs and none was chosen yet: the
+    /// token is stored, but the caller must re-run with `--org <id|slug>`.
+    pub needs_org_selection: bool,
+    /// Available orgs to choose from (only populated when `needs_org_selection`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub organizations: Vec<OrgBrief>,
+}
+
+#[derive(Serialize)]
+pub struct OrgBrief {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+}
+
+pub async fn run(opts: Options) -> Result<()> {
+    // Any of these flags select the headless, prompt-free path.
+    if opts.json || opts.non_interactive || opts.org.is_some() {
+        let outcome = perform_login_noninteractive(opts.org.as_deref()).await?;
+        if opts.json {
+            println!("{}", serde_json::to_string_pretty(&outcome)?);
+        } else if outcome.needs_org_selection {
+            eprintln!(
+                "Logged in. Multiple organizations found — re-run with `--org <id|slug>`."
+            );
+        } else if let Some(email) = &outcome.email {
+            eprintln!("Logged in as {email}");
+        }
+        return Ok(());
+    }
+
     let email = perform_login().await?;
     let profile = crate::config::active_profile_name();
 
@@ -22,6 +77,87 @@ pub async fn run(_opts: Options) -> Result<()> {
     Ok(())
 }
 
+/// Headless login: browser auth without prompts, storing the token immediately
+/// and selecting the org by preference / auto-selecting a sole org. When the
+/// account has several orgs and none is specified, the token is still stored and
+/// the returned outcome reports `needs_org_selection` with the candidates.
+pub async fn perform_login_noninteractive(org_pref: Option<&str>) -> Result<LoginOutcome> {
+    let mut creds = crate::config::Credentials::default();
+
+    if let Ok(v) = std::env::var("EDGEE_CONSOLE_URL") {
+        creds.console_url = Some(v);
+    }
+    if let Ok(v) = std::env::var("EDGEE_CONSOLE_API_URL") {
+        creds.console_api_url = Some(v);
+    }
+    if let Ok(v) = std::env::var("EDGEE_API_URL") {
+        creds.gateway_url = Some(v);
+    }
+    if let Ok(v) = std::env::var("EDGEE_MCP_URL") {
+        creds.mcp_url = Some(v);
+    }
+
+    let (user_token, email, user_id) = browser_auth(false).await?;
+
+    // Store the token before org selection so it survives a later failure.
+    creds.user_token = Some(user_token.clone());
+    creds.email = email.clone();
+    creds.user_id = user_id;
+    crate::config::write(&creds)?;
+
+    let client = crate::api::ApiClient::new(&user_token)?;
+    let orgs = client.list_organizations().await?;
+    if orgs.is_empty() {
+        anyhow::bail!(
+            "No organizations found. Please create one at {} first.",
+            crate::config::console_base_url()
+        );
+    }
+
+    let selected: Option<(String, String)> = if let Some(pref) = org_pref {
+        let org = orgs
+            .iter()
+            .find(|o| o.id == pref || o.slug == pref)
+            .ok_or_else(|| anyhow::anyhow!("Organization '{pref}' not found"))?;
+        Some((org.id.clone(), org.slug.clone()))
+    } else if orgs.len() == 1 {
+        Some((orgs[0].id.clone(), orgs[0].slug.clone()))
+    } else {
+        None
+    };
+
+    match selected {
+        Some((org_id, org_slug)) => {
+            creds.org_slug = Some(org_slug.clone());
+            creds.org_id = Some(org_id.clone());
+            crate::config::write(&creds)?;
+            Ok(LoginOutcome {
+                logged_in: true,
+                email,
+                org_slug: Some(org_slug),
+                org_id: Some(org_id),
+                needs_org_selection: false,
+                organizations: Vec::new(),
+            })
+        }
+        None => Ok(LoginOutcome {
+            logged_in: true,
+            email,
+            org_slug: None,
+            org_id: None,
+            needs_org_selection: true,
+            organizations: orgs
+                .iter()
+                .map(|o| OrgBrief {
+                    id: o.id.clone(),
+                    slug: o.slug.clone(),
+                    name: o.name.clone(),
+                })
+                .collect(),
+        }),
+    }
+}
+
 pub async fn perform_login() -> Result<String> {
     // Authenticate via browser — do NOT clear credentials before we have a new token,
     // so an aborted re-login doesn't wipe an existing valid token.
@@ -34,7 +170,7 @@ pub async fn perform_login() -> Result<String> {
     if let Ok(v) = std::env::var("EDGEE_MCP_URL") { creds.mcp_url = Some(v); }
 
     let (user_token, email, user_id) = {
-        let (token, email, user_id) = browser_auth().await?;
+        let (token, email, user_id) = browser_auth(true).await?;
         println!();
         println!("  {}", style("Authenticated!").green().bold());
         (token, email, user_id)
@@ -384,7 +520,7 @@ fn provider_config<'a>(
     }
 }
 
-async fn browser_auth() -> Result<(String, Option<String>, Option<String>)> {
+async fn browser_auth(interactive: bool) -> Result<(String, Option<String>, Option<String>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
 
@@ -395,46 +531,57 @@ async fn browser_auth() -> Result<(String, Option<String>, Option<String>)> {
         percent_encode(&callback),
     );
 
-    println!();
-    println!(
-        "  {} {}",
-        style("Login required.").bold(),
-        style("Your browser will open to authenticate with Edgee.").dim()
-    );
-    println!(
-        "  {}",
-        style("Once you sign in or create an account, you'll get access to usage analytics,").dim()
-    );
-    println!(
-        "  {}",
-        style("token consumption insights, and session history for your Claude Code usage.").dim()
-    );
-    println!();
-    println!(
-        "  {}",
-        style("Your Edgee API key will be automatically created and saved in the CLI.").dim()
-    );
-    println!();
+    if interactive {
+        println!();
+        println!(
+            "  {} {}",
+            style("Login required.").bold(),
+            style("Your browser will open to authenticate with Edgee.").dim()
+        );
+        println!(
+            "  {}",
+            style("Once you sign in or create an account, you'll get access to usage analytics,")
+                .dim()
+        );
+        println!(
+            "  {}",
+            style("token consumption insights, and session history for your Claude Code usage.")
+                .dim()
+        );
+        println!();
+        println!(
+            "  {}",
+            style("Your Edgee API key will be automatically created and saved in the CLI.").dim()
+        );
+        println!();
 
-    let confirmed = Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt("Open browser to continue?")
-        .default(true)
-        .interact()?;
+        let confirmed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Open browser to continue?")
+            .default(true)
+            .interact()?;
 
-    if !confirmed {
-        anyhow::bail!("Login cancelled.");
+        if !confirmed {
+            anyhow::bail!("Login cancelled.");
+        }
+
+        println!();
+        println!("  {}", style("If the browser does not open, visit:").dim());
+        println!("  {}", style(&url).cyan().underlined());
+        println!();
+    } else {
+        // Headless: no prompt, and progress goes to stderr so stdout stays clean
+        // for a machine-readable (`--json`) result.
+        eprintln!("Opening browser for Edgee login…");
+        eprintln!("If it does not open, visit: {url}");
     }
-
-    println!();
-    println!("  {}", style("If the browser does not open, visit:").dim());
-    println!("  {}", style(&url).cyan().underlined());
-    println!();
 
     if let Err(e) = open::that(&url) {
         eprintln!("Could not open browser automatically: {e}");
     }
 
-    println!("  {}", style("Waiting for authentication…").dim());
+    if interactive {
+        println!("  {}", style("Waiting for authentication…").dim());
+    }
     let (mut stream, _) = listener.accept().await?;
 
     let mut buf = vec![0u8; 4096];
