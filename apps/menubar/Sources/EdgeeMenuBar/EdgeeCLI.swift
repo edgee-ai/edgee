@@ -55,7 +55,9 @@ enum EdgeeCLI {
     }
 
     /// Run edgee and capture stdout. Returns nil on launch failure or non-zero exit.
-    private static func capture(_ args: [String]) -> Data? {
+    /// Configure a `Process` to invoke edgee with an augmented PATH (so edgee and
+    /// any editors it launches resolve), without running it.
+    private static func makeProcess(_ args: [String]) -> Process {
         let process = Process()
 
         var environment = ProcessInfo.processInfo.environment
@@ -71,7 +73,11 @@ enum EdgeeCLI {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = ["edgee"] + args
         }
+        return process
+    }
 
+    private static func capture(_ args: [String]) -> Data? {
+        let process = makeProcess(args)
         let stdout = Pipe()
         process.standardOutput = stdout
         process.standardError = Pipe()
@@ -85,5 +91,22 @@ enum EdgeeCLI {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         return data
+    }
+
+    /// Spawn a long-running edgee subprocess (e.g. a relay) in the background —
+    /// no shell, no window. Returns the running process plus a pipe capturing its
+    /// stderr (for diagnostics on exit), or nil if it couldn't be launched.
+    static func spawn(_ args: [String]) -> (process: Process, stderr: Pipe)? {
+        let process = makeProcess(args)
+        let stderr = Pipe()
+        process.standardOutput = Pipe()
+        process.standardError = stderr
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        return (process, stderr)
     }
 }

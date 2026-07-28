@@ -3,6 +3,7 @@ import SwiftUI
 
 /// The dropdown panel shown when the menubar icon is clicked.
 struct MenuContentView: View {
+    @EnvironmentObject private var relays: RelayManager
     @State private var status: AuthStatus?
     @State private var loading = true
     @State private var loggingIn = false
@@ -13,12 +14,12 @@ struct MenuContentView: View {
             Divider()
             account
             Divider()
-            placeholders
+            relaySection
             Divider()
             footer
         }
         .padding(16)
-        .frame(width: 300)
+        .frame(width: 320)
         .task { await reload() }
     }
 
@@ -84,17 +85,58 @@ struct MenuContentView: View {
         }
     }
 
-    private var placeholders: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Label("Stats", systemImage: "chart.bar.fill").font(.headline)
-                caption("Token savings & sessions — coming next")
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Label("Launch & Relay", systemImage: "play.circle.fill").font(.headline)
-                caption("Start agents and the relay — coming next")
+    private var relaySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Launch & Relay", systemImage: "play.circle.fill").font(.headline)
+            if status?.loggedIn == true {
+                ForEach(RelayTarget.all.filter { $0.installed }) { target in
+                    relayRow(target)
+                }
+            } else {
+                caption("Log in to launch agents and start the relay.")
             }
         }
+    }
+
+    @ViewBuilder
+    private func relayRow(_ target: RelayTarget) -> some View {
+        let state = relays.state(target.id)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Image(systemName: target.symbol)
+                    .frame(width: 16)
+                    .foregroundStyle(.secondary)
+                Text(target.name)
+                Spacer()
+                statusDot(state)
+                Button(buttonTitle(state, target)) { relays.toggle(target) }
+                    .buttonStyle(.borderless)
+                    .disabled(state == .starting)
+            }
+            if case let .failed(message) = state {
+                Text(message).font(.caption).foregroundStyle(.red).lineLimit(2)
+            }
+        }
+    }
+
+    private func buttonTitle(_ state: RelayRunState, _ target: RelayTarget) -> String {
+        switch state {
+        case .running: return "Stop"
+        case .starting: return "…"
+        case .stopped, .failed: return target.startVerb
+        }
+    }
+
+    @ViewBuilder
+    private func statusDot(_ state: RelayRunState) -> some View {
+        let color: Color =
+            switch state {
+            case .running: .green
+            case .starting: .orange
+            case .failed: .red
+            case .stopped: .secondary
+            }
+        Circle().fill(color).frame(width: 7, height: 7)
     }
 
     private var footer: some View {
@@ -105,7 +147,10 @@ struct MenuContentView: View {
                 }
             }
             Spacer()
-            Button("Quit") { NSApplication.shared.terminate(nil) }
+            Button("Quit") {
+                relays.stopAll()
+                NSApplication.shared.terminate(nil)
+            }
         }
         .buttonStyle(.borderless)
     }
