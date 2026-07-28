@@ -156,6 +156,10 @@ setup_command! {
     /// (macOS). Undoes the one-time trust `relay claude-desktop` installs.
     #[arg(long)]
     pub untrust: bool,
+    /// Never prompt: fail instead of running interactive login / org selection /
+    /// first-run onboarding. For GUI front-ends that drive the relay headlessly.
+    #[arg(long)]
+    pub non_interactive: bool,
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -170,16 +174,28 @@ pub async fn run(opts: Options) -> Result<()> {
     // Copilot, Cursor) map to their own passthrough provider key.
     let provider = key_provider(&agent).to_string();
 
-    // Auth bootstrap — same flow as `edgee launch`.
+    // Auth bootstrap — same flow as `edgee launch`. When driven headlessly
+    // (`--non-interactive`), never prompt: bail if the prerequisites aren't
+    // already in place, and skip first-run onboarding (the key is still minted
+    // with default compression).
+    let interactive = !opts.non_interactive;
     let mut creds = crate::config::read()?;
     if creds.user_token.as_deref().unwrap_or("").is_empty() {
-        crate::commands::auth::login::perform_login().await?;
+        if interactive {
+            crate::commands::auth::login::perform_login().await?;
+        } else {
+            anyhow::bail!("Not logged in. Run `edgee auth login` first.");
+        }
     }
-    crate::commands::auth::login::ensure_org_selected().await?;
+    if interactive {
+        crate::commands::auth::login::ensure_org_selected().await?;
+    } else if creds.org_id.as_deref().unwrap_or("").is_empty() {
+        anyhow::bail!("No organization selected. Run `edgee auth login` first.");
+    }
     let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key(&provider)
         .await?
         .created;
-    if reprovisioned {
+    if reprovisioned && interactive {
         crate::commands::auth::login::ensure_onboarded(&provider).await?;
     }
     // VS Code can host Claude Code alongside Copilot chat. Provision the claude key
@@ -188,7 +204,7 @@ pub async fn run(opts: Options) -> Result<()> {
         let reprov = crate::commands::auth::login::ensure_valid_provider_key("claude")
             .await?
             .created;
-        if reprov {
+        if reprov && interactive {
             crate::commands::auth::login::ensure_onboarded("claude").await?;
         }
     }
@@ -275,10 +291,12 @@ pub async fn run(opts: Options) -> Result<()> {
         &session_id,
     );
 
-    // Spawn the agent only when one is named; otherwise run proxy-only. Launch
-    // uses the canonical `agent` (e.g. `vscode` → `copilot-vscode`), not the raw
-    // user input, so GUI-editor detection and binary resolution work.
-    if opts.agent.is_none() {
+    // Run proxy-only when no agent is named, or when `--no-launch` is set (e.g.
+    // driving an external client like Claude Desktop against a named provider's
+    // pipeline). Otherwise launch the agent. Launch uses the canonical `agent`
+    // (e.g. `vscode` → `copilot-vscode`), not the raw user input, so GUI-editor
+    // detection and binary resolution work.
+    if opts.agent.is_none() || opts.no_launch {
         print_external_help(&addr, &cert_path);
         proxy.start().await.context("relay proxy error")?;
     } else if is_gui_editor(&agent) {
@@ -413,6 +431,7 @@ pub async fn run_for_agent(agent: &str) -> Result<()> {
         port: None,
         log_output: None,
         untrust: false,
+        non_interactive: false,
     })
     .await
 }
