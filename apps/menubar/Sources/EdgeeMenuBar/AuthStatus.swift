@@ -24,3 +24,19 @@ struct ProviderStatus: Codable {
     let configured: Bool
     let mode: String?
 }
+
+/// Decoded from `edgee auth login --non-interactive --json` (`LoginOutcome` in
+/// crates/cli/src/commands/auth/login.rs).
+struct LoginOutcome: Codable {
+    let loggedIn: Bool
+    let email: String?
+    let orgSlug: String?
+    let needsOrgSelection: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case loggedIn = "logged_in"
+        case email
+        case orgSlug = "org_slug"
+        case needsOrgSelection = "needs_org_selection"
+    }
+}

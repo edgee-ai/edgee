@@ -5,6 +5,7 @@ import SwiftUI
 struct MenuContentView: View {
     @State private var status: AuthStatus?
     @State private var loading = true
+    @State private var loggingIn = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -66,7 +67,19 @@ struct MenuContentView: View {
                     Circle().fill(.red).frame(width: 8, height: 8)
                     Text("Not logged in")
                 }
-                Button("Log in…") { EdgeeCLI.launchLoginInTerminal() }
+                Button {
+                    Task { await login() }
+                } label: {
+                    if loggingIn {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Opening browser…")
+                        }
+                    } else {
+                        Text("Log in…")
+                    }
+                }
+                .disabled(loggingIn)
             }
         }
     }
@@ -107,5 +120,12 @@ struct MenuContentView: View {
         loading = true
         status = await EdgeeCLI.authStatus()
         loading = false
+    }
+
+    private func login() async {
+        loggingIn = true
+        _ = await EdgeeCLI.login()
+        loggingIn = false
+        await reload()
     }
 }

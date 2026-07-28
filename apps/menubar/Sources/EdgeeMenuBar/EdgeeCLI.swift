@@ -34,14 +34,17 @@ enum EdgeeCLI {
         }.value
     }
 
-    /// Open `edgee auth login` in Terminal (it's an interactive browser flow).
-    static func launchLoginInTerminal() {
-        let bin = resolvedBinary ?? "edgee"
-        let script = "tell application \"Terminal\"\nactivate\ndo script \"\(bin) auth login\"\nend tell"
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        try? process.run()
+    /// Run the browser login headlessly (no Terminal): `edgee auth login
+    /// --non-interactive --json`. The subprocess opens the browser itself and
+    /// blocks until the callback arrives, so this can take a while — run it off
+    /// the main actor. Returns the decoded outcome, or nil on failure.
+    static func login() async -> LoginOutcome? {
+        await Task.detached(priority: .userInitiated) {
+            guard let data = capture(["auth", "login", "--non-interactive", "--json"]) else {
+                return nil
+            }
+            return try? JSONDecoder().decode(LoginOutcome.self, from: data)
+        }.value
     }
 
     /// Run edgee and capture stdout. Returns nil on launch failure or non-zero exit.
