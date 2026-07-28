@@ -1,13 +1,10 @@
 use anyhow::Result;
 use clap::Parser;
 
-mod api;
-mod commands;
-mod config;
-mod crypto;
-mod git;
+use edgee_cli::commands;
+use edgee_cli::config;
 #[cfg(feature = "self-update")]
-mod version_check;
+use edgee_cli::version_check;
 
 #[derive(Debug, Parser)]
 #[command(name = "edgee", about = "Edgee CLI", version)]

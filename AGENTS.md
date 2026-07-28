@@ -14,9 +14,11 @@ If `edgee stats` fails, you have the wrong package installed.
 
 ## CLI surface
 
+This is a Cargo workspace. The `edgee` CLI lives in `crates/cli` (package `edgee-cli`), split into a library (`crates/cli/src/lib.rs`, exposing `config`, `api`, `crypto`, `git`, `commands`) and a thin binary (`crates/cli/src/main.rs`). Other workspace crates (e.g. the macOS menubar app) reuse the library directly so the credentials format and console API client have a single source of truth. Paths below are relative to `crates/cli/`.
+
 Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
 
-- `edgee launch {claude|codebuddy|codex|opencode|crush|cursor|copilot}` — launches a coding agent or app through Edgee. CLI agents get gateway env/headers; app targets (`cursor`, `copilot`) use the hidden relay. Naming rules: [`src/commands/launch/README.md`](src/commands/launch/README.md). Implementation per target under `src/commands/launch/`.
+- `edgee launch {claude|codebuddy|codex|opencode|crush|cursor|copilot}` — launches a coding agent or app through Edgee. CLI agents get gateway env/headers; app targets (`cursor`, `copilot`) use the hidden relay. Naming rules: [`crates/cli/src/commands/launch/README.md`](crates/cli/src/commands/launch/README.md). Implementation per target under `src/commands/launch/`.
 - `edgee auth {login|status|list|switch}` — OAuth-style flow against the Edgee console. See `src/api.rs` and `src/commands/auth/`.
 - `edgee settings [claude|codebuddy|codex|opencode|crush]` — configures compression, fallback, and reroute settings for a coding-agent key against the console API. `edgee settings profile` manages profile-wide (non-agent-specific) settings instead — currently the E2EE debug-log encryption passphrase (`src/commands/settings/profile.rs`).
 - `edgee stats` (visible alias `report`) — prints session token counts and compression savings.
@@ -38,10 +40,10 @@ Injected agent flags have a matching hazard: pass any flag the agent declares **
 
 ### Build & Run
 ```bash
-cargo build                   # raw
+cargo build                   # raw (whole workspace)
 cargo build --release         # release build (optimized)
-cargo run -- <command>        # run directly
-cargo install --path .        # install locally
+cargo run -p edgee-cli -- <command>   # run the CLI directly
+cargo install --path crates/cli       # install locally
 ```
 
 ### Testing
