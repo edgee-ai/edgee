@@ -5,7 +5,9 @@ import SwiftUI
 struct MenuContentView: View {
     @EnvironmentObject private var relays: RelayManager
     @State private var status: AuthStatus?
+    @State private var stats: Stats?
     @State private var loading = true
+    @State private var statsLoading = true
     @State private var loggingIn = false
 
     var body: some View {
@@ -13,6 +15,8 @@ struct MenuContentView: View {
             header
             Divider()
             account
+            Divider()
+            StatsView(stats: stats, loading: statsLoading)
             Divider()
             relaySection
             Divider()
@@ -163,8 +167,13 @@ struct MenuContentView: View {
 
     private func reload() async {
         loading = true
-        status = await EdgeeCLI.authStatus()
+        statsLoading = true
+        async let auth = EdgeeCLI.authStatus()
+        async let summary = EdgeeCLI.stats()
+        status = await auth
         loading = false
+        stats = await summary
+        statsLoading = false
     }
 
     private func login() async {

@@ -41,6 +41,14 @@ enum EdgeeCLI {
         }.value
     }
 
+    /// Fetch aggregated stats via `edgee stats --json`. Runs off the main actor.
+    static func stats(limit: Int = 20) async -> Stats? {
+        await Task.detached(priority: .userInitiated) {
+            guard let data = capture(["stats", "--json", "--limit", "\(limit)"]) else { return nil }
+            return try? JSONDecoder().decode(Stats.self, from: data)
+        }.value
+    }
+
     /// Run the browser login headlessly (no Terminal): `edgee auth login
     /// --non-interactive --json`. The subprocess opens the browser itself and
     /// blocks until the callback arrives, so this can take a while — run it off
