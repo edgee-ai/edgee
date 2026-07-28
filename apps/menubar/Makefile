@@ -2,6 +2,14 @@ APP     := Edgee.app
 CONFIG  := release
 BIN     := .build/$(CONFIG)/EdgeeMenuBar
 
+# A nix/direnv devshell (this repo's flake) exports DEVELOPER_DIR and SDKROOT
+# pointing at a nix apple-sdk, and ships its own xcrun shim earlier on PATH.
+# That breaks Xcode's swift/xcrun ("tool 'swift' not found"). Clear those and
+# put the system toolchain paths first so `make` works inside the nix shell too.
+unexport DEVELOPER_DIR
+unexport SDKROOT
+export PATH := /usr/bin:/bin:/usr/sbin:/sbin:$(PATH)
+
 .PHONY: build bundle run clean
 
 build:
