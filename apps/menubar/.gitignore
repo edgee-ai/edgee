@@ -1,0 +1,4 @@
+.build/
+Edgee.app/
+*.xcodeproj
+.DS_Store
