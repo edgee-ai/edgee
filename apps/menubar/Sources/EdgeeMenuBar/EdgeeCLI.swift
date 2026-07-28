@@ -6,11 +6,18 @@ import Foundation
 /// a set of well-known locations and also augment `PATH` for any tools `edgee`
 /// itself spawns. Override with the `EDGEE_BIN` environment variable.
 enum EdgeeCLI {
-    /// Absolute path to the edgee binary, if found in a known location.
+    /// Absolute path to the edgee binary. Preference order:
+    /// 1. `EDGEE_BIN` override, 2. the copy bundled inside Edgee.app (so the app
+    /// always runs a CLI that matches its own version), 3. well-known install dirs.
     private static let resolvedBinary: String? = {
         let env = ProcessInfo.processInfo.environment
         if let override = env["EDGEE_BIN"], !override.isEmpty {
             return override
+        }
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("edgee").path,
+            FileManager.default.isExecutableFile(atPath: bundled)
+        {
+            return bundled
         }
         return searchDirs
             .map { "\($0)/edgee" }
