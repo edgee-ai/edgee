@@ -1,9 +1,5 @@
 [workspace]
 members = ["crates/*"]
-# The macOS menubar app (crates/menubar) is macOS-only and pulls a GUI/tray
-# toolchain the Linux/Windows CI can't build, so keep the default selection to
-# the CLI. Build the app explicitly with `cargo build -p edgee-menubar`.
-default-members = ["crates/cli"]
 resolver = "3"
 
 [workspace.package]
