@@ -97,6 +97,7 @@ fn build_edgee_provider(
     session_id: &str,
     gateway_url: &str,
     models: &[String],
+    context_limits: &util::ContextLimits,
     debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 ) -> Value {
     // The provider is an OpenAI-compatible endpoint pointed at the gateway's
@@ -128,7 +129,23 @@ fn build_edgee_provider(
     if !models.is_empty() {
         let models_arr: Vec<Value> = models
             .iter()
-            .map(|id| serde_json::json!({ "id": id, "name": id }))
+            .map(|id| {
+                let mut model = serde_json::json!({ "id": id, "name": id });
+                // Crush treats a `context_window` of 0 as "unknown": it hides the
+                // header's context gauge and explicitly skips auto-summarizing to
+                // avoid truncating custom models. Declaring the real window is what
+                // turns both back on. Omitted when the catalog has no window rather
+                // than guessing one, which keeps Crush's unknown-model handling.
+                //
+                // `default_max_tokens` is deliberately left off: Crush omits
+                // `max_tokens` from the request when it is 0, letting the upstream
+                // apply its own cap. The catalog carries no output-token cap, so any
+                // value we invented would either truncate replies or be rejected.
+                if let Some(context_window) = context_limits.get(id) {
+                    model["context_window"] = serde_json::json!(context_window);
+                }
+                model
+            })
             .collect();
         provider["models"] = Value::Array(models_arr);
     }
@@ -206,10 +223,19 @@ pub async fn run(opts: Options) -> Result<()> {
         })
     });
 
-    let models = fetch_gateway_models(&gateway_url, api_key).await;
+    let (models, context_limits) = tokio::join!(
+        fetch_gateway_models(&gateway_url, api_key),
+        util::fetch_model_context_limits(&creds)
+    );
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
-    let edgee_provider =
-        build_edgee_provider(api_key, &session_id, &gateway_url, &models, debug_log_headers);
+    let edgee_provider = build_edgee_provider(
+        api_key,
+        &session_id,
+        &gateway_url,
+        &models,
+        &context_limits,
+        debug_log_headers,
+    );
     insert_edgee_provider(&mut config, edgee_provider);
 
     // Crush reads `crush.json` from the directory named by CRUSH_GLOBAL_CONFIG,
@@ -246,4 +272,56 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn models_of(models: &[&str], limits: &[(&str, u64)]) -> Vec<Value> {
+        let models: Vec<String> = models.iter().map(|m| m.to_string()).collect();
+        let limits: util::ContextLimits =
+            limits.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let provider =
+            build_edgee_provider("key", "sess", "https://gw.test", &models, &limits, None);
+        provider["models"].as_array().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn declares_the_context_window_from_the_catalog() {
+        let models = models_of(
+            &["anthropic/claude-opus-5"],
+            &[("anthropic/claude-opus-5", 1_000_000)],
+        );
+        assert_eq!(models[0]["id"], serde_json::json!("anthropic/claude-opus-5"));
+        assert_eq!(models[0]["context_window"], serde_json::json!(1_000_000));
+    }
+
+    #[test]
+    fn omits_the_context_window_when_the_catalog_has_none() {
+        let models = models_of(&["openai/gpt-5"], &[]);
+        assert_eq!(models[0]["name"], serde_json::json!("openai/gpt-5"));
+        assert!(models[0].get("context_window").is_none());
+    }
+
+    /// Crush drops `max_tokens` from the request when it is 0, deferring to the
+    /// upstream cap. We have no output-cap data, so the field must stay absent.
+    #[test]
+    fn never_declares_a_max_token_cap() {
+        let models = models_of(
+            &["anthropic/claude-opus-5"],
+            &[("anthropic/claude-opus-5", 1_000_000)],
+        );
+        assert!(models[0].get("default_max_tokens").is_none());
+    }
+
+    #[test]
+    fn windows_are_matched_per_model_not_applied_wholesale() {
+        let models = models_of(
+            &["anthropic/claude-haiku-4-5", "openai/gpt-5"],
+            &[("anthropic/claude-haiku-4-5", 200_000)],
+        );
+        assert_eq!(models[0]["context_window"], serde_json::json!(200_000));
+        assert!(models[1].get("context_window").is_none());
+    }
 }

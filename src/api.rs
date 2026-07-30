@@ -114,18 +114,34 @@ impl OrgBilling {
     }
 }
 
+/// One upstream provider's configuration for a catalog model. Only the context
+/// window is deserialized; the rest of the entry is pricing detail.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GatewayModelProvider {
+    /// Maximum context window, in tokens, when the model is served by this
+    /// provider. Providers disagree (e.g. Anthropic's 1M vs Cursor's 256k for
+    /// the same model), so `GatewayModel::context_limit` picks between them.
+    #[serde(default)]
+    pub context_max_size: u64,
+}
+
 /// A model in the gateway catalog (`GET /v1/models`). Only the fields needed to
-/// derive a selectable routing identifier are deserialized.
+/// derive a selectable routing identifier and its context window are
+/// deserialized.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GatewayModel {
     pub model_id: String,
+    /// Model author (`anthropic`, `openai`, …). Combined with `model_id` this is
+    /// the id the gateway's own `/v1/models` listing exposes; see `catalog_id`.
+    #[serde(default)]
+    pub author_id: String,
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
     pub aliases: Vec<String>,
-    /// Provider name → provider config (config is ignored; only the keys matter).
+    /// Provider name → that provider's config for this model.
     #[serde(default)]
-    pub providers: HashMap<String, serde_json::Value>,
+    pub providers: HashMap<String, GatewayModelProvider>,
     #[serde(default)]
     pub active: bool,
     /// Whether the model is covered by the user's plan for fallback/reroute.
@@ -147,6 +163,38 @@ impl GatewayModel {
         providers
             .first()
             .map(|p| format!("{}/{}", p, self.model_id))
+    }
+
+    /// `<author_id>/<model_id>` — the id used by the gateway's OpenAI-style
+    /// `/v1/models` listing, so it joins this console catalog entry to the model
+    /// ids agent configs are built from. `None` when `author_id` is absent.
+    pub fn catalog_id(&self) -> Option<String> {
+        if self.author_id.is_empty() {
+            return None;
+        }
+        Some(format!("{}/{}", self.author_id, self.model_id))
+    }
+
+    /// The context window to advertise for this model, in tokens. Prefers the
+    /// author's own provider entry (the native window, most accurate for an
+    /// `<author>/<model>` route); otherwise takes the smallest non-zero window
+    /// across providers, since overstating the window is the harmful direction —
+    /// an agent that thinks it has more room than the upstream allows compacts
+    /// too late and the request is rejected. `None` when no provider declares one.
+    pub fn context_limit(&self) -> Option<u64> {
+        if let Some(native) = self
+            .providers
+            .get(&self.author_id)
+            .map(|p| p.context_max_size)
+            .filter(|c| *c > 0)
+        {
+            return Some(native);
+        }
+        self.providers
+            .values()
+            .map(|p| p.context_max_size)
+            .filter(|c| *c > 0)
+            .min()
     }
 }
 
@@ -439,6 +487,52 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn catalog_model(json: &str) -> GatewayModel {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn catalog_id_joins_author_and_model() {
+        let m = catalog_model(r#"{"model_id":"claude-opus-5","author_id":"anthropic"}"#);
+        assert_eq!(m.catalog_id().as_deref(), Some("anthropic/claude-opus-5"));
+        // No author means no gateway-listing id to join on.
+        assert!(catalog_model(r#"{"model_id":"m1"}"#).catalog_id().is_none());
+    }
+
+    #[test]
+    fn context_limit_prefers_the_authors_own_provider() {
+        // Cursor serves this model with a larger window than Anthropic does; the
+        // author's native entry still wins for an `anthropic/...` route.
+        let m = catalog_model(
+            r#"{"model_id":"claude-haiku-4-5","author_id":"anthropic","providers":{
+                 "anthropic":{"context_max_size":200000},
+                 "cursor":{"context_max_size":256000}}}"#,
+        );
+        assert_eq!(m.context_limit(), Some(200_000));
+    }
+
+    #[test]
+    fn context_limit_falls_back_to_the_smallest_non_zero_window() {
+        // Served only via third parties (no `meta` provider entry): take the
+        // smallest declared window rather than overstating it.
+        let m = catalog_model(
+            r#"{"model_id":"llama-3-3-70b-instruct","author_id":"meta","providers":{
+                 "bedrock_us-east-1":{"context_max_size":128000},
+                 "bedrock_eu-west-3":{"context_max_size":8192},
+                 "vertex":{"context_max_size":0}}}"#,
+        );
+        assert_eq!(m.context_limit(), Some(8192));
+    }
+
+    #[test]
+    fn context_limit_is_absent_when_no_provider_declares_one() {
+        let m = catalog_model(
+            r#"{"model_id":"m1","author_id":"acme","providers":{"acme":{"context_max_size":0}}}"#,
+        );
+        assert_eq!(m.context_limit(), None);
+        assert_eq!(catalog_model(r#"{"model_id":"m1"}"#).context_limit(), None);
+    }
 
     fn billing(plan: Option<&str>, status: Option<&str>) -> OrgBilling {
         OrgBilling {

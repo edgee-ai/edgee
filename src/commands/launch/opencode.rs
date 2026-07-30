@@ -3,6 +3,13 @@ use serde_json::Value;
 
 use super::util;
 
+/// OpenCode clamps every request's `max_tokens` to its own `OUTPUT_TOKEN_MAX` of
+/// 32k (`maxOutputTokens()` in its provider transform), and falls back to that
+/// same value when a model's output limit is `0`. Its config schema requires
+/// `output` whenever `limit` is present, so declaring 32k satisfies the schema
+/// while leaving the request identical to what OpenCode would send on its own.
+const OPENCODE_OUTPUT_TOKEN_MAX: u64 = 32_000;
+
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
@@ -171,6 +178,7 @@ fn build_edgee_provider(
     session_id: &str,
     gateway_url: &str,
     models: &[String],
+    context_limits: &util::ContextLimits,
     debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 ) -> Value {
     // The provider is `@ai-sdk/openai-compatible` pointed at the gateway's
@@ -200,7 +208,16 @@ fn build_edgee_provider(
     if !models.is_empty() {
         let mut models_map = serde_json::Map::new();
         for id in models {
-            models_map.insert(id.clone(), serde_json::json!({ "name": id }));
+            let mut entry = serde_json::json!({ "name": id });
+            // Only declare `limit` when the catalog gave us a real context window;
+            // a fabricated one is worse than letting OpenCode fall back to 0.
+            if let Some(context) = context_limits.get(id) {
+                entry["limit"] = serde_json::json!({
+                    "context": context,
+                    "output": OPENCODE_OUTPUT_TOKEN_MAX,
+                });
+            }
+            models_map.insert(id.clone(), entry);
         }
         provider["models"] = Value::Object(models_map);
     }
@@ -259,10 +276,19 @@ pub async fn run(opts: Options) -> Result<()> {
         })
     });
 
-    let models = fetch_gateway_models(&gateway_url, api_key).await;
+    let (models, context_limits) = tokio::join!(
+        fetch_gateway_models(&gateway_url, api_key),
+        util::fetch_model_context_limits(&creds)
+    );
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
-    let edgee_provider =
-        build_edgee_provider(api_key, &session_id, &gateway_url, &models, debug_log_headers);
+    let edgee_provider = build_edgee_provider(
+        api_key,
+        &session_id,
+        &gateway_url,
+        &models,
+        &context_limits,
+        debug_log_headers,
+    );
 
     if let Some(obj) = config.as_object_mut() {
         if let Some(providers) = obj.get_mut("provider") {
@@ -311,4 +337,51 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider_with(models: &[&str], limits: &[(&str, u64)]) -> Value {
+        let models: Vec<String> = models.iter().map(|m| m.to_string()).collect();
+        let limits: util::ContextLimits =
+            limits.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        build_edgee_provider("key", "sess", "https://gw.test", &models, &limits, None)
+    }
+
+    #[test]
+    fn declares_context_and_output_limits_from_the_catalog() {
+        let provider = provider_with(
+            &["anthropic/claude-opus-5"],
+            &[("anthropic/claude-opus-5", 1_000_000)],
+        );
+        let model = &provider["models"]["anthropic/claude-opus-5"];
+        assert_eq!(model["limit"]["context"], serde_json::json!(1_000_000));
+        assert_eq!(
+            model["limit"]["output"],
+            serde_json::json!(OPENCODE_OUTPUT_TOKEN_MAX)
+        );
+    }
+
+    #[test]
+    fn omits_limit_when_the_catalog_has_no_context_size() {
+        let provider = provider_with(&["openai/gpt-5"], &[]);
+        let model = &provider["models"]["openai/gpt-5"];
+        assert_eq!(model["name"], serde_json::json!("openai/gpt-5"));
+        assert!(model.get("limit").is_none());
+    }
+
+    #[test]
+    fn limits_are_matched_per_model_not_applied_wholesale() {
+        let provider = provider_with(
+            &["anthropic/claude-haiku-4-5", "openai/gpt-5"],
+            &[("anthropic/claude-haiku-4-5", 200_000)],
+        );
+        assert_eq!(
+            provider["models"]["anthropic/claude-haiku-4-5"]["limit"]["context"],
+            serde_json::json!(200_000)
+        );
+        assert!(provider["models"]["openai/gpt-5"].get("limit").is_none());
+    }
 }
