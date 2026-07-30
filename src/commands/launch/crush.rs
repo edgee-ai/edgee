@@ -141,8 +141,24 @@ fn build_edgee_provider(
                 // `max_tokens` from the request when it is 0, letting the upstream
                 // apply its own cap. The catalog carries no output-token cap, so any
                 // value we invented would either truncate replies or be rejected.
-                if let Some(context_window) = catalog.get(id).and_then(|m| m.context) {
+                let metadata = catalog.get(id);
+                if let Some(context_window) = metadata.and_then(|m| m.context) {
                     model["context_window"] = serde_json::json!(context_window);
+                }
+                // Rates are dollars per million tokens; Crush divides by 1e6 when
+                // costing a session. Without them every session reports as free.
+                //
+                // The two cache fields mean the opposite of what they sound like:
+                // Crush multiplies `in_cached` by cache-*creation* tokens and
+                // `out_cached` by cache-*read* tokens (`agent.go:1902-1905`), and
+                // catwalk's own Anthropic data follows suit (Sonnet 4.5 ships
+                // `in_cached: 3.75`, the write rate, and `out_cached: 0.3`, the read
+                // rate). So write maps to `in_cached` and read to `out_cached`.
+                if let Some(cost) = metadata.and_then(|m| m.cost) {
+                    model["cost_per_1m_in"] = serde_json::json!(cost.input);
+                    model["cost_per_1m_out"] = serde_json::json!(cost.output);
+                    model["cost_per_1m_in_cached"] = serde_json::json!(cost.cache_write);
+                    model["cost_per_1m_out_cached"] = serde_json::json!(cost.cache_read);
                 }
                 model
             })
@@ -297,6 +313,27 @@ mod tests {
         provider["models"].as_array().cloned().unwrap_or_default()
     }
 
+    fn priced_model(id: &str, cost: crate::api::GatewayModelCost) -> Value {
+        let catalog: util::ModelCatalog = [(
+            id.to_string(),
+            util::ModelMetadata {
+                context: None,
+                cost: Some(cost),
+            },
+        )]
+        .into_iter()
+        .collect();
+        let provider = build_edgee_provider(
+            "key",
+            "sess",
+            "https://gw.test",
+            &[id.to_string()],
+            &catalog,
+            None,
+        );
+        provider["models"][0].clone()
+    }
+
     #[test]
     fn declares_the_context_window_from_the_catalog() {
         let models = models_of(
@@ -333,5 +370,85 @@ mod tests {
         );
         assert_eq!(models[0]["context_window"], serde_json::json!(200_000));
         assert!(models[1].get("context_window").is_none());
+    }
+
+    /// Crush's cache rate fields are named the opposite of their meaning: it costs
+    /// cache-creation tokens at `in_cached` and cache-read tokens at `out_cached`.
+    /// These are Sonnet 4.5's real rates, matching catwalk's own catalog entry
+    /// (`cost_per_1m_in_cached: 3.75`, `cost_per_1m_out_cached: 0.3`).
+    #[test]
+    fn maps_cache_rates_to_crushs_inverted_field_names() {
+        let model = priced_model(
+            "anthropic/claude-sonnet-4-5",
+            crate::api::GatewayModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        );
+        assert_eq!(model["cost_per_1m_in"], serde_json::json!(3.0));
+        assert_eq!(model["cost_per_1m_out"], serde_json::json!(15.0));
+        // Write rate under the `in_cached` name, read rate under `out_cached`.
+        assert_eq!(model["cost_per_1m_in_cached"], serde_json::json!(3.75));
+        assert_eq!(model["cost_per_1m_out_cached"], serde_json::json!(0.3));
+    }
+
+    #[test]
+    fn omits_rates_when_the_catalog_has_none() {
+        let models = models_of(&["openai/gpt-5"], &[("openai/gpt-5", 400_000)]);
+        for field in [
+            "cost_per_1m_in",
+            "cost_per_1m_out",
+            "cost_per_1m_in_cached",
+            "cost_per_1m_out_cached",
+        ] {
+            assert!(models[0].get(field).is_none(), "{field} should be absent");
+        }
+    }
+
+    #[test]
+    fn a_free_model_declares_zeroed_rates_rather_than_omitting_them() {
+        let model = priced_model("zai/glm-4.5-flash", crate::api::GatewayModelCost {
+            input: 0.0,
+            output: 0.0,
+            cache_read: 0.0,
+            cache_write: 0.0,
+        });
+        assert_eq!(model["cost_per_1m_in"], serde_json::json!(0.0));
+        assert_eq!(model["cost_per_1m_out"], serde_json::json!(0.0));
+    }
+
+    /// Crush's model schema sets `additionalProperties: false`, so every field we
+    /// emit has to be one it declares.
+    #[test]
+    fn emits_only_fields_crushs_schema_declares() {
+        let model = priced_model(
+            "anthropic/claude-opus-5",
+            crate::api::GatewayModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        );
+        let allowed = [
+            "id",
+            "name",
+            "cost_per_1m_in",
+            "cost_per_1m_out",
+            "cost_per_1m_in_cached",
+            "cost_per_1m_out_cached",
+            "context_window",
+            "default_max_tokens",
+            "can_reason",
+            "reasoning_levels",
+            "default_reasoning_effort",
+            "supports_attachments",
+            "options",
+        ];
+        for key in model.as_object().unwrap().keys() {
+            assert!(allowed.contains(&key.as_str()), "unexpected field {key}");
+        }
     }
 }
