@@ -114,15 +114,36 @@ impl OrgBilling {
     }
 }
 
-/// One upstream provider's configuration for a catalog model. Only the context
-/// window is deserialized; the rest of the entry is pricing detail.
+/// One upstream provider's configuration for a catalog model.
+///
+/// The rate fields are US dollars per million tokens. The server omits a rate
+/// when it is zero, so a missing field means free, not unknown.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct GatewayModelProvider {
     /// Maximum context window, in tokens, when the model is served by this
     /// provider. Providers disagree (e.g. Anthropic's 1M vs Cursor's 256k for
-    /// the same model), so `GatewayModel::context_limit` picks between them.
+    /// the same model), so `GatewayModel::preferred_provider` picks between them.
     #[serde(default)]
     pub context_max_size: u64,
+    #[serde(default)]
+    pub input_token_cost_per_million: f64,
+    #[serde(default)]
+    pub output_token_cost_per_million: f64,
+    #[serde(default)]
+    pub cached_input_token_cost_per_million: f64,
+    #[serde(default)]
+    pub cache_creation_input_token_cost_per_million: f64,
+}
+
+/// Per-million-token rates for a model, in US dollars.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GatewayModelCost {
+    pub input: f64,
+    pub output: f64,
+    /// Reading an existing prompt-cache entry.
+    pub cache_read: f64,
+    /// Writing a new prompt-cache entry.
+    pub cache_write: f64,
 }
 
 /// A model in the gateway catalog (`GET /v1/models`). Only the fields needed to
@@ -175,26 +196,62 @@ impl GatewayModel {
         Some(format!("{}/{}", self.author_id, self.model_id))
     }
 
-    /// The context window to advertise for this model, in tokens. Prefers the
-    /// author's own provider entry (the native window, most accurate for an
-    /// `<author>/<model>` route); otherwise takes the smallest non-zero window
-    /// across providers, since overstating the window is the harmful direction —
-    /// an agent that thinks it has more room than the upstream allows compacts
-    /// too late and the request is rejected. `None` when no provider declares one.
-    pub fn context_limit(&self) -> Option<u64> {
+    /// The provider entry whose numbers describe this model. Context window and
+    /// rates are both read from this single entry so they always describe the
+    /// same upstream rather than being mixed across providers.
+    ///
+    /// Prefers the author's own entry — the native window, most accurate for an
+    /// `<author>/<model>` route. Otherwise takes the smallest declared window,
+    /// since overstating the window is the harmful direction: an agent that
+    /// thinks it has more room than the upstream allows compacts too late and the
+    /// request is rejected. Ties break on provider name, because `providers` is a
+    /// `HashMap` and an arbitrary winner would make the emitted rates unstable.
+    fn preferred_provider(&self) -> Option<&GatewayModelProvider> {
         if let Some(native) = self
             .providers
             .get(&self.author_id)
-            .map(|p| p.context_max_size)
-            .filter(|c| *c > 0)
+            .filter(|p| p.context_max_size > 0)
         {
             return Some(native);
         }
+        let smallest_window = self
+            .providers
+            .iter()
+            .filter(|(_, p)| p.context_max_size > 0)
+            .min_by(|(a_name, a), (b_name, b)| {
+                a.context_max_size
+                    .cmp(&b.context_max_size)
+                    .then_with(|| a_name.cmp(b_name))
+            })
+            .map(|(_, p)| p);
+        if smallest_window.is_some() {
+            return smallest_window;
+        }
+        // No provider declares a window, but its rates may still be known.
         self.providers
-            .values()
+            .iter()
+            .min_by(|(a_name, _), (b_name, _)| a_name.cmp(b_name))
+            .map(|(_, p)| p)
+    }
+
+    /// The context window to advertise for this model, in tokens. `None` when no
+    /// provider declares one.
+    pub fn context_limit(&self) -> Option<u64> {
+        self.preferred_provider()
             .map(|p| p.context_max_size)
             .filter(|c| *c > 0)
-            .min()
+    }
+
+    /// The per-million-token rates to advertise for this model. `None` only when
+    /// the model has no provider entries at all; a model that is genuinely free
+    /// yields zeroed rates.
+    pub fn cost(&self) -> Option<GatewayModelCost> {
+        self.preferred_provider().map(|p| GatewayModelCost {
+            input: p.input_token_cost_per_million,
+            output: p.output_token_cost_per_million,
+            cache_read: p.cached_input_token_cost_per_million,
+            cache_write: p.cache_creation_input_token_cost_per_million,
+        })
     }
 }
 
@@ -540,6 +597,77 @@ mod tests {
                  "vertex":{"context_max_size":0}}}"#,
         );
         assert_eq!(m.context_limit(), Some(8192));
+    }
+
+    #[test]
+    fn cost_comes_from_the_same_provider_as_the_context_window() {
+        // Cursor declares the smaller window but different rates; both numbers must
+        // describe Anthropic's entry, not a mix of the two.
+        let m = catalog_model(
+            r#"{"model_id":"claude-sonnet-4-5","author_id":"anthropic","providers":{
+                 "anthropic":{"context_max_size":1000000,
+                   "input_token_cost_per_million":3,"output_token_cost_per_million":15,
+                   "cached_input_token_cost_per_million":0.3,
+                   "cache_creation_input_token_cost_per_million":3.75},
+                 "cursor":{"context_max_size":256000,
+                   "input_token_cost_per_million":99,"output_token_cost_per_million":99}}}"#,
+        );
+        assert_eq!(m.context_limit(), Some(1_000_000));
+        assert_eq!(
+            m.cost(),
+            Some(GatewayModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            })
+        );
+    }
+
+    #[test]
+    fn cost_is_zeroed_for_a_free_model() {
+        // The server omits zero rates, so absent fields mean free, not unknown.
+        let m = catalog_model(
+            r#"{"model_id":"glm-4.5-flash","author_id":"zai","providers":{
+                 "zai":{"context_max_size":128000}}}"#,
+        );
+        assert_eq!(
+            m.cost(),
+            Some(GatewayModelCost {
+                input: 0.0,
+                output: 0.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            })
+        );
+    }
+
+    #[test]
+    fn cost_is_known_even_when_no_provider_declares_a_window() {
+        let m = catalog_model(
+            r#"{"model_id":"m1","author_id":"acme","providers":{
+                 "acme":{"input_token_cost_per_million":7}}}"#,
+        );
+        assert_eq!(m.context_limit(), None);
+        assert_eq!(m.cost().map(|c| c.input), Some(7.0));
+    }
+
+    #[test]
+    fn provider_selection_breaks_ties_on_name_for_stable_rates() {
+        // Equal windows: the winner must not depend on HashMap iteration order.
+        let m = catalog_model(
+            r#"{"model_id":"m1","author_id":"acme","providers":{
+                 "zeta":{"context_max_size":128000,"input_token_cost_per_million":9},
+                 "alpha":{"context_max_size":128000,"input_token_cost_per_million":1}}}"#,
+        );
+        for _ in 0..16 {
+            assert_eq!(m.cost().map(|c| c.input), Some(1.0));
+        }
+    }
+
+    #[test]
+    fn cost_is_absent_only_when_there_are_no_providers() {
+        assert_eq!(catalog_model(r#"{"model_id":"m1"}"#).cost(), None);
     }
 
     #[test]
