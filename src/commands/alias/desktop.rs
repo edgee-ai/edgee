@@ -98,10 +98,86 @@ pub fn apply_apps(apps: &[AppSpec], action: Action) -> Result<()> {
     Ok(())
 }
 
-fn edgee_executable() -> Result<PathBuf> {
+pub(crate) fn edgee_executable() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("resolving edgee executable path")?;
     // Prefer the canonical path so LaunchServices / .desktop get a stable target.
-    Ok(exe.canonicalize().unwrap_or(exe))
+    let canonical = exe.canonicalize().unwrap_or(exe);
+    // A canonicalized Homebrew path points at the *versioned* Cellar directory,
+    // which `brew upgrade` deletes — leaving the wrapper launching a stale (or
+    // missing) binary. Prefer the stable `bin/edgee` symlink so fast-launch
+    // links survive upgrades.
+    if let Some(stable) = homebrew_stable_bin(&canonical) {
+        return Ok(stable);
+    }
+    Ok(canonical)
+}
+
+/// Map a Homebrew Cellar *versioned* binary path back to its stable
+/// `<prefix>/bin/<name>` symlink, so wrappers keep working across `brew upgrade`.
+///
+/// `/opt/homebrew/Cellar/edgee/0.3.0/bin/edgee` → `/opt/homebrew/bin/edgee`
+///
+/// Returns `None` when `canonical` has no `Cellar` component or the stable
+/// symlink does not resolve back to `canonical` (`brew unlink`, a pinned other
+/// version, or an unrelated binary must not repoint the links) — callers then
+/// fall back to the canonical path.
+fn homebrew_stable_bin(canonical: &Path) -> Option<PathBuf> {
+    let mut prefix = PathBuf::new();
+    let mut components = canonical.components();
+    loop {
+        let component = components.next()?;
+        if component.as_os_str() == "Cellar" {
+            break;
+        }
+        prefix.push(component);
+    }
+    let stable = prefix.join("bin").join(canonical.file_name()?);
+    (stable.canonicalize().ok()?.as_path() == canonical).then_some(stable)
+}
+
+/// Absolute path of the installed desktop wrapper for `app` on this platform.
+#[cfg(feature = "self-update")]
+fn wrapper_path(app: &AppSpec) -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_wrapper_path(app)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux_desktop_path(app)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_shortcut_path(app)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = app;
+        anyhow::bail!("desktop wrappers are not supported on this platform")
+    }
+}
+
+/// Re-install every wrapper in `apps` that is currently present (and whose
+/// target editor still is), refreshing its embedded `edgee` path to `edgee`.
+/// Best-effort: a wrapper that fails to refresh is reported and skipped, never
+/// fatal, so one bad wrapper cannot block the others. Returns the refresh count.
+#[cfg(feature = "self-update")]
+pub fn refresh_wrappers(apps: &[AppSpec], edgee: &Path) -> usize {
+    let mut refreshed = 0;
+    for app in apps {
+        let installed = wrapper_path(app).map(|p| p.exists()).unwrap_or(false);
+        if !installed || !target_app_installed(app) {
+            continue;
+        }
+        match install_wrapper(app, edgee) {
+            Ok(_) => refreshed += 1,
+            Err(err) => eprintln!(
+                "Note: could not refresh the {} launcher: {err:#}",
+                app.display_name
+            ),
+        }
+    }
+    refreshed
 }
 
 /// True when the underlying editor (Cursor / VS Code) is installed.
@@ -606,5 +682,52 @@ mod tests {
         assert!(script.contains("cursor"));
         assert!(script.contains("/opt/edgee"));
         assert!(script.contains("Terminal"));
+    }
+
+    #[test]
+    fn homebrew_stable_bin_ignores_non_cellar_paths() {
+        assert!(homebrew_stable_bin(Path::new("/usr/local/bin/edgee")).is_none());
+        assert!(homebrew_stable_bin(Path::new("/Users/me/.cargo/bin/edgee")).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn homebrew_stable_bin_maps_versioned_cellar_to_stable_symlink() {
+        // Simulate a brew layout: <prefix>/Cellar/edgee/<ver>/bin/edgee with
+        // <prefix>/bin/edgee symlinked to it, as `brew link` does.
+        let tmp = tempfile::tempdir().unwrap();
+        let prefix = tmp.path();
+        let cellar_bin = prefix.join("Cellar/edgee/0.3.0/bin");
+        std::fs::create_dir_all(&cellar_bin).unwrap();
+        std::fs::write(cellar_bin.join("edgee"), b"stub").unwrap();
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::os::unix::fs::symlink(cellar_bin.join("edgee"), prefix.join("bin/edgee")).unwrap();
+
+        // The tempdir itself can sit behind a symlink (macOS: /var → /private/var),
+        // so feed the canonicalized cellar path, as edgee_executable() does.
+        let canonical = cellar_bin.join("edgee").canonicalize().unwrap();
+        let stable = homebrew_stable_bin(&canonical).expect("cellar path maps to stable bin");
+        assert!(stable.ends_with("bin/edgee"));
+        assert_eq!(stable.canonicalize().unwrap(), canonical);
+    }
+
+    #[test]
+    fn homebrew_stable_bin_none_when_stable_symlink_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cellar = tmp.path().join("Cellar/edgee/0.3.0/bin/edgee");
+        assert!(homebrew_stable_bin(&cellar).is_none());
+    }
+
+    #[test]
+    fn homebrew_stable_bin_none_when_stable_is_a_different_binary() {
+        // <prefix>/bin/edgee exists but is not a link back to the Cellar binary
+        // (`brew unlink`, a pinned other version, or an unrelated file).
+        let tmp = tempfile::tempdir().unwrap();
+        let prefix = tmp.path();
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::write(prefix.join("bin/edgee"), b"other").unwrap();
+
+        let cellar = prefix.join("Cellar/edgee/0.3.0/bin/edgee");
+        assert!(homebrew_stable_bin(&cellar).is_none());
     }
 }

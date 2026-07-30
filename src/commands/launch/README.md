@@ -98,7 +98,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 ## Checklist for a new target
 
 1. Pick the **canonical launch name** with the rules above.
-2. Add `crates/cli/src/commands/launch/<name>.rs` (use underscores in the
+2. Add `src/commands/launch/<name>.rs` (use underscores in the
    module file, hyphens in the clap `name` when needed — e.g. `copilot_vscode.rs`
    → `copilot-vscode`).
 3. Register it under `launch/mod.rs`:

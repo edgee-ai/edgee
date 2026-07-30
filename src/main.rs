@@ -4,6 +4,7 @@ use clap::Parser;
 mod api;
 mod commands;
 mod config;
+mod crypto;
 mod git;
 #[cfg(feature = "self-update")]
 mod version_check;

@@ -5,7 +5,7 @@ use super::util;
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
-    /// Extra args passed through to the codebuddy CLI
+    /// Extra args passed through to the codex CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
@@ -21,34 +21,35 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 1b: ensure an org is selected (handles partial state after aborted login)
     crate::commands::auth::login::ensure_org_selected().await?;
 
-    // Step 2: ensure we have a live api_key for CodeBuddy. Re-provisions if the
+    // Step 2: ensure we have a live api_key for Codex. Re-provisions if the
     // cached key was deleted in the console; re-runs onboarding for a fresh key.
-    let reprovisioned =
-        crate::commands::auth::login::ensure_valid_provider_key("codebuddy").await?;
+    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("codex")
+        .await?
+        .created;
     if reprovisioned {
-        crate::commands::auth::login::ensure_onboarded("codebuddy").await?;
+        crate::commands::auth::login::ensure_onboarded("codex").await?;
     }
     creds = crate::config::read()?;
 
-    // Step 3: ensure we have a connection choice (default to "plan" for codebuddy)
+    // Step 3: ensure we have a connection choice (default to "plan" for codex)
     if creds
-        .codebuddy
+        .codex
         .as_ref()
         .and_then(|c| c.connection.as_deref())
         .is_none()
     {
-        let provider = creds.codebuddy.get_or_insert_with(Default::default);
+        let provider = creds.codex.get_or_insert_with(Default::default);
         provider.connection = Some("plan".to_string());
         crate::config::write(&creds)?;
     }
 
-    // Step 4: launch codebuddy with the correct env vars
-    let codebuddy = creds.codebuddy.as_ref().unwrap();
-    let api_key = &codebuddy.api_key;
+    // Step 3: launch codex with the correct env vars
+    let codex = creds.codex.as_ref().unwrap();
+    let api_key = &codex.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
 
     // First-run: install the persistent user-level statusline integration
-    // exactly once. CodeBuddy itself doesn't render an Edgee statusline today,
+    // exactly once. Codex itself doesn't render an Edgee statusline today,
     // but users typically also use Claude Code in the same shell — running
     // the installer on the first `edgee launch` of any agent matches the
     // "set it up once" flow we want.
@@ -59,29 +60,35 @@ pub async fn run(opts: Options) -> Result<()> {
     let repo_entry = crate::git::detect_origin()
         .map(|url| format!(",\"x-edgee-repo\"=\"{url}\""))
         .unwrap_or_default();
+    let debug_log_entry = util::resolve_debug_log_keypair()?
+        .map(|keypair| {
+            let headers = keypair.header_values();
+            format!(",\"x-edgee-debug-pubkey\"=\"{}\",\"x-edgee-debug-salt\"=\"{}\"", headers.pubkey, headers.salt)
+        })
+        .unwrap_or_default();
     let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
-    let mut cmd = std::process::Command::new(util::resolve_binary("codebuddy"));
+    let mut cmd = std::process::Command::new(util::resolve_binary("codex"));
     cmd.env("EDGEE_SESSION_ID", &session_id);
-    cmd.env("CODEBUDDY_BASE_URL", &base_url);
-    cmd.env(
-        "CODEBUDDY_CUSTOM_HEADERS",
-        format!(
-            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_entry}"
-        ),
-    );
+    cmd.args([
+        "-c", "model_provider=\"edgee-cli\"",
+        "-c", "model_providers.edgee-cli.name=\"EDGEE\"",
+        "-c", &format!("model_providers.edgee-cli.base_url=\"{base_url}\""),
+        "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"{repo_entry}{debug_log_entry}}}"),
+        "-c", "model_providers.edgee-cli.wire_api=\"responses\"",
+    ]);
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!(
-                "CodeBuddy is not installed. Install it from https://cnb.cool/codebuddy/codebuddy-code"
+                "Codex CLI is not installed. Install it from https://developers.openai.com/codex/cli"
             )
         } else {
             anyhow::anyhow!(e)
         }
     })?;
 
-    super::print_session_stats(&creds, &session_id, "CodeBuddy").await;
+    super::print_session_stats(&creds, &session_id, "Codex").await;
 
     if let Some(code) = status.code() {
         std::process::exit(code);

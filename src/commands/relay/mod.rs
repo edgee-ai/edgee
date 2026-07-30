@@ -25,7 +25,7 @@ use hudsucker::Proxy;
 use handler::{GatewayTarget, RelayHandler, Sink};
 
 /// Canonical relay targets (same public names as `edgee launch`). See
-/// `crates/cli/src/commands/launch/README.md` for naming rules.
+/// `src/commands/launch/README.md` for naming rules.
 ///
 /// Note: bare `copilot` is reserved for the future Copilot CLI launch target
 /// and is intentionally not a relay alias here.
@@ -108,14 +108,18 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::commands::auth::login::perform_login().await?;
     }
     crate::commands::auth::login::ensure_org_selected().await?;
-    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key(&provider).await?;
+    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key(&provider)
+        .await?
+        .created;
     if reprovisioned {
         crate::commands::auth::login::ensure_onboarded(&provider).await?;
     }
     // VS Code can host Claude Code alongside Copilot chat. Provision the claude key
     // too so Claude's `/v1/messages` traffic reroutes through the claude pipeline.
     if is_copilot_vscode(&agent) {
-        let reprov = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
+        let reprov = crate::commands::auth::login::ensure_valid_provider_key("claude")
+            .await?
+            .created;
         if reprov {
             crate::commands::auth::login::ensure_onboarded("claude").await?;
         }
@@ -139,6 +143,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // GUI editors have no Edgee provider pipeline; the gateway forwards their
     // rerouted calls to the editor's own backend, so record the original upstream.
     let passthrough_to_upstream = is_gui_editor(&agent);
+    let debug_log_headers = crate::commands::launch::util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let gateway = build_gateway_target(
         &gateway_url,
         api_key,
@@ -146,6 +151,7 @@ pub async fn run(opts: Options) -> Result<()> {
         repo,
         passthrough_to_upstream,
         claude_api_key,
+        debug_log_headers,
     )?;
 
     let (cert_pem, key_pem, cert_path) = ensure_ca()?;
@@ -168,7 +174,15 @@ pub async fn run(opts: Options) -> Result<()> {
         None => Sink::stdout(),
     };
 
-    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled);
+    // Only the Copilot-VS-Code relay needs GitHub's control-plane host
+    // (api.github.com) MITM'd for token/model discovery; other relays blind-tunnel
+    // it so their MCP servers can reach GitHub with GitHub's real certificate.
+    let handler = RelayHandler::new(
+        sink,
+        Arc::new(gateway.clone()),
+        log_enabled,
+        is_copilot_vscode(&agent),
+    );
 
     let proxy = Proxy::builder()
         .with_addr(addr)
@@ -258,6 +272,7 @@ fn build_gateway_target(
     repo: Option<String>,
     passthrough_to_upstream: bool,
     claude_api_key: Option<String>,
+    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 ) -> Result<GatewayTarget> {
     let uri: Uri = url.parse().with_context(|| format!("parsing gateway url {url}"))?;
     let scheme = uri.scheme().cloned().unwrap_or(Scheme::HTTPS);
@@ -275,6 +290,7 @@ fn build_gateway_target(
         repo,
         passthrough_to_upstream,
         claude_api_key,
+        debug_log_headers,
     })
 }
 
@@ -485,6 +501,16 @@ async fn run_agent(
     cmd.env("HTTP_PROXY", &proxy_url);
     cmd.env("https_proxy", &proxy_url);
     cmd.env("http_proxy", &proxy_url);
+    // Exempt loopback from the proxy. The proxy env is inherited by every child
+    // process the agent spawns — notably MCP servers, which commonly talk to a
+    // local endpoint (`http://127.0.0.1:PORT`). Without a bypass, Node-based MCP
+    // transports honor HTTP_PROXY and route those loopback calls back through the
+    // relay (which can't forward arbitrary loopback plain-HTTP), so the MCP fails
+    // to connect. Chromium's own `--proxy-server` already bypasses loopback; this
+    // covers the env-var path the subprocesses use.
+    let no_proxy = build_no_proxy();
+    cmd.env("NO_PROXY", &no_proxy);
+    cmd.env("no_proxy", &no_proxy);
     // Make each agent's TLS stack trust the relay CA without a system-store install:
     //  - Node agents (Claude Code) and VS Code / Copilot / Cursor read NODE_EXTRA_CA_CERTS.
     //  - Codex (Rust) reads CODEX_CA_CERTIFICATE / SSL_CERT_FILE for its own client;
@@ -496,6 +522,25 @@ async fn run_agent(
     cmd.status()
         .await
         .with_context(|| format!("failed to launch '{bin_name}'"))
+}
+
+/// The proxy-bypass list for relayed agents: loopback (so local MCP servers and
+/// other localhost services connect directly) plus any `NO_PROXY`/`no_proxy` the
+/// user already had in the environment, deduplicated and order-preserving.
+fn build_no_proxy() -> String {
+    const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1"];
+    let inherited = std::env::var("NO_PROXY")
+        .or_else(|_| std::env::var("no_proxy"))
+        .unwrap_or_default();
+
+    let mut entries: Vec<String> = LOOPBACK.iter().map(|s| s.to_string()).collect();
+    for part in inherited.split(',') {
+        let part = part.trim();
+        if !part.is_empty() && !entries.iter().any(|e| e.eq_ignore_ascii_case(part)) {
+            entries.push(part.to_string());
+        }
+    }
+    entries.join(",")
 }
 
 async fn shutdown_signal() {
@@ -575,7 +620,7 @@ mod tests {
     #[test]
     fn parses_default_gateway() {
         let gw =
-            build_gateway_target("https://edgee.io", "k".into(), "s".into(), None, false, None)
+            build_gateway_target("https://edgee.io", "k".into(), "s".into(), None, false, None, None)
                 .unwrap();
         assert_eq!(gw.scheme, Scheme::HTTPS);
         assert_eq!(gw.authority.as_str(), "edgee.io");
@@ -585,7 +630,7 @@ mod tests {
     #[test]
     fn parses_local_override() {
         let gw =
-            build_gateway_target("http://127.0.0.1:9999", "k".into(), "s".into(), None, false, None)
+            build_gateway_target("http://127.0.0.1:9999", "k".into(), "s".into(), None, false, None, None)
                 .unwrap();
         assert_eq!(gw.scheme.as_str(), "http");
         assert_eq!(gw.authority.as_str(), "127.0.0.1:9999");
@@ -658,8 +703,16 @@ mod tests {
     fn rejects_url_without_host() {
         // A path-only URI has no authority → reroute target can't be built.
         assert!(
-            build_gateway_target("/no/host", "k".into(), "s".into(), None, false, None).is_err()
+            build_gateway_target("/no/host", "k".into(), "s".into(), None, false, None, None).is_err()
         );
+    }
+
+    #[test]
+    fn no_proxy_includes_loopback() {
+        let list = build_no_proxy();
+        for h in ["localhost", "127.0.0.1", "::1"] {
+            assert!(list.split(',').any(|e| e == h), "missing {h} in {list}");
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! `edgee alias` — install CLI PATH shims / shell aliases **and** desktop app
 //! wrappers for GUI launch targets. See [`desktop`] and
-//! `crates/cli/src/commands/launch/README.md`.
+//! `src/commands/launch/README.md`.
 
 mod desktop;
 
@@ -116,6 +116,29 @@ pub async fn run(opts: Options) -> Result<()> {
         None => apply_aliases(opts.agent, Action::Install),
     }
 }
+
+/// Re-install the desktop wrappers that are *already* present so their embedded
+/// absolute `edgee` path points at `edgee` — resolved by the caller *before* a
+/// self-update replaces the running binary. Called by `edgee update`: without
+/// this a version bump leaves `cursor` / `copilot` fast-launch links pointing at
+/// the old binary. CLI shims are untouched: they resolve `edgee` via PATH and
+/// bake no path, so they cannot go stale. Best-effort; prints a one-line summary
+/// when anything was refreshed.
+#[cfg(feature = "self-update")]
+pub fn refresh_installed(edgee: &Path) {
+    let count = desktop::refresh_wrappers(ALL_APPS, edgee);
+    if count > 0 {
+        println!(
+            "  {} {} fast-launch link{}",
+            style("refreshed").green(),
+            count,
+            if count == 1 { "" } else { "s" }
+        );
+    }
+}
+
+#[cfg(feature = "self-update")]
+pub(crate) use desktop::edgee_executable;
 
 #[derive(Clone, Copy)]
 enum Action {

@@ -213,7 +213,7 @@ The `SessionStart` hook installed by `edgee statusline claude install` (or by th
 | Cursor (app) | `edgee launch cursor` | ✅ Supported |
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
 
-Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented in [`crates/cli/src/commands/launch/README.md`](crates/cli/src/commands/launch/README.md).
+Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented in [`src/commands/launch/README.md`](src/commands/launch/README.md).
 
 ---
 
@@ -224,20 +224,6 @@ The token trimming engine in the [Edgee gateway](https://github.com/edgee-ai/gat
 RTK is licensed under the Apache License 2.0. All derived files retain the original copyright notice and are individually marked with a modification history. See [`LICENSE-APACHE`](./LICENSE-APACHE) and [`NOTICE`](./NOTICE) for full details.
 
 If you're looking for a local-first compression tool, [check out RTK directly](https://github.com/rtk-ai/rtk) — it's excellent for individual developer workflows.
-
----
-
-## Repository layout
-
-```
-crates/
-  cli/                 # edgee binary (auth, launch, stats, alias, relay for GUI apps)
-```
-
-| Crate | Purpose |
-|---|---|
-| `edgee-cli` | `edgee` binary — launch agents, auth, stats, aliases |
-
 
 ---
 

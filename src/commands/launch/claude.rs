@@ -31,8 +31,8 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // Step 2: ensure we have a live api_key for Claude. Re-provisions if the
     // cached key was deleted in the console; re-runs onboarding for a fresh key.
-    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
-    if reprovisioned {
+    let key_status = crate::commands::auth::login::ensure_valid_provider_key("claude").await?;
+    if key_status.created {
         crate::commands::auth::login::ensure_onboarded("claude").await?;
     }
     creds = crate::config::read()?;
@@ -70,17 +70,37 @@ pub async fn run(opts: Options) -> Result<()> {
     util::spawn_cli_version_report(&creds, &session_id);
 
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let debug_log_header = util::resolve_debug_log_keypair()?
+        .map(|keypair| {
+            let headers = keypair.header_values();
+            format!("\nx-edgee-debug-pubkey: {}\nx-edgee-debug-salt: {}", headers.pubkey, headers.salt)
+        })
+        .unwrap_or_default();
     let mut cmd = std::process::Command::new(util::resolve_binary("claude"));
     cmd.env("ANTHROPIC_BASE_URL", &gateway_url);
     cmd.env(
         "ANTHROPIC_CUSTOM_HEADERS",
-        format!("x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}"),
+        format!(
+            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}"
+        ),
     );
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env(
         "EDGEE_CONSOLE_API_URL",
         crate::config::console_api_base_url(),
     );
+
+    // Force-enable Claude Code's client-side "MCP Tool Search" when the key has
+    // tool_surface_reduction enabled, unless the user has explicitly set it
+    // themselves. Reuses the compression settings already fetched by
+    // `ensure_valid_provider_key` above instead of a second `get_key_by_id` call.
+    let tool_surface_reduction_enabled = key_status
+        .compression
+        .map(|c| c.tool_surface_reduction)
+        .unwrap_or(false);
+    if tool_surface_reduction_enabled && std::env::var_os("ENABLE_TOOL_SEARCH").is_none() {
+        cmd.env("ENABLE_TOOL_SEARCH", "true");
+    }
 
     // Step 5: conditionally set up MCP integration
     let use_mcp = creds.enable_mcp.unwrap_or(false);
