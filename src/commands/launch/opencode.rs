@@ -3,6 +3,13 @@ use serde_json::Value;
 
 use super::util;
 
+/// OpenCode clamps every request's `max_tokens` to its own `OUTPUT_TOKEN_MAX` of
+/// 32k (`maxOutputTokens()` in its provider transform), and falls back to that
+/// same value when a model's output limit is `0`. Its config schema requires
+/// `output` whenever `limit` is present, so declaring 32k satisfies the schema
+/// while leaving the request identical to what OpenCode would send on its own.
+const OPENCODE_OUTPUT_TOKEN_MAX: u64 = 32_000;
+
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
@@ -171,6 +178,7 @@ fn build_edgee_provider(
     session_id: &str,
     gateway_url: &str,
     models: &[String],
+    catalog: &util::ModelCatalog,
     debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 ) -> Value {
     // The provider is `@ai-sdk/openai-compatible` pointed at the gateway's
@@ -200,7 +208,33 @@ fn build_edgee_provider(
     if !models.is_empty() {
         let mut models_map = serde_json::Map::new();
         for id in models {
-            models_map.insert(id.clone(), serde_json::json!({ "name": id }));
+            let mut entry = serde_json::json!({ "name": id });
+            let metadata = catalog.get(id);
+            // Only declare `limit` when the catalog gave us a real context window;
+            // a fabricated one is worse than letting OpenCode fall back to 0.
+            if let Some(context) = metadata.and_then(|m| m.context) {
+                entry["limit"] = serde_json::json!({
+                    "context": context,
+                    "output": OPENCODE_OUTPUT_TOKEN_MAX,
+                });
+            }
+            // Rates are dollars per million tokens, the same unit OpenCode's own
+            // catalog uses. Without them every session reports as costing $0.
+            //
+            // Tiered pricing is deliberately not emitted: the catalog has a
+            // long-context premium for a few models and OpenCode's config schema
+            // has a `cost.context_over_200k` slot, but its config merge drops that
+            // field (it survives only on the models.dev path), so declaring it
+            // would imply a tier that never takes effect.
+            if let Some(cost) = metadata.and_then(|m| m.cost) {
+                entry["cost"] = serde_json::json!({
+                    "input": cost.input,
+                    "output": cost.output,
+                    "cache_read": cost.cache_read,
+                    "cache_write": cost.cache_write,
+                });
+            }
+            models_map.insert(id.clone(), entry);
         }
         provider["models"] = Value::Object(models_map);
     }
@@ -259,10 +293,19 @@ pub async fn run(opts: Options) -> Result<()> {
         })
     });
 
-    let models = fetch_gateway_models(&gateway_url, api_key).await;
+    let (models, catalog) = tokio::join!(
+        fetch_gateway_models(&gateway_url, api_key),
+        util::fetch_model_catalog(&creds)
+    );
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
-    let edgee_provider =
-        build_edgee_provider(api_key, &session_id, &gateway_url, &models, debug_log_headers);
+    let edgee_provider = build_edgee_provider(
+        api_key,
+        &session_id,
+        &gateway_url,
+        &models,
+        &catalog,
+        debug_log_headers,
+    );
 
     if let Some(obj) = config.as_object_mut() {
         if let Some(providers) = obj.get_mut("provider") {
@@ -311,4 +354,136 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider_with(models: &[&str], limits: &[(&str, u64)]) -> Value {
+        let models: Vec<String> = models.iter().map(|m| m.to_string()).collect();
+        let catalog: util::ModelCatalog = limits
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string(),
+                    util::ModelMetadata {
+                        context: Some(*v),
+                        cost: None,
+                    },
+                )
+            })
+            .collect();
+        build_edgee_provider("key", "sess", "https://gw.test", &models, &catalog, None)
+    }
+
+    fn provider_priced(id: &str, cost: crate::api::GatewayModelCost) -> Value {
+        let catalog: util::ModelCatalog = [(
+            id.to_string(),
+            util::ModelMetadata {
+                context: None,
+                cost: Some(cost),
+            },
+        )]
+        .into_iter()
+        .collect();
+        build_edgee_provider(
+            "key",
+            "sess",
+            "https://gw.test",
+            &[id.to_string()],
+            &catalog,
+            None,
+        )
+    }
+
+    #[test]
+    fn declares_context_and_output_limits_from_the_catalog() {
+        let provider = provider_with(
+            &["anthropic/claude-opus-5"],
+            &[("anthropic/claude-opus-5", 1_000_000)],
+        );
+        let model = &provider["models"]["anthropic/claude-opus-5"];
+        assert_eq!(model["limit"]["context"], serde_json::json!(1_000_000));
+        assert_eq!(
+            model["limit"]["output"],
+            serde_json::json!(OPENCODE_OUTPUT_TOKEN_MAX)
+        );
+    }
+
+    #[test]
+    fn omits_limit_when_the_catalog_has_no_context_size() {
+        let provider = provider_with(&["openai/gpt-5"], &[]);
+        let model = &provider["models"]["openai/gpt-5"];
+        assert_eq!(model["name"], serde_json::json!("openai/gpt-5"));
+        assert!(model.get("limit").is_none());
+    }
+
+    #[test]
+    fn limits_are_matched_per_model_not_applied_wholesale() {
+        let provider = provider_with(
+            &["anthropic/claude-haiku-4-5", "openai/gpt-5"],
+            &[("anthropic/claude-haiku-4-5", 200_000)],
+        );
+        assert_eq!(
+            provider["models"]["anthropic/claude-haiku-4-5"]["limit"]["context"],
+            serde_json::json!(200_000)
+        );
+        assert!(provider["models"]["openai/gpt-5"].get("limit").is_none());
+    }
+
+    #[test]
+    fn declares_per_million_token_rates() {
+        // Sonnet 4.5's real rates, in the dollars-per-million unit OpenCode uses.
+        let provider = provider_priced(
+            "anthropic/claude-sonnet-4-5",
+            crate::api::GatewayModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        );
+        let cost = &provider["models"]["anthropic/claude-sonnet-4-5"]["cost"];
+        assert_eq!(cost["input"], serde_json::json!(3.0));
+        assert_eq!(cost["output"], serde_json::json!(15.0));
+        assert_eq!(cost["cache_read"], serde_json::json!(0.3));
+        assert_eq!(cost["cache_write"], serde_json::json!(3.75));
+    }
+
+    /// OpenCode's config merge drops `cost.context_over_200k`, so emitting it
+    /// would imply a long-context tier that never takes effect.
+    #[test]
+    fn never_declares_tiered_pricing() {
+        let provider = provider_priced(
+            "anthropic/claude-sonnet-4-5",
+            crate::api::GatewayModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        );
+        let cost = &provider["models"]["anthropic/claude-sonnet-4-5"]["cost"];
+        assert!(cost.get("context_over_200k").is_none());
+    }
+
+    #[test]
+    fn omits_cost_when_the_catalog_has_no_rates() {
+        let provider = provider_with(&["openai/gpt-5"], &[("openai/gpt-5", 400_000)]);
+        assert!(provider["models"]["openai/gpt-5"].get("cost").is_none());
+    }
+
+    #[test]
+    fn a_free_model_declares_zeroed_rates_rather_than_omitting_them() {
+        let provider = provider_priced("zai/glm-4.5-flash", crate::api::GatewayModelCost {
+            input: 0.0,
+            output: 0.0,
+            cache_read: 0.0,
+            cache_write: 0.0,
+        });
+        let cost = &provider["models"]["zai/glm-4.5-flash"]["cost"];
+        assert_eq!(cost["input"], serde_json::json!(0.0));
+        assert_eq!(cost["output"], serde_json::json!(0.0));
+    }
 }

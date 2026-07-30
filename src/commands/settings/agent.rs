@@ -697,11 +697,12 @@ mod tests {
     ) -> GatewayModel {
         GatewayModel {
             model_id: "m1".to_string(),
+            author_id: String::new(),
             display_name: display.to_string(),
             aliases: aliases.iter().map(|s| s.to_string()).collect(),
             providers: providers
                 .iter()
-                .map(|p| (p.to_string(), serde_json::Value::Null))
+                .map(|p| (p.to_string(), Default::default()))
                 .collect(),
             active,
             plan_fallback,
