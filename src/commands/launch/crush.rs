@@ -97,7 +97,7 @@ fn build_edgee_provider(
     session_id: &str,
     gateway_url: &str,
     models: &[String],
-    context_limits: &util::ContextLimits,
+    catalog: &util::ModelCatalog,
     debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 ) -> Value {
     // The provider is an OpenAI-compatible endpoint pointed at the gateway's
@@ -141,7 +141,7 @@ fn build_edgee_provider(
                 // `max_tokens` from the request when it is 0, letting the upstream
                 // apply its own cap. The catalog carries no output-token cap, so any
                 // value we invented would either truncate replies or be rejected.
-                if let Some(context_window) = context_limits.get(id) {
+                if let Some(context_window) = catalog.get(id).and_then(|m| m.context) {
                     model["context_window"] = serde_json::json!(context_window);
                 }
                 model
@@ -223,9 +223,9 @@ pub async fn run(opts: Options) -> Result<()> {
         })
     });
 
-    let (models, context_limits) = tokio::join!(
+    let (models, catalog) = tokio::join!(
         fetch_gateway_models(&gateway_url, api_key),
-        util::fetch_model_context_limits(&creds)
+        util::fetch_model_catalog(&creds)
     );
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let edgee_provider = build_edgee_provider(
@@ -233,7 +233,7 @@ pub async fn run(opts: Options) -> Result<()> {
         &session_id,
         &gateway_url,
         &models,
-        &context_limits,
+        &catalog,
         debug_log_headers,
     );
     insert_edgee_provider(&mut config, edgee_provider);
@@ -280,10 +280,20 @@ mod tests {
 
     fn models_of(models: &[&str], limits: &[(&str, u64)]) -> Vec<Value> {
         let models: Vec<String> = models.iter().map(|m| m.to_string()).collect();
-        let limits: util::ContextLimits =
-            limits.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let catalog: util::ModelCatalog = limits
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string(),
+                    util::ModelMetadata {
+                        context: Some(*v),
+                        cost: None,
+                    },
+                )
+            })
+            .collect();
         let provider =
-            build_edgee_provider("key", "sess", "https://gw.test", &models, &limits, None);
+            build_edgee_provider("key", "sess", "https://gw.test", &models, &catalog, None);
         provider["models"].as_array().cloned().unwrap_or_default()
     }
 
