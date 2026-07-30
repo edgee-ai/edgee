@@ -134,8 +134,16 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
             );
             println!(
                 "  Tools   {} -> {}  {} {}% saved",
-                style(fmt_tokens(stats.total_uncompressed_tools_tokens)).dim(),
-                style(fmt_tokens(stats.total_compressed_tools_tokens)).cyan(),
+                style(pad_left(
+                    &fmt_tokens(stats.total_uncompressed_tools_tokens),
+                    9
+                ))
+                .dim(),
+                style(pad_left(
+                    &fmt_tokens(stats.total_compressed_tools_tokens),
+                    9
+                ))
+                .cyan(),
                 fmt_bar(pct, 20),
                 style(pct).green(),
             );
@@ -148,8 +156,16 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
             );
             println!(
                 "  Surface {} -> {}  {} {}% saved",
-                style(fmt_tokens(stats.total_mcp_surface_tokens_before)).dim(),
-                style(fmt_tokens(stats.total_mcp_surface_tokens_after)).cyan(),
+                style(pad_left(
+                    &fmt_tokens(stats.total_mcp_surface_tokens_before),
+                    9
+                ))
+                .dim(),
+                style(pad_left(
+                    &fmt_tokens(stats.total_mcp_surface_tokens_after),
+                    9
+                ))
+                .cyan(),
                 fmt_bar(pct, 20),
                 style(pct).green(),
             );
@@ -158,9 +174,10 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
         if has_brevity {
             let avg_rate = stats.total_brevity_rate / stats.total_brevity_requests as f64;
             let pct = (avg_rate * 100.0).round().clamp(0.0, 100.0) as u64;
+            // padded to 9 so the bar starts in the same column as the Tools/Surface rows above
             println!(
-                "  Brevity {} requests  {} ~{}% saved (est.)",
-                style(fmt_tokens(stats.total_brevity_requests)).cyan(),
+                "  Brevity {} requests      {} ~{}% saved (est.)",
+                style(pad_left(&fmt_tokens(stats.total_brevity_requests), 9)).cyan(),
                 fmt_bar(pct, 20),
                 style(pct).green(),
             );
@@ -174,10 +191,12 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
                     println!();
                     println!("  {}", style("Tool breakdown").bold().underlined());
                     println!(
-                        "  {} {} {} Savings",
+                        "  {} {} {:>9} -> {:>9} {} Savings",
                         pad_right("Tool", 20),
                         pad_left("Calls", 5),
-                        pad_right("Tokens", 20)
+                        "Before",
+                        "After",
+                        " ".repeat(10),
                     );
                     for (name, ts) in &tools {
                         let pct = compression_pct(ts.before, ts.after);
