@@ -124,6 +124,29 @@ pub async fn fetch_active_org(
     client.get_organization(org_id).await.ok()
 }
 
+/// Whether Edgee MCP injection is off for this launch, with the org already
+/// fetched (or `None`).
+///
+/// Precedence (highest first):
+/// 1. `EDGEE_MCP_INJECTION_DISABLED` env var — the explicit, ephemeral escape
+///    hatch, and the only way to re-enable injection when the org turned it off.
+/// 2. The org's console-configured `mcp_injection_disabled` — an admin decision
+///    that binds members, so it deliberately outranks the local profile.
+/// 3. Not disabled.
+///
+/// Note this is the inverse of [`gateway_base_url_with_org`], where the local
+/// profile beats the org: the gateway URL is a user's own plumbing, whereas MCP
+/// injection is org policy. The member's own `enable_mcp` preference still
+/// applies underneath — it can decline injection, but cannot force it on
+/// against the org.
+pub fn mcp_injection_disabled_with_org(org: Option<&crate::api::Organization>) -> bool {
+    if let Some(env_disabled) = crate::config::mcp_injection_disabled_env_override() {
+        return env_disabled;
+    }
+
+    org.is_some_and(|o| o.mcp_injection_disabled)
+}
+
 /// Gateway base URL precedence, with the org already fetched (or `None`).
 ///
 /// Split out of [`resolve_gateway_base_url`] so a caller that needs other
