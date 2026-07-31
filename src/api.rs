@@ -146,6 +146,17 @@ pub struct GatewayModelCost {
     pub cache_write: f64,
 }
 
+/// Catalog providers that are coding-app subscriptions rather than LLM APIs.
+/// Reaching them means going through Cursor or GitHub Copilot itself, so they are
+/// not valid fallback/reroute upstreams for another agent's traffic.
+pub const APP_PROVIDERS: [&str; 2] = ["cursor", "github_copilot"];
+
+/// True for a catalog provider that is a coding-app subscription — see
+/// [`APP_PROVIDERS`].
+pub fn is_app_provider(provider: &str) -> bool {
+    APP_PROVIDERS.contains(&provider)
+}
+
 /// A model in the gateway catalog (`GET /v1/models`). Only the fields needed to
 /// derive a selectable routing identifier and its context window are
 /// deserialized.
@@ -174,16 +185,26 @@ pub struct GatewayModel {
 impl GatewayModel {
     /// A valid routing identifier the server's `IsValidModel` accepts: prefer the
     /// first alias, otherwise `<provider>/<model_id>` (providers sorted for
-    /// determinism). Returns `None` for a model with neither.
+    /// determinism). App-subscription providers ([`APP_PROVIDERS`]) are only used
+    /// when nothing else serves the model, so a route never points at Cursor or
+    /// Copilot when a real API provider is available. Returns `None` for a model
+    /// with neither an alias nor a provider.
     pub fn route_identifier(&self) -> Option<String> {
         if let Some(alias) = self.aliases.first() {
             return Some(alias.clone());
         }
         let mut providers: Vec<&String> = self.providers.keys().collect();
-        providers.sort();
+        providers.sort_by_key(|p| (is_app_provider(p), p.to_string()));
         providers
             .first()
             .map(|p| format!("{}/{}", p, self.model_id))
+    }
+
+    /// True when the model is served *only* through a coding-app subscription
+    /// (Cursor, GitHub Copilot) — e.g. `cursor/composer-2`. Such a model is
+    /// unreachable as a fallback/reroute target, so the settings pickers hide it.
+    pub fn app_subscription_only(&self) -> bool {
+        !self.providers.is_empty() && self.providers.keys().all(|p| is_app_provider(p))
     }
 
     /// `<author_id>/<model_id>` — the id used by the gateway's OpenAI-style
@@ -572,6 +593,26 @@ mod tests {
         assert_eq!(m.catalog_id().as_deref(), Some("anthropic/claude-opus-5"));
         // No author means no gateway-listing id to join on.
         assert!(catalog_model(r#"{"model_id":"m1"}"#).catalog_id().is_none());
+    }
+
+    #[test]
+    fn app_subscription_only_flags_cursor_and_copilot_exclusives() {
+        let only_cursor = catalog_model(r#"{"model_id":"composer-2","providers":{"cursor":{}}}"#);
+        assert!(only_cursor.app_subscription_only());
+
+        let only_apps = catalog_model(
+            r#"{"model_id":"claude-opus-4-8-fast","providers":{
+                 "cursor":{},"github_copilot":{}}}"#,
+        );
+        assert!(only_apps.app_subscription_only());
+
+        // A real API provider alongside them keeps the model routable.
+        let mixed =
+            catalog_model(r#"{"model_id":"gpt-5.4","providers":{"cursor":{},"openai":{}}}"#);
+        assert!(!mixed.app_subscription_only());
+
+        // No providers declared is not an app-only model.
+        assert!(!catalog_model(r#"{"model_id":"m1"}"#).app_subscription_only());
     }
 
     #[test]
