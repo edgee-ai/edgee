@@ -1,4 +1,5 @@
 use anyhow::Result;
+use console::style;
 
 use super::util;
 
@@ -49,9 +50,15 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::config::write(&creds)?;
     }
 
-    // Step 3b: ensure MCP preference is set
-    crate::commands::auth::login::ensure_mcp_preference().await?;
-    creds = crate::config::read()?;
+    // Step 3b: ensure MCP preference is set — unless the org turned injection
+    // off in the console, in which case the local answer would be moot. Fetched
+    // once here and reused below for the gateway URL.
+    let org = super::fetch_active_org(&creds).await;
+    let org_mcp_disabled = org.as_ref().is_some_and(|o| o.mcp_injection_disabled);
+    if !org_mcp_disabled {
+        crate::commands::auth::login::ensure_mcp_preference().await?;
+        creds = crate::config::read()?;
+    }
 
     // Step 4: launch claude with the correct env vars
     let claude = creds.claude.as_ref().unwrap();
@@ -69,7 +76,7 @@ pub async fn run(opts: Options) -> Result<()> {
 
     util::spawn_cli_version_report(&creds, &session_id);
 
-    let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
     let debug_log_header = util::resolve_debug_log_keypair()?
         .map(|keypair| {
             let headers = keypair.header_values();
@@ -102,8 +109,18 @@ pub async fn run(opts: Options) -> Result<()> {
         cmd.env("ENABLE_TOOL_SEARCH", "true");
     }
 
-    // Step 5: conditionally set up MCP integration
-    let use_mcp = creds.enable_mcp.unwrap_or(false);
+    // Step 5: conditionally set up MCP integration. The org-level switch is a
+    // hard override — a member who opted in locally still gets no injection.
+    let wants_mcp = creds.enable_mcp.unwrap_or(false);
+    if org_mcp_disabled && wants_mcp {
+        // Without this the integration would just silently vanish, which reads
+        // as a bug rather than a deliberate org setting.
+        println!(
+            "{}",
+            style("  Edgee MCP is turned off for your organization — skipping.").dim()
+        );
+    }
+    let use_mcp = wants_mcp && !org_mcp_disabled;
     if use_mcp {
         let mcp_config_path = write_mcp_config(&creds)?;
         cmd.arg("--mcp-config").arg(&mcp_config_path);

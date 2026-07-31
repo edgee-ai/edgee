@@ -18,6 +18,13 @@ pub struct Organization {
     /// back to a local override or the built-in default.
     #[serde(default, rename = "gateway_api_url")]
     pub gateway_url: Option<String>,
+    /// Org-level kill switch for Edgee's MCP auto-injection, set in the console.
+    /// When true the launch path must not pass `--mcp-config` or the Edgee
+    /// system prompt to the coding agent, and must not prompt for the local
+    /// preference. Absent (older API) deserializes to `false` — injection stays
+    /// allowed.
+    #[serde(default)]
+    pub mcp_injection_disabled: bool,
 }
 
 #[derive(Deserialize)]
