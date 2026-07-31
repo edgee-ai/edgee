@@ -4,7 +4,9 @@ use anyhow::{Context, Result};
 use console::style;
 use dialoguer::{theme::ColorfulTheme, MultiSelect, Select};
 
-use crate::api::{ApiClient, Compression, GatewayModel, KeySettings, ModelRoute, ProviderKey};
+use crate::api::{
+    is_app_provider, ApiClient, Compression, GatewayModel, KeySettings, ModelRoute, ProviderKey,
+};
 use crate::commands::auth::login;
 
 /// Runs the full settings wizard (compression + routing) for a single provider and
@@ -145,10 +147,16 @@ impl RouteChoice {
 /// models, turbos at the top), then the remaining models alphabetically. Mirrors the
 /// console's route picker, which offers every active model and splits by
 /// `plan_fallback` rather than filtering by premium status.
+///
+/// Models served only through a coding-app subscription (Cursor, GitHub Copilot)
+/// are dropped: routing can't reach them, so offering `cursor/composer-2` or
+/// `claude-opus-4-8-fast` as a fallback/reroute target would only produce a route
+/// that fails at request time.
 fn route_choices(models: &[GatewayModel], byok_providers: &HashSet<String>) -> Vec<RouteChoice> {
     let mut out: Vec<RouteChoice> = models
         .iter()
         .filter(|m| m.active)
+        .filter(|m| !m.app_subscription_only())
         .filter_map(|m| {
             m.route_identifier().map(|identifier| {
                 let turbo = is_turbo(&identifier);
@@ -206,6 +214,8 @@ fn resolve_provider_base(provider: &str) -> String {
 }
 
 /// True when the model is reachable through at least one of the user's BYOK keys.
+/// App-subscription providers don't count: a route never goes through Cursor or
+/// Copilot, so such a key would never be the one billed.
 fn model_uses_byok(model: &GatewayModel, byok_providers: &HashSet<String>) -> bool {
     if byok_providers.is_empty() {
         return false;
@@ -213,6 +223,7 @@ fn model_uses_byok(model: &GatewayModel, byok_providers: &HashSet<String>) -> bo
     model
         .providers
         .keys()
+        .filter(|p| !is_app_provider(p))
         .any(|p| byok_providers.contains(&resolve_provider_base(p)))
 }
 
@@ -729,6 +740,40 @@ mod tests {
     }
 
     #[test]
+    fn route_choices_hide_cursor_and_copilot_only_models() {
+        // Cursor/Copilot-exclusive models can't be routed to — they're reachable
+        // only through those apps' own subscriptions.
+        let models = vec![
+            model(true, "Composer 2", &["composer-2"], &["cursor"]),
+            model(true, "Raptor Mini", &["raptor-mini"], &["github_copilot"]),
+            model(true, "Opus Fast", &["claude-opus-4-8-fast"], &["cursor", "github_copilot"]),
+            // Also served by a real API provider → still routable, so kept.
+            model(true, "GPT-5.4", &["gpt-5.4"], &["cursor", "github_copilot", "openai"]),
+            model(true, "Sonnet 5", &["claude-sonnet-5"], &["anthropic", "cursor"]),
+            // Alias-only entry with no providers at all stays offered.
+            model(true, "Aliased", &["some-alias"], &[]),
+        ];
+        let choices = route_choices(&models, &no_byok());
+        let mut ids: Vec<&str> = choices.iter().map(|c| c.identifier.as_str()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["claude-sonnet-5", "gpt-5.4", "some-alias"],
+            "only app-subscription models should be hidden"
+        );
+    }
+
+    #[test]
+    fn byok_tag_ignores_app_providers() {
+        // A Cursor key doesn't bill the route: the request goes to OpenAI.
+        let byok: HashSet<String> = ["cursor".to_string()].into_iter().collect();
+        let models = vec![model(true, "GPT", &["gpt-5.4"], &["cursor", "openai"])];
+        let choices = route_choices(&models, &byok);
+        assert!(!choices[0].byok);
+        assert!(choices[0].menu_label().contains("· credits"));
+    }
+
+    #[test]
     fn route_choices_order_featured_and_turbo_first() {
         let byok: HashSet<String> = ["openai".to_string()].into_iter().collect();
         let models = vec![
@@ -880,6 +925,11 @@ mod tests {
         assert_eq!(
             model(true, "X", &[], &["openai", "anthropic"]).route_identifier(),
             Some("anthropic/m1".to_string())
+        );
+        // App providers lose to any real API provider, despite sorting first.
+        assert_eq!(
+            model(true, "X", &[], &["cursor", "openai"]).route_identifier(),
+            Some("openai/m1".to_string())
         );
         // Neither → none.
         assert_eq!(model(true, "X", &[], &[]).route_identifier(), None);
