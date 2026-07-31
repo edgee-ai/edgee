@@ -63,13 +63,18 @@ fn is_gui_editor(agent: &str) -> bool {
     is_copilot_vscode(agent) || is_cursor(agent)
 }
 
-/// How to put Cursor's `cursor` CLI on `PATH` from inside the editor.
+/// How to put Cursor's `cursor` CLI on `PATH` from inside the editor. macOS-only:
+/// the other platforms' packages ship the CLI on `PATH`, so the hint would be dead
+/// code there.
+#[cfg(target_os = "macos")]
 const CURSOR_PATH_HINT: &[&str] = &[
     "Not working? `cursor` may not be on your PATH: open the Command Palette",
     "(Cmd+Shift+P) and run \"Install 'cursor' command\".",
 ];
 
-/// How to put VS Code's `code` CLI on `PATH` from inside the editor.
+/// How to put VS Code's `code` CLI on `PATH` from inside the editor. macOS-only,
+/// for the same reason as [`CURSOR_PATH_HINT`].
+#[cfg(target_os = "macos")]
 const VSCODE_PATH_HINT: &[&str] = &[
     "Not working? `code` may not be on your PATH: open the Command Palette",
     "(Cmd+Shift+P), type \"shell command\", and run",
