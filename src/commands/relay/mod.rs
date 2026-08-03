@@ -63,6 +63,46 @@ fn is_gui_editor(agent: &str) -> bool {
     is_copilot_vscode(agent) || is_cursor(agent)
 }
 
+/// How to put Cursor's `cursor` CLI on `PATH` from inside the editor. macOS-only:
+/// the other platforms' packages ship the CLI on `PATH`, so the hint would be dead
+/// code there.
+#[cfg(target_os = "macos")]
+const CURSOR_PATH_HINT: &[&str] = &[
+    "Not working? `cursor` may not be on your PATH: open the Command Palette",
+    "(Cmd+Shift+P) and run \"Install 'cursor' command\".",
+];
+
+/// How to put VS Code's `code` CLI on `PATH` from inside the editor. macOS-only,
+/// for the same reason as [`CURSOR_PATH_HINT`].
+#[cfg(target_os = "macos")]
+const VSCODE_PATH_HINT: &[&str] = &[
+    "Not working? `code` may not be on your PATH: open the Command Palette",
+    "(Cmd+Shift+P), type \"shell command\", and run",
+    "\"Shell Command: Install 'code' command in PATH\".",
+];
+
+/// macOS installs Cursor / VS Code as app bundles without their CLI on `PATH`
+/// (the editors add it themselves from the Command Palette), so `cursor --wait`
+/// / `code --wait` fails until the user runs that command. `None` elsewhere —
+/// Linux and Windows packages ship the CLI on `PATH` already.
+fn macos_cli_path_hint(agent: &str) -> Option<&'static [&'static str]> {
+    #[cfg(target_os = "macos")]
+    {
+        if is_cursor(agent) {
+            Some(CURSOR_PATH_HINT)
+        } else if is_copilot_vscode(agent) {
+            Some(VSCODE_PATH_HINT)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = agent;
+        None
+    }
+}
+
 /// Edgee credentials / console provider key for a **canonical** launch target.
 /// Today most targets map 1:1; surfaces of the same product share a key
 /// (e.g. `copilot-vscode` → `copilot`).
@@ -519,9 +559,13 @@ async fn run_agent(
     cmd.env("CODEX_CA_CERTIFICATE", ca_path);
     cmd.env("EDGEE_SESSION_ID", session_id);
 
-    cmd.status()
-        .await
-        .with_context(|| format!("failed to launch '{bin_name}'"))
+    cmd.status().await.with_context(|| {
+        // A GUI editor most often fails here because its CLI isn't on PATH.
+        match macos_cli_path_hint(agent) {
+            Some(hint) => format!("failed to launch '{bin_name}'. {}", hint.join(" ")),
+            None => format!("failed to launch '{bin_name}'"),
+        }
+    })
 }
 
 /// The proxy-bypass list for relayed agents: loopback (so local MCP servers and
@@ -597,6 +641,9 @@ fn print_gui_editor_hint(agent: &str) {
         ))
         .dim()
     );
+    for line in macos_cli_path_hint(agent).unwrap_or_default() {
+        println!("  {}", style(line).dim());
+    }
     println!();
 }
 
@@ -685,6 +732,25 @@ mod tests {
         assert!(is_gui_editor("copilot-vscode"));
         assert!(!is_gui_editor("claude"));
         assert!(!is_gui_editor("codex"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_path_hint_targets_the_right_editor_cli() {
+        let cursor = macos_cli_path_hint("cursor").unwrap().join(" ");
+        assert!(cursor.contains("Install 'cursor' command"));
+        let vscode = macos_cli_path_hint("copilot-vscode").unwrap().join(" ");
+        assert!(vscode.contains("Shell Command: Install 'code' command in PATH"));
+        // TUI agents resolve their own binary — no editor Command Palette to point at.
+        assert!(macos_cli_path_hint("claude").is_none());
+        assert!(macos_cli_path_hint("codex").is_none());
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn path_hint_is_macos_only() {
+        assert!(macos_cli_path_hint("cursor").is_none());
+        assert!(macos_cli_path_hint("copilot-vscode").is_none());
     }
 
     #[test]

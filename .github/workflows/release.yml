@@ -2,6 +2,10 @@ name: Build release
 permissions:
   contents: write
   pull-requests: write
+# Never let two runs for the same tag publish assets side by side.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 on:
   workflow_dispatch:
     inputs:
@@ -23,6 +27,7 @@ jobs:
       crate: ${{ steps.parse.outputs.crate }}
       version: ${{ steps.parse.outputs.version }}
       is_cli: ${{ steps.parse.outputs.is_cli }}
+      tag: ${{ steps.parse.outputs.tag }}
     steps:
       - name: Parse crate and version from trigger
         id: parse
@@ -59,11 +64,17 @@ jobs:
             exit 1
           fi
 
+          # Derive the tag from the version rather than reading GITHUB_REF_NAME
+          # downstream, so workflow_dispatch runs target the same release as a
+          # tag push would.
+          TAG="v${VERSION}"
+
           echo "crate=${CRATE}"     >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "is_cli=${IS_CLI}"   >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
 
-          echo "Parsed: crate=${CRATE} version=${VERSION} is_cli=${IS_CLI}"
+          echo "Parsed: crate=${CRATE} version=${VERSION} is_cli=${IS_CLI} tag=${TAG}"
 
   bump-version:
     needs: setup
@@ -71,6 +82,7 @@ jobs:
     env:
       CRATE: ${{ needs.setup.outputs.crate }}
       VERSION: ${{ needs.setup.outputs.version }}
+      TAG: ${{ needs.setup.outputs.tag }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -112,15 +124,47 @@ jobs:
           git add "${{ steps.manifest.outputs.path }}" Cargo.lock
           git diff --staged --quiet && echo "Version already up to date, skipping PR." && exit 0
           git commit -m "chore: bump ${CRATE} to ${VERSION}"
-          git push origin "$BRANCH"
+          # Force-push so re-running the workflow doesn't trip over the branch
+          # left behind by an earlier attempt.
+          git push --force origin "$BRANCH"
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            echo "PR already open for ${BRANCH}, nothing to do."
+            exit 0
+          fi
           gh pr create \
             --title "chore: bump ${CRATE} to ${VERSION}" \
-            --body "Automated version bump triggered by release tag \`${GITHUB_REF_NAME}\`." \
+            --body "Automated version bump triggered by release tag \`${TAG}\`." \
             --base main \
             --head "$BRANCH"
 
-  build-release-binaries:
+  # Create the draft release exactly once. Letting each matrix job create it on
+  # demand races: `GET /releases/tags/<tag>` never returns drafts, so two jobs
+  # can both decide the release is missing and each create their own, splitting
+  # the assets across duplicate drafts.
+  create-release:
     needs: setup
+    runs-on: ubuntu-latest
+    if: needs.setup.outputs.is_cli == 'true'
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.setup.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists, reusing it."
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --title "$TAG" \
+            --target "${{ github.sha }}" \
+            --draft \
+            --generate-notes
+
+  build-release-binaries:
+    needs: [setup, create-release]
     if: needs.setup.outputs.is_cli == 'true'
     strategy:
       matrix:
@@ -183,13 +227,17 @@ jobs:
             shasum -a 256 "$BIN" | awk '{print $1}' > "$BIN.sha256"
           fi
 
-      - name: Publish artifacts and release
-        uses: xresloader/upload-to-github-release@v1
+      - name: Upload release assets
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          file: "edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }};edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}.sha256"
-          tags: true
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.setup.outputs.tag }}
+          REPO: ${{ github.repository }}
+          BIN: edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}
+        run: |
+          # --clobber keeps re-runs idempotent instead of silently skipping the
+          # upload when a stale asset from a previous attempt is still there.
+          gh release upload "$TAG" "$BIN" "$BIN.sha256" --repo "$REPO" --clobber
 
   update-homebrew-tap:
     needs: [setup, build-release-binaries]
@@ -206,9 +254,10 @@ jobs:
       - name: Download checksums
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.setup.outputs.tag }}
         run: |
           for platform in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
-            gh release download "${GITHUB_REF_NAME}" \
+            gh release download "$TAG" \
               --repo "${{ github.repository }}" \
               --pattern "edgee.${platform}.sha256" \
               --output "edgee.${platform}.sha256"

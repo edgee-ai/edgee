@@ -69,10 +69,16 @@ struct GatewayModelEntry {
 }
 
 /// Fetches the gateway's OpenAI-style `/v1/models` listing so the Crush
-/// provider config can be populated with a concrete `models` list. The endpoint
-/// is public today; the api key is sent anyway to stay correct if it ever
-/// starts requiring auth. Returns an empty vec on any failure so launch falls
-/// back to a provider that relies on Crush's own `/v1/models` discovery.
+/// provider config can be populated with a concrete `models` list.
+///
+/// The endpoint serves anonymous callers the whole catalog, but narrows the
+/// listing for a *resolved* key: with BYOK-only enforced (org, squad or key
+/// scope), it returns only models the key has provider credentials for. It
+/// resolves the key from `x-api-key`/`Authorization: Bearer` only — Edgee's own
+/// `x-edgee-api-key` header is not read there, so sending that alone would
+/// silently produce the unfiltered catalog and offer models every request would
+/// be rejected for. Returns an empty vec on any failure so launch falls back to
+/// a provider that relies on Crush's own `/v1/models` discovery.
 async fn fetch_gateway_models(gateway_url: &str, api_key: &str) -> Vec<String> {
     let url = format!("{}/v1/models", gateway_url);
     let client = match reqwest::Client::builder()
@@ -82,7 +88,7 @@ async fn fetch_gateway_models(gateway_url: &str, api_key: &str) -> Vec<String> {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
-    let resp = match client.get(&url).header("x-edgee-api-key", api_key).send().await {
+    let resp = match client.get(&url).header("x-api-key", api_key).send().await {
         Ok(r) if r.status().is_success() => r,
         _ => return Vec::new(),
     };
@@ -243,6 +249,7 @@ pub async fn run(opts: Options) -> Result<()> {
         fetch_gateway_models(&gateway_url, api_key),
         util::fetch_model_catalog(&creds)
     );
+    let models = util::without_app_subscription_models(models, &catalog);
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let edgee_provider = build_edgee_provider(
         api_key,
@@ -304,6 +311,7 @@ mod tests {
                     util::ModelMetadata {
                         context: Some(*v),
                         cost: None,
+                            app_subscription_only: false,
                     },
                 )
             })
@@ -319,6 +327,7 @@ mod tests {
             util::ModelMetadata {
                 context: None,
                 cost: Some(cost),
+                    app_subscription_only: false,
             },
         )]
         .into_iter()
