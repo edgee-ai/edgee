@@ -1,4 +1,5 @@
 use anyhow::Result;
+use console::style;
 
 use super::util;
 
@@ -49,9 +50,15 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::config::write(&creds)?;
     }
 
-    // Step 3b: ensure MCP preference is set
-    crate::commands::auth::login::ensure_mcp_preference().await?;
-    creds = crate::config::read()?;
+    // Step 3b: ensure MCP preference is set — unless injection is off for this
+    // launch, in which case the local answer would be moot. Fetched once here
+    // and reused below for the gateway URL.
+    let org = super::fetch_active_org(&creds).await;
+    let mcp_disabled = super::mcp_injection_disabled_with_org(org.as_ref());
+    if !mcp_disabled {
+        crate::commands::auth::login::ensure_mcp_preference().await?;
+        creds = crate::config::read()?;
+    }
 
     // Step 4: launch claude with the correct env vars
     let claude = creds.claude.as_ref().unwrap();
@@ -69,7 +76,7 @@ pub async fn run(opts: Options) -> Result<()> {
 
     util::spawn_cli_version_report(&creds, &session_id);
 
-    let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
     let debug_log_header = util::resolve_debug_log_keypair()?
         .map(|keypair| {
             let headers = keypair.header_values();
@@ -114,8 +121,22 @@ pub async fn run(opts: Options) -> Result<()> {
         cmd.env("ENABLE_TOOL_SEARCH", "true");
     }
 
-    // Step 5: conditionally set up MCP integration
-    let use_mcp = creds.enable_mcp.unwrap_or(false);
+    // Step 5: conditionally set up MCP integration. Injection being off is a
+    // hard override — a member who opted in locally still gets none, unless
+    // they set the env var (see `mcp_injection_disabled_with_org`).
+    let wants_mcp = creds.enable_mcp.unwrap_or(false);
+    if mcp_disabled && wants_mcp {
+        // Without this the integration would just silently vanish, which reads
+        // as a bug rather than a deliberate setting. Name the actual source, so
+        // a forgotten export doesn't look like an org decision.
+        let reason = if crate::config::mcp_injection_disabled_env_override() == Some(true) {
+            "EDGEE_MCP_INJECTION_DISABLED is set"
+        } else {
+            "Edgee MCP is turned off for your organization"
+        };
+        println!("{}", style(format!("  {reason} — skipping.")).dim());
+    }
+    let use_mcp = wants_mcp && !mcp_disabled;
     if use_mcp {
         let mcp_config_path = write_mcp_config(&creds)?;
         cmd.arg("--mcp-config").arg(&mcp_config_path);

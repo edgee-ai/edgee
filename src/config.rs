@@ -309,6 +309,27 @@ pub fn gateway_url_profile_override() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Parses a boolean flag from an env-var value. Returns `None` for anything
+/// unrecognized (including an empty value) so a stray or malformed export is
+/// ignored rather than silently read as one of the two states.
+fn parse_bool_flag(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// The `EDGEE_MCP_INJECTION_DISABLED` env-var override, if set and parseable.
+///
+/// The explicit escape hatch for Edgee MCP injection, outranking the org's
+/// console-configured `mcp_injection_disabled`: `1`/`true`/`yes`/`on` forces
+/// injection off, `0`/`false`/`no`/`off` forces it back on even when the org
+/// turned it off. See `commands::launch::mcp_injection_disabled_with_org`.
+pub fn mcp_injection_disabled_env_override() -> Option<bool> {
+    parse_bool_flag(&std::env::var("EDGEE_MCP_INJECTION_DISABLED").ok()?)
+}
+
 pub fn mcp_base_url() -> String {
     if let Ok(v) = std::env::var("EDGEE_MCP_URL") {
         return v;
@@ -341,6 +362,38 @@ mod tests {
     // Helper: migrate and unwrap, for concise test assertions.
     fn do_migrate(content: &str) -> (CredentialsFile, bool) {
         migrate(content).expect("migration should succeed")
+    }
+
+    #[test]
+    fn parse_bool_flag_accepts_both_spellings() {
+        for truthy in ["1", "true", "TRUE", "Yes", "on", "  true  "] {
+            assert_eq!(
+                parse_bool_flag(truthy),
+                Some(true),
+                "{truthy:?} should be true"
+            );
+        }
+        for falsy in ["0", "false", "FALSE", "No", "off", "  false  "] {
+            assert_eq!(
+                parse_bool_flag(falsy),
+                Some(false),
+                "{falsy:?} should be false"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_bool_flag_ignores_unrecognized_values() {
+        // Anything we can't read confidently must fall through to the next
+        // source rather than being guessed at — an empty or typo'd export
+        // should not silently force MCP injection on or off.
+        for unknown in ["", "  ", "maybe", "2", "disabled", "null"] {
+            assert_eq!(
+                parse_bool_flag(unknown),
+                None,
+                "{unknown:?} should be ignored"
+            );
+        }
     }
 
     #[test]

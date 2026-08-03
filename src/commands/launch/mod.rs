@@ -110,6 +110,67 @@ async fn print_session_stats(
     }
 }
 
+/// Best-effort fetch of the active organization.
+///
+/// Returns `None` when there is no token, no selected org, or the API is
+/// unreachable. Every caller treats that as "no server-side config" and falls
+/// back to local defaults, so a transient failure never breaks a launch.
+pub async fn fetch_active_org(
+    creds: &crate::config::Credentials,
+) -> Option<crate::api::Organization> {
+    let token = creds.user_token.as_deref().filter(|t| !t.is_empty())?;
+    let org_id = creds.org_id.as_deref().filter(|o| !o.is_empty())?;
+    let client = crate::api::ApiClient::new(token).ok()?;
+    client.get_organization(org_id).await.ok()
+}
+
+/// Whether Edgee MCP injection is off for this launch, with the org already
+/// fetched (or `None`).
+///
+/// Precedence (highest first):
+/// 1. `EDGEE_MCP_INJECTION_DISABLED` env var — the explicit, ephemeral escape
+///    hatch, and the only way to re-enable injection when the org turned it off.
+/// 2. The org's console-configured `mcp_injection_disabled` — an admin decision
+///    that binds members, so it deliberately outranks the local profile.
+/// 3. Not disabled.
+///
+/// Note this is the inverse of [`gateway_base_url_with_org`], where the local
+/// profile beats the org: the gateway URL is a user's own plumbing, whereas MCP
+/// injection is org policy. The member's own `enable_mcp` preference still
+/// applies underneath — it can decline injection, but cannot force it on
+/// against the org.
+pub fn mcp_injection_disabled_with_org(org: Option<&crate::api::Organization>) -> bool {
+    if let Some(env_disabled) = crate::config::mcp_injection_disabled_env_override() {
+        return env_disabled;
+    }
+
+    org.is_some_and(|o| o.mcp_injection_disabled)
+}
+
+/// Gateway base URL precedence, with the org already fetched (or `None`).
+///
+/// Split out of [`resolve_gateway_base_url`] so a caller that needs other
+/// fields off the same org (e.g. `mcp_injection_disabled`) can fetch it once
+/// and reuse it here instead of issuing a second request.
+pub fn gateway_base_url_with_org(org: Option<&crate::api::Organization>) -> String {
+    if let Some(env_url) = crate::config::gateway_url_env_override() {
+        return env_url;
+    }
+
+    if let Some(profile_url) = crate::config::gateway_url_profile_override() {
+        return profile_url;
+    }
+
+    if let Some(url) = org
+        .and_then(|o| o.gateway_url.as_deref())
+        .filter(|s| !s.is_empty())
+    {
+        return url.to_string();
+    }
+
+    crate::config::DEFAULT_GATEWAY_URL.to_string()
+}
+
 /// Resolves the gateway base URL for a launch.
 ///
 /// Precedence (highest first):
@@ -123,30 +184,16 @@ async fn print_session_stats(
 /// Local overrides win over the server value; the server only fills in when the
 /// user has no local preference. The org fetch is best-effort: any failure
 /// falls through to the next source so launch never breaks (offline, no org
-/// selected, or no configured gateway).
+/// selected, or no configured gateway). A local override short-circuits before
+/// the fetch, so the network is only touched when the org value could matter.
 pub async fn resolve_gateway_base_url(creds: &crate::config::Credentials) -> String {
-    if let Some(env_url) = crate::config::gateway_url_env_override() {
-        return env_url;
+    if crate::config::gateway_url_env_override().is_some()
+        || crate::config::gateway_url_profile_override().is_some()
+    {
+        return gateway_base_url_with_org(None);
     }
 
-    if let Some(profile_url) = crate::config::gateway_url_profile_override() {
-        return profile_url;
-    }
-
-    if let (Some(token), Some(org_id)) = (
-        creds.user_token.as_deref().filter(|t| !t.is_empty()),
-        creds.org_id.as_deref().filter(|o| !o.is_empty()),
-    ) {
-        if let Ok(client) = crate::api::ApiClient::new(token) {
-            if let Ok(org) = client.get_organization(org_id).await {
-                if let Some(url) = org.gateway_url.filter(|s| !s.is_empty()) {
-                    return url;
-                }
-            }
-        }
-    }
-
-    crate::config::DEFAULT_GATEWAY_URL.to_string()
+    gateway_base_url_with_org(fetch_active_org(creds).await.as_ref())
 }
 
 async fn fetch_stats(
