@@ -249,6 +249,7 @@ pub async fn run(opts: Options) -> Result<()> {
         fetch_gateway_models(&gateway_url, api_key),
         util::fetch_model_catalog(&creds)
     );
+    let models = util::without_app_subscription_models(models, &catalog);
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let edgee_provider = build_edgee_provider(
         api_key,
@@ -310,6 +311,7 @@ mod tests {
                     util::ModelMetadata {
                         context: Some(*v),
                         cost: None,
+                            app_subscription_only: false,
                     },
                 )
             })
@@ -325,6 +327,7 @@ mod tests {
             util::ModelMetadata {
                 context: None,
                 cost: Some(cost),
+                    app_subscription_only: false,
             },
         )]
         .into_iter()
