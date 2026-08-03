@@ -91,6 +91,10 @@ pub async fn run(opts: Options) -> Result<()> {
             ),
         );
 
+    // Set up the environment for the claude CLI to use 1M context window instead of the default 200k on Claude models.
+    cmd.env("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5[1m]")
+        .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5[1m]");
+
     // Set up the environment for Edgee session tracking and console API access.
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env(
