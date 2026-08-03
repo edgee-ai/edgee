@@ -73,17 +73,25 @@ pub async fn run(opts: Options) -> Result<()> {
     let debug_log_header = util::resolve_debug_log_keypair()?
         .map(|keypair| {
             let headers = keypair.header_values();
-            format!("\nx-edgee-debug-pubkey: {}\nx-edgee-debug-salt: {}", headers.pubkey, headers.salt)
+            format!(
+                "\nx-edgee-debug-pubkey: {}\nx-edgee-debug-salt: {}",
+                headers.pubkey, headers.salt
+            )
         })
         .unwrap_or_default();
     let mut cmd = std::process::Command::new(util::resolve_binary("claude"));
-    cmd.env("ANTHROPIC_BASE_URL", &gateway_url);
-    cmd.env(
-        "ANTHROPIC_CUSTOM_HEADERS",
-        format!(
-            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}"
-        ),
-    );
+
+    // Set up the environment for the claude CLI to talk to Edgee's gateway instead of Anthropic's API.
+    cmd
+        .env("ANTHROPIC_BASE_URL", &gateway_url)
+        .env(
+            "ANTHROPIC_CUSTOM_HEADERS",
+            format!(
+                "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}"
+            ),
+        );
+
+    // Set up the environment for Edgee session tracking and console API access.
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env(
         "EDGEE_CONSOLE_API_URL",
@@ -109,9 +117,15 @@ pub async fn run(opts: Options) -> Result<()> {
         cmd.arg("--mcp-config").arg(&mcp_config_path);
         let session_url = match creds.org_slug.as_deref() {
             Some(slug) if !slug.is_empty() => {
-                format!("{}/sessions/{slug}/{session_id}", crate::config::console_base_url())
+                format!(
+                    "{}/sessions/{slug}/{session_id}",
+                    crate::config::console_base_url()
+                )
             }
-            _ => format!("{}/sessions/{session_id}", crate::config::console_base_url()),
+            _ => format!(
+                "{}/sessions/{session_id}",
+                crate::config::console_base_url()
+            ),
         };
         cmd.arg("--append-system-prompt").arg(system_prompt(
             &session_id,
