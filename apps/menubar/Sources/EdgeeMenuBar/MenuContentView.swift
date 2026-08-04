@@ -6,9 +6,11 @@ struct MenuContentView: View {
     @EnvironmentObject private var relays: RelayManager
     @State private var status: AuthStatus?
     @State private var stats: Stats?
+    @State private var profiles: [Profile] = []
     @State private var loading = true
     @State private var statsLoading = true
     @State private var loggingIn = false
+    @State private var switching = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -65,7 +67,7 @@ struct MenuContentView: View {
                 if let org = status.orgSlug {
                     caption("org · \(org)")
                 }
-                caption("profile · \(status.profile)")
+                profilePicker(current: status.profile)
                 if !status.providers.isEmpty {
                     caption("configured · \(status.providers.keys.sorted().joined(separator: ", "))")
                 }
@@ -169,15 +171,58 @@ struct MenuContentView: View {
         Text(text).font(.caption).foregroundStyle(.secondary)
     }
 
+    /// The `profile · <name>` line. A switcher menu when more than one profile
+    /// is configured; otherwise a plain caption.
+    @ViewBuilder
+    private func profilePicker(current: String) -> some View {
+        if profiles.count > 1 {
+            Menu {
+                ForEach(profiles) { profile in
+                    Button {
+                        guard !profile.active else { return }
+                        Task { await switchProfile(profile.name) }
+                    } label: {
+                        if profile.active {
+                            Label(profile.name, systemImage: "checkmark")
+                        } else {
+                            Text(profile.name)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("profile · \(current)")
+                    if switching { ProgressView().controlSize(.small) }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(switching)
+        } else {
+            caption("profile · \(current)")
+        }
+    }
+
     private func reload() async {
         loading = true
         statsLoading = true
         async let auth = EdgeeCLI.authStatus()
         async let summary = EdgeeCLI.stats()
+        async let profs = EdgeeCLI.profiles()
         status = await auth
         loading = false
         stats = await summary
         statsLoading = false
+        profiles = await profs
+    }
+
+    private func switchProfile(_ name: String) async {
+        switching = true
+        await EdgeeCLI.switchProfile(name)
+        switching = false
+        await reload()
     }
 
     private func login() async {

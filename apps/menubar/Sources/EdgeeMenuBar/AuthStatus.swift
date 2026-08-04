@@ -25,6 +25,21 @@ struct ProviderStatus: Codable {
     let mode: String?
 }
 
+/// One entry from `edgee auth list --json` (`ProfileEntry` in the CLI).
+struct Profile: Codable, Identifiable {
+    let name: String
+    let active: Bool
+    let email: String?
+    let orgSlug: String?
+
+    var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, active, email
+        case orgSlug = "org_slug"
+    }
+}
+
 /// Decoded from `edgee auth login --non-interactive --json` (`LoginOutcome` in
 /// crates/cli/src/commands/auth/login.rs).
 struct LoginOutcome: Codable {

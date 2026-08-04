@@ -49,6 +49,22 @@ enum EdgeeCLI {
         }.value
     }
 
+    /// List configured profiles via `edgee auth list --json`.
+    static func profiles() async -> [Profile] {
+        await Task.detached(priority: .userInitiated) {
+            guard let data = capture(["auth", "list", "--json"]) else { return [] }
+            return (try? JSONDecoder().decode([Profile].self, from: data)) ?? []
+        }.value
+    }
+
+    /// Switch the active profile via `edgee auth switch <name>`. Returns success.
+    @discardableResult
+    static func switchProfile(_ name: String) async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            capture(["auth", "switch", name]) != nil
+        }.value
+    }
+
     /// Run the browser login headlessly (no Terminal): `edgee auth login
     /// --non-interactive --json`. The subprocess opens the browser itself and
     /// blocks until the callback arrives, so this can take a while — run it off
