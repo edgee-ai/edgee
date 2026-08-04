@@ -111,9 +111,7 @@ struct MenuContentView: View {
         let state = relays.state(target.id)
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
-                Image(systemName: target.symbol)
-                    .frame(width: 16)
-                    .foregroundStyle(.secondary)
+                appIcon(for: target)
                 Text(target.name)
                 Spacer()
                 statusDot(state)
@@ -124,6 +122,20 @@ struct MenuContentView: View {
             if case let .failed(message) = state {
                 Text(message).font(.caption).foregroundStyle(.red).lineLimit(2)
             }
+        }
+    }
+
+    /// The app's real macOS icon when installed; otherwise a generic SF Symbol.
+    @ViewBuilder
+    private func appIcon(for target: RelayTarget) -> some View {
+        if let path = target.appBundlePath {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                .resizable()
+                .frame(width: 18, height: 18)
+        } else {
+            Image(systemName: target.symbol)
+                .frame(width: 18)
+                .foregroundStyle(.secondary)
         }
     }
 

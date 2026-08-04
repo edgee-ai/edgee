@@ -18,6 +18,12 @@ struct RelayTarget: Identifiable {
         return detectPaths.contains { FileManager.default.fileExists(atPath: $0) }
     }
 
+    /// The installed app bundle path (first existing detectPath), used to render
+    /// the app's real macOS icon. `nil` → fall back to the SF Symbol.
+    var appBundlePath: String? {
+        detectPaths.first { FileManager.default.fileExists(atPath: $0) }
+    }
+
     /// Verb for the start button.
     var startVerb: String { proxyOnly ? "Start" : "Launch" }
 
@@ -38,8 +44,8 @@ struct RelayTarget: Identifiable {
             id: "copilot-vscode", name: "VS Code (Copilot)", symbol: "chevron.left.forwardslash.chevron.right",
             proxyOnly: false, detectPaths: appPaths("Visual Studio Code.app")),
         RelayTarget(
-            id: "claude", name: "Relay for Claude Desktop", symbol: "network",
-            proxyOnly: true, detectPaths: []),
+            id: "claude", name: "Claude Desktop", symbol: "network",
+            proxyOnly: true, detectPaths: appPaths("Claude.app")),
     ]
 }
 
