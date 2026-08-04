@@ -19,7 +19,11 @@ pub async fn ensure_first_run_installed() {
         return;
     }
 
-    if let Err(e) = install::run(install::Options::default()).await {
+    let opts = install::Options {
+        implicit: true,
+        ..Default::default()
+    };
+    if let Err(e) = install::run(opts).await {
         eprintln!(
             "  {} edgee: skipped first-run statusline install: {e}",
             console::style("⚠").yellow()
