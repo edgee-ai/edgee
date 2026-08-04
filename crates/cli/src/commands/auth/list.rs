@@ -1,11 +1,43 @@
 use anyhow::Result;
 use console::style;
+use serde::Serialize;
 
-setup_command! {}
+setup_command! {
+    /// Emit machine-readable JSON instead of the human-readable list.
+    #[arg(long)]
+    pub json: bool,
+}
 
-pub async fn run(_opts: Options) -> Result<()> {
+/// One profile entry in the `--json` output. Consumed by front-ends (the macOS
+/// menubar app) to render a profile switcher.
+#[derive(Serialize)]
+struct ProfileEntry {
+    name: String,
+    active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    org_slug: Option<String>,
+}
+
+pub async fn run(opts: Options) -> Result<()> {
     let file = crate::config::read_file()?;
     let active = crate::config::active_profile_name();
+
+    if opts.json {
+        let entries: Vec<ProfileEntry> = file
+            .profiles
+            .iter()
+            .map(|(name, profile)| ProfileEntry {
+                name: name.clone(),
+                active: *name == active,
+                email: profile.email.clone().filter(|e| !e.is_empty()),
+                org_slug: profile.org_slug.clone().filter(|s| !s.is_empty()),
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+        return Ok(());
+    }
 
     if file.profiles.is_empty() {
         println!(
