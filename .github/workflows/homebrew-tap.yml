@@ -1,0 +1,80 @@
+name: Update Homebrew tap
+permissions:
+  contents: read
+# Never let two runs rewrite the formula side by side.
+concurrency:
+  group: homebrew-tap
+  cancel-in-progress: false
+on:
+  # Fires when a draft release created by `release.yml` is published, so the
+  # formula only moves once a human has signed off on the assets.
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.3.5)"
+        required: true
+        type: string
+jobs:
+  update-homebrew-tap:
+    runs-on: ubuntu-latest
+    # `v<X.Y.Z>` is reserved for CLI releases; pre-releases never ship to brew.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (startsWith(github.event.release.tag_name, 'v') && github.event.release.prerelease == false)
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    steps:
+      - name: Resolve version
+        id: parse
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "ERROR: '$TAG' is not an edgee-cli release tag"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: edgee-ai/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Download checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for platform in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
+            gh release download "$TAG" \
+              --repo "${{ github.repository }}" \
+              --pattern "edgee.${platform}.sha256" \
+              --output "edgee.${platform}.sha256"
+          done
+
+      - name: Update formula
+        run: |
+          VERSION="${{ steps.parse.outputs.version }}"
+          SHA_AARCH64_DARWIN=$(cat edgee.aarch64-apple-darwin.sha256)
+          SHA_X86_64_DARWIN=$(cat edgee.x86_64-apple-darwin.sha256)
+          SHA_AARCH64_LINUX=$(cat edgee.aarch64-unknown-linux-gnu.sha256)
+          SHA_X86_64_LINUX=$(cat edgee.x86_64-unknown-linux-gnu.sha256)
+
+          FORMULA="homebrew-tap/Formula/edgee.rb"
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
+          sed -i "s/\"aarch64-apple-darwin\" => \".*\"/\"aarch64-apple-darwin\" => \"${SHA_AARCH64_DARWIN}\"/" "$FORMULA"
+          sed -i "s/\"x86_64-apple-darwin\" => \".*\"/\"x86_64-apple-darwin\" => \"${SHA_X86_64_DARWIN}\"/" "$FORMULA"
+          sed -i "s/\"aarch64-unknown-linux-gnu\" => \".*\"/\"aarch64-unknown-linux-gnu\" => \"${SHA_AARCH64_LINUX}\"/" "$FORMULA"
+          sed -i "s/\"x86_64-unknown-linux-gnu\" => \".*\"/\"x86_64-unknown-linux-gnu\" => \"${SHA_X86_64_LINUX}\"/" "$FORMULA"
+
+      - name: Commit and push
+        run: |
+          VERSION="${{ steps.parse.outputs.version }}"
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/edgee.rb
+          git diff --staged --quiet && echo "Formula already at ${VERSION}, nothing to do." && exit 0
+          git commit -m "Update edgee formula to ${VERSION}"
+          git push
