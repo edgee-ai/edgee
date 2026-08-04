@@ -37,6 +37,8 @@ bundle: build edgee-cli
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	cp "$(BIN)" "$(APP)/Contents/MacOS/Edgee"
 	cp "$(EDGEE_BIN)" "$(APP)/Contents/Resources/edgee"
+	cp Assets/Edgee.icns "$(APP)/Contents/Resources/Edgee.icns"
+	cp Assets/MenuBarIcon.pdf "$(APP)/Contents/Resources/MenuBarIcon.pdf"
 	cp Info.plist "$(APP)/Contents/Info.plist"
 	codesign --force --sign - "$(APP)/Contents/Resources/edgee"
 	codesign --force --sign - "$(APP)"

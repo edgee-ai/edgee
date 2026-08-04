@@ -12,9 +12,11 @@ struct EdgeeMenuBarApp: App {
     @StateObject private var relays = RelayManager()
 
     var body: some Scene {
-        MenuBarExtra("Edgee", systemImage: "bolt.horizontal.fill") {
+        MenuBarExtra {
             MenuContentView()
                 .environmentObject(relays)
+        } label: {
+            Image(nsImage: AppIcons.menuBar)
         }
         .menuBarExtraStyle(.window)
     }

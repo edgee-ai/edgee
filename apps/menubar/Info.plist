@@ -10,6 +10,8 @@
     <string>ai.edgee.menubar</string>
     <key>CFBundleExecutable</key>
     <string>Edgee</string>
+    <key>CFBundleIconFile</key>
+    <string>Edgee</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
