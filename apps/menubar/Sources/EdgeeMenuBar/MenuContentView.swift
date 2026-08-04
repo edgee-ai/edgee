@@ -69,9 +69,6 @@ struct MenuContentView: View {
                     orgPicker(current: org)
                 }
                 profilePicker(current: status.profile)
-                if !status.providers.isEmpty {
-                    caption("configured · \(status.providers.keys.sorted().joined(separator: ", "))")
-                }
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
