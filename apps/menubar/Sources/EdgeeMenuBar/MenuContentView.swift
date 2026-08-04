@@ -31,8 +31,12 @@ struct MenuContentView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "bolt.horizontal.fill")
-                .foregroundStyle(.purple)
+            Image(nsImage: AppIcons.menuBar)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(height: 20)
+                .foregroundStyle(Color(red: 148 / 255, green: 0, blue: 211 / 255))
             Text("Edgee")
                 .font(.title2.bold())
             Spacer()
