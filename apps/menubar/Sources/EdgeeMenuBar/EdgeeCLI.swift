@@ -65,6 +65,20 @@ enum EdgeeCLI {
         }.value
     }
 
+    /// Launch a CLI coding agent (`edgee launch <agent>`) in the user's Terminal.
+    /// Unlike the relay, these agents are interactive terminal TUIs, so a terminal
+    /// is the correct home — and a login shell there gives `edgee` the full PATH
+    /// it needs to find the agent binary.
+    static func launchAgentInTerminal(_ agent: String) {
+        let bin = resolvedBinary ?? "edgee"
+        let command = "'\(bin)' launch \(agent)"
+        let script = "tell application \"Terminal\"\nactivate\ndo script \"\(command)\"\nend tell"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        try? process.run()
+    }
+
     /// List the account's organizations via `edgee auth orgs --json` (network).
     static func orgs() async -> [Org] {
         await Task.detached(priority: .userInitiated) {

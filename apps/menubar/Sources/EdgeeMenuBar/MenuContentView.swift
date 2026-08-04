@@ -100,6 +100,15 @@ struct MenuContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Launch & Relay", systemImage: "play.circle.fill").font(.headline)
             if status?.loggedIn == true {
+                Menu {
+                    ForEach(AgentTarget.all) { agent in
+                        Button(agent.name) { EdgeeCLI.launchAgentInTerminal(agent.id) }
+                    }
+                } label: {
+                    Label("Launch a CLI agent…", systemImage: "terminal")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 ForEach(RelayTarget.all.filter { $0.installed }) { target in
                     relayRow(target)
                 }
