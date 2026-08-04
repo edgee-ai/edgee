@@ -40,6 +40,14 @@ struct Profile: Codable, Identifiable {
     }
 }
 
+/// One entry from `edgee auth orgs --json` (`OrgEntry` in the CLI).
+struct Org: Codable, Identifiable {
+    let id: String
+    let slug: String
+    let name: String
+    let active: Bool
+}
+
 /// Decoded from `edgee auth login --non-interactive --json` (`LoginOutcome` in
 /// crates/cli/src/commands/auth/login.rs).
 struct LoginOutcome: Codable {

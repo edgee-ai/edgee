@@ -7,6 +7,7 @@ struct MenuContentView: View {
     @State private var status: AuthStatus?
     @State private var stats: Stats?
     @State private var profiles: [Profile] = []
+    @State private var orgs: [Org] = []
     @State private var loading = true
     @State private var statsLoading = true
     @State private var loggingIn = false
@@ -65,7 +66,7 @@ struct MenuContentView: View {
                     Text(status.email ?? "Logged in").fontWeight(.semibold)
                 }
                 if let org = status.orgSlug {
-                    caption("org · \(org)")
+                    orgPicker(current: org)
                 }
                 profilePicker(current: status.profile)
                 if !status.providers.isEmpty {
@@ -171,6 +172,37 @@ struct MenuContentView: View {
         Text(text).font(.caption).foregroundStyle(.secondary)
     }
 
+    /// The `org · <slug>` line. A switcher menu when the account has more than
+    /// one org; otherwise a plain caption.
+    @ViewBuilder
+    private func orgPicker(current: String) -> some View {
+        if orgs.count > 1 {
+            Menu {
+                ForEach(orgs) { org in
+                    Button {
+                        guard !org.active else { return }
+                        Task { await switchOrg(org.slug) }
+                    } label: {
+                        if org.active {
+                            Label(org.name, systemImage: "checkmark")
+                        } else {
+                            Text(org.name)
+                        }
+                    }
+                }
+            } label: {
+                Text("org · \(current)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(switching)
+        } else {
+            caption("org · \(current)")
+        }
+    }
+
     /// The `profile · <name>` line. A switcher menu when more than one profile
     /// is configured; otherwise a plain caption.
     @ViewBuilder
@@ -211,16 +243,25 @@ struct MenuContentView: View {
         async let auth = EdgeeCLI.authStatus()
         async let summary = EdgeeCLI.stats()
         async let profs = EdgeeCLI.profiles()
+        async let organizations = EdgeeCLI.orgs()
         status = await auth
         loading = false
         stats = await summary
         statsLoading = false
         profiles = await profs
+        orgs = await organizations
     }
 
     private func switchProfile(_ name: String) async {
         switching = true
         await EdgeeCLI.switchProfile(name)
+        switching = false
+        await reload()
+    }
+
+    private func switchOrg(_ idOrSlug: String) async {
+        switching = true
+        await EdgeeCLI.switchOrg(idOrSlug)
         switching = false
         await reload()
     }

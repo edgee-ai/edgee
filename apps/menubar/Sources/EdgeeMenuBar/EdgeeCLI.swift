@@ -65,6 +65,22 @@ enum EdgeeCLI {
         }.value
     }
 
+    /// List the account's organizations via `edgee auth orgs --json` (network).
+    static func orgs() async -> [Org] {
+        await Task.detached(priority: .userInitiated) {
+            guard let data = capture(["auth", "orgs", "--json"]) else { return [] }
+            return (try? JSONDecoder().decode([Org].self, from: data)) ?? []
+        }.value
+    }
+
+    /// Switch the active profile's org via `edgee auth orgs --set <id|slug>`.
+    @discardableResult
+    static func switchOrg(_ idOrSlug: String) async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            capture(["auth", "orgs", "--set", idOrSlug]) != nil
+        }.value
+    }
+
     /// Run the browser login headlessly (no Terminal): `edgee auth login
     /// --non-interactive --json`. The subprocess opens the browser itself and
     /// blocks until the callback arrives, so this can take a while — run it off
