@@ -143,7 +143,7 @@ struct MenuContentView: View {
         switch state {
         case .running: return "Stop"
         case .starting: return "…"
-        case .stopped, .failed: return target.startVerb
+        case .stopped, .failed: return "Start"
         }
     }
 

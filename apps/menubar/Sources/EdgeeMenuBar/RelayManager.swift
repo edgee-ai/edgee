@@ -24,9 +24,6 @@ struct RelayTarget: Identifiable {
         detectPaths.first { FileManager.default.fileExists(atPath: $0) }
     }
 
-    /// Verb for the start button.
-    var startVerb: String { proxyOnly ? "Start" : "Launch" }
-
     private static func appPaths(_ name: String) -> [String] {
         [
             "/Applications/\(name)",
