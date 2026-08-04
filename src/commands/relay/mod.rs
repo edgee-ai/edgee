@@ -63,6 +63,16 @@ fn is_gui_editor(agent: &str) -> bool {
     is_copilot_vscode(agent) || is_cursor(agent)
 }
 
+/// Display name of the GUI editor behind a relay target, for user-facing messages.
+/// Only meaningful for [`is_gui_editor`] targets.
+fn editor_app_name(agent: &str) -> &'static str {
+    if is_cursor(agent) {
+        "Cursor"
+    } else {
+        "VS Code"
+    }
+}
+
 /// How to put Cursor's `cursor` CLI on `PATH` from inside the editor. macOS-only:
 /// the other platforms' packages ship the CLI on `PATH`, so the hint would be dead
 /// code there.
@@ -247,10 +257,47 @@ pub async fn run(opts: Options) -> Result<()> {
     if opts.agent.is_none() {
         print_external_help(&addr, &cert_path);
         proxy.start().await.context("relay proxy error")?;
-    } else {
-        if is_gui_editor(&agent) {
-            print_gui_editor_hint(&agent);
+    } else if is_gui_editor(&agent) {
+        print_gui_editor_hint(&agent);
+        let task = tokio::spawn(async move {
+            let _ = proxy.start().await;
+        });
+        // A GUI editor's `--wait` CLI returns when the *window* it opened closes,
+        // not when the editor quits. Any other window stays open still carrying this
+        // relay's proxy env, so tearing the proxy down here would leave its traffic
+        // pointed at a dead port (no direct fallback). Keep serving until Ctrl-C
+        // instead — the same lifetime as the proxy-only path above.
+        //
+        // Ctrl-C is raced against the editor rather than awaited afterwards: the
+        // listener has to be registered before the editor can exit, or a signal
+        // already delivered is missed and we'd wait for a second press. GUI editors
+        // leave the terminal free, so their Ctrl-C really does reach us as SIGINT
+        // (TUI agents keep the terminal in raw mode and swallow it themselves).
+        let mut interrupt = std::pin::pin!(shutdown_signal());
+        let mut editor = std::pin::pin!(run_agent(&agent, port, &cert_path, &session_id));
+        let exited = tokio::select! {
+            res = &mut editor => Some(res?),
+            _ = &mut interrupt => None,
+        };
+        match exited {
+            // Window closed cleanly — hold the proxy for the windows still open.
+            Some(status) if status.success() => {
+                print_relay_still_serving(&addr, &agent);
+                interrupt.await;
+                task.abort();
+            }
+            // The editor CLI failed (most often: not on PATH). Surface it rather
+            // than sitting on a proxy nothing is pointed at.
+            Some(status) => {
+                task.abort();
+                if let Some(code) = status.code() {
+                    std::process::exit(code);
+                }
+            }
+            // Ctrl-C during the session — stop everything.
+            None => task.abort(),
         }
+    } else {
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
@@ -618,10 +665,11 @@ fn print_banner(
 }
 
 fn print_gui_editor_hint(agent: &str) {
-    let (app, launch, feature) = if is_cursor(agent) {
-        ("Cursor", "cursor --wait", "Cursor AI")
+    let app = editor_app_name(agent);
+    let (cli, launch, feature) = if is_cursor(agent) {
+        ("cursor", "cursor --wait", "Cursor AI")
     } else {
-        ("VS Code", "code --wait", "Copilot Chat")
+        ("code", "code --wait", "Copilot Chat")
     };
     println!(
         "{}",
@@ -630,20 +678,55 @@ fn print_gui_editor_hint(agent: &str) {
     println!(
         "  {}",
         style(format!(
-            "Quit any running {app} first — the proxy env only applies to a freshly"
+            "Quit any running {app} first: `{cli}` hands the request to the instance"
+        ))
+        .dim()
+    );
+    println!(
+        "  {}",
+        style("already running, which was started without the relay's proxy env — its").dim()
+    );
+    println!(
+        "  {}",
+        style(format!(
+            "{feature} traffic would bypass the gateway entirely. A freshly spawned"
+        ))
+        .dim()
+    );
+    println!("  {}", style("instance reroutes through it.").dim());
+    for line in macos_cli_path_hint(agent).unwrap_or_default() {
+        println!("  {}", style(line).dim());
+    }
+    println!();
+}
+
+/// Printed when a GUI editor's `--wait` CLI returns (the window it opened closed)
+/// while the relay stays up for whatever windows are still open. Says why the
+/// proxy is still listening, and what stopping it costs.
+fn print_relay_still_serving(addr: &SocketAddr, agent: &str) {
+    let app = editor_app_name(agent);
+    println!();
+    println!(
+        "{}",
+        style(format!(
+            "{app} window closed — relay still serving on http://{addr}"
+        ))
+        .bold()
+    );
+    println!(
+        "  {}",
+        style(format!(
+            "Any other {app} window is still routed through it. Ctrl-C to stop the"
         ))
         .dim()
     );
     println!(
         "  {}",
         style(format!(
-            "spawned instance. {feature} traffic then reroutes through the gateway."
+            "relay — {app} windows left open then lose gateway routing."
         ))
         .dim()
     );
-    for line in macos_cli_path_hint(agent).unwrap_or_default() {
-        println!("  {}", style(line).dim());
-    }
     println!();
 }
 
@@ -751,6 +834,15 @@ mod tests {
     fn path_hint_is_macos_only() {
         assert!(macos_cli_path_hint("cursor").is_none());
         assert!(macos_cli_path_hint("copilot-vscode").is_none());
+    }
+
+    #[test]
+    fn editor_app_names_match_their_target() {
+        assert_eq!(editor_app_name("cursor"), "Cursor");
+        for a in ["copilot-vscode", "vscode-copilot", "code", "vscode"] {
+            let canon = canonicalize_target(a).unwrap();
+            assert_eq!(editor_app_name(canon), "VS Code", "{a}");
+        }
     }
 
     #[test]
