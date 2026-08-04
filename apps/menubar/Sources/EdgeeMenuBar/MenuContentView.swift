@@ -169,26 +169,45 @@ struct MenuContentView: View {
         Text(text).font(.caption).foregroundStyle(.secondary)
     }
 
-    /// The `org · <slug>` line. A switcher menu when the account has more than
-    /// one org; otherwise a plain caption.
-    @ViewBuilder
     private func orgPicker(current: String) -> some View {
-        if orgs.count > 1 {
+        switcher(label: "org · \(current)", items: orgs, name: { $0.name }, active: { $0.active }) {
+            org in Task { await switchOrg(org.slug) }
+        }
+    }
+
+    private func profilePicker(current: String) -> some View {
+        switcher(label: "profile · \(current)", items: profiles, name: { $0.name }, active: { $0.active }) {
+            profile in Task { await switchProfile(profile.name) }
+        }
+    }
+
+    /// A caption-styled dropdown for switching between `items` (org or profile).
+    /// Falls back to a plain caption when there's only one choice. Shared so both
+    /// switchers render identically.
+    @ViewBuilder
+    private func switcher<Item: Identifiable>(
+        label: String,
+        items: [Item],
+        name: @escaping (Item) -> String,
+        active: @escaping (Item) -> Bool,
+        select: @escaping (Item) -> Void
+    ) -> some View {
+        if items.count > 1 {
             Menu {
-                ForEach(orgs) { org in
+                ForEach(items) { item in
                     Button {
-                        guard !org.active else { return }
-                        Task { await switchOrg(org.slug) }
+                        guard !active(item) else { return }
+                        select(item)
                     } label: {
-                        if org.active {
-                            Label(org.name, systemImage: "checkmark")
+                        if active(item) {
+                            Label(name(item), systemImage: "checkmark")
                         } else {
-                            Text(org.name)
+                            Text(name(item))
                         }
                     }
                 }
             } label: {
-                Text("org · \(current)")
+                Text(label)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -196,41 +215,7 @@ struct MenuContentView: View {
             .fixedSize()
             .disabled(switching)
         } else {
-            caption("org · \(current)")
-        }
-    }
-
-    /// The `profile · <name>` line. A switcher menu when more than one profile
-    /// is configured; otherwise a plain caption.
-    @ViewBuilder
-    private func profilePicker(current: String) -> some View {
-        if profiles.count > 1 {
-            Menu {
-                ForEach(profiles) { profile in
-                    Button {
-                        guard !profile.active else { return }
-                        Task { await switchProfile(profile.name) }
-                    } label: {
-                        if profile.active {
-                            Label(profile.name, systemImage: "checkmark")
-                        } else {
-                            Text(profile.name)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text("profile · \(current)")
-                    if switching { ProgressView().controlSize(.small) }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .disabled(switching)
-        } else {
-            caption("profile · \(current)")
+            caption(label)
         }
     }
 
