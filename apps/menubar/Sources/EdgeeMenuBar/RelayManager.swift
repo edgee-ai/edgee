@@ -43,20 +43,6 @@ struct RelayTarget: Identifiable {
     ]
 }
 
-/// A CLI coding agent launchable via `edgee launch <id>` (opens in Terminal).
-struct AgentTarget: Identifiable {
-    let id: String
-    let name: String
-
-    static let all: [AgentTarget] = [
-        AgentTarget(id: "claude", name: "Claude Code"),
-        AgentTarget(id: "codex", name: "Codex"),
-        AgentTarget(id: "opencode", name: "OpenCode"),
-        AgentTarget(id: "crush", name: "Crush"),
-        AgentTarget(id: "codebuddy", name: "CodeBuddy"),
-    ]
-}
-
 enum RelayRunState: Equatable {
     case stopped
     case starting
