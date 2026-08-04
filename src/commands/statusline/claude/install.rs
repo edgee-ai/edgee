@@ -35,6 +35,13 @@ pub struct Options {
     /// Skip the user-level statusLine; only install the SessionStart hook.
     #[arg(long)]
     pub skip_statusline: bool,
+
+    /// Set when we run ourselves (first-run auto-install inside `edgee
+    /// launch`) rather than because the user typed `install`. Nothing to
+    /// change means nothing to say — don't print a report the user never
+    /// asked for right before an agent starts.
+    #[arg(skip)]
+    pub implicit: bool,
 }
 
 const HOOK_COMMAND: &str = "edgee statusline claude doctor --warn-only";
@@ -65,10 +72,9 @@ pub async fn run(opts: Options) -> Result<()> {
     cleanup_legacy_wrapper_scripts();
 
     if changes.is_empty() {
-        println!(
-            "  {} Edgee is already installed at user level — nothing to do.",
-            style("✓").green(),
-        );
+        if !opts.implicit {
+            report_no_op(&value, &opts, &path);
+        }
         return Ok(());
     }
 
@@ -83,6 +89,76 @@ pub async fn run(opts: Options) -> Result<()> {
         style("→").dim(),
     );
     Ok(())
+}
+
+/// Nothing was written — say *why* rather than a bare "already installed".
+/// Both no-op paths land here: everything Edgee wants is already in place, and
+/// "you have your own statusLine, which we never override". Those are very
+/// different states for the user, so spell out what is actually effective.
+fn report_no_op(value: &Value, opts: &Options, path: &std::path::Path) {
+    let sl = statusline_state(value);
+
+    println!(
+        "  {} No changes needed in {}",
+        style("✓").green(),
+        path.display(),
+    );
+
+    if opts.skip_statusline {
+        println!("    • statusLine — skipped (--skip-statusline)");
+    } else {
+        match &sl {
+            StatuslineState::Edgee => println!("    • statusLine → {STATUSLINE_COMMAND}"),
+            StatuslineState::Foreign(cmd) => {
+                println!("    • statusLine → {cmd} (yours — Edgee never overrides it)")
+            }
+            StatuslineState::ForeignOpaque => {
+                println!("    • statusLine → your own config (Edgee never overrides it)")
+            }
+        }
+    }
+
+    if opts.skip_hook {
+        println!("    • SessionStart hook — skipped (--skip-hook)");
+    } else {
+        println!("    • SessionStart hook → {HOOK_COMMAND}");
+    }
+
+    println!();
+    match sl {
+        StatuslineState::Edgee => println!(
+            "  {} Run `edgee statusline claude doctor` in any project to check for statusLine conflicts.",
+            style("→").dim(),
+        ),
+        _ if opts.skip_statusline => {}
+        _ => println!(
+            "  {} Edgee's statusline is not rendering at user level. Run `edgee statusline claude fix` in a project to overlay it on top of yours.",
+            style("→").dim(),
+        ),
+    }
+}
+
+enum StatuslineState {
+    /// `statusLine.command` is Edgee's renderer.
+    Edgee,
+    /// The user configured their own command — we left it alone.
+    Foreign(String),
+    /// A `statusLine` exists but isn't a command we can name.
+    ForeignOpaque,
+}
+
+fn statusline_state(value: &Value) -> StatuslineState {
+    match value
+        .get("statusLine")
+        .map(|sl| claude_settings::status_line_command(sl))
+    {
+        Some(Some(cmd)) if cmd == STATUSLINE_COMMAND => StatuslineState::Edgee,
+        Some(Some(cmd)) => StatuslineState::Foreign(cmd.to_string()),
+        Some(None) => StatuslineState::ForeignOpaque,
+        // No `statusLine` at all can only happen with --skip-statusline; the
+        // caller doesn't print the statusline line in that case.
+        None => StatuslineState::ForeignOpaque,
+    }
 }
 
 fn install_statusline(value: &mut Value) -> Result<bool> {
@@ -302,6 +378,7 @@ mod tests {
         run(Options {
             skip_hook: false,
             skip_statusline: false,
+            implicit: false,
         })
         .await
         .unwrap();
@@ -335,6 +412,7 @@ mod tests {
         run(Options {
             skip_hook: true,
             skip_statusline: false,
+            implicit: false,
         })
         .await
         .unwrap();
@@ -398,6 +476,7 @@ mod tests {
         run(Options {
             skip_hook: false,
             skip_statusline: true,
+            implicit: false,
         })
         .await
         .unwrap();
