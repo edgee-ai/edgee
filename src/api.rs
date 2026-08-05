@@ -65,6 +65,12 @@ pub struct ApiKeyItem {
     /// Models the key reroutes requests to (empty when no reroute is configured).
     #[serde(default)]
     pub reroutes: Vec<ModelRoute>,
+    /// Effective byok_only (org > squad > key resolved server-side): when true,
+    /// the gateway only routes this key through the org's/user's own BYOK
+    /// provider keys and rejects requests for models with no matching
+    /// credentials. Absent/false means no such restriction.
+    #[serde(default)]
+    pub byok_only: bool,
 }
 
 /// Compression techniques to apply to a coding-agent key. Each flag maps to a
