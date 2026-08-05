@@ -203,7 +203,13 @@ fn byok_provider_set(keys: &[ProviderKey]) -> HashSet<String> {
 }
 
 /// Folds a (possibly regional) provider key to its BYOK base provider.
+/// `bedrock-mantle` is a distinct provider from `bedrock` (separate endpoint),
+/// so it folds to its own base rather than into `bedrock` — checked first since
+/// `bedrock-mantle_<region>` would not otherwise match the `bedrock_` prefix.
 fn resolve_provider_base(provider: &str) -> String {
+    if provider.starts_with("bedrock-mantle_") {
+        return "bedrock-mantle".to_string();
+    }
     if provider.starts_with("bedrock_") {
         return "bedrock".to_string();
     }
@@ -835,6 +841,10 @@ mod tests {
                 active: true,
             },
             ProviderKey {
+                provider: "bedrock-mantle_us-east-1".to_string(),
+                active: true,
+            },
+            ProviderKey {
                 provider: "azure_westus".to_string(),
                 active: true,
             },
@@ -845,6 +855,9 @@ mod tests {
         ];
         let set = byok_provider_set(&keys);
         assert!(set.contains("bedrock"));
+        // bedrock-mantle is a distinct provider from bedrock, not a region of it.
+        assert!(set.contains("bedrock-mantle"));
+        assert!(!set.contains("bedrock-mantle_us-east-1"));
         assert!(set.contains("azure"));
         assert!(!set.contains("openai")); // inactive key dropped
     }
