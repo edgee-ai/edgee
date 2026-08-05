@@ -128,19 +128,26 @@ impl From<&crate::api::ApiKeyItem> for CurrentSettings {
     }
 }
 
-/// A selectable routing target. `featured` models (plan-covered) form the short
-/// list shown first; the rest of the active catalog is reachable behind
-/// "+ More models…".
+/// A selectable routing target. `featured` models form the short list shown
+/// first; the rest of the active catalog is reachable behind "+ More models…".
+/// Featured normally means plan-covered, but under `byok_only` every surviving
+/// choice is featured — there's nothing else to propose, so it shouldn't hide
+/// behind "+ More models…".
 struct RouteChoice {
     /// Display label, e.g. `Kimi K2.7 Turbo (kimi-k2.7-turbo)`.
     label: String,
     /// Identifier sent to the API.
     identifier: String,
-    /// Plan-covered model — shown in the short list.
+    /// Shown in the short list rather than requiring "+ More models…".
     featured: bool,
     /// Turbo variant — surfaced first within the short list.
     turbo: bool,
-    /// Reachable via one of the user's BYOK keys — tagged in the menu.
+    /// Included in the org's Edgee plan — billing tag "· plan". Independent of
+    /// `featured`: under byok_only a model can be featured without being
+    /// plan-covered.
+    plan_covered: bool,
+    /// Reachable via one of the user's BYOK keys — billing tag "· your key"
+    /// when not plan-covered.
     byok: bool,
 }
 
@@ -148,7 +155,7 @@ impl RouteChoice {
     /// Menu label annotated with how the model bills: included in the plan, billed
     /// to the user's own BYOK key, or charged against Edgee credits.
     fn menu_label(&self) -> String {
-        let tag = if self.featured {
+        let tag = if self.plan_covered {
             style("· plan").green()
         } else if self.byok {
             style("· your key").magenta()
@@ -174,7 +181,9 @@ impl RouteChoice {
 /// credentials, so such models are dropped here too rather than offered as a
 /// route that would fail. Plan coverage no longer applies once byok_only forces
 /// every request through the user's own keys, so every surviving choice is
-/// tagged BYOK instead of plan.
+/// tagged BYOK instead of plan — and, since there's nothing else to propose,
+/// every surviving choice is also featured (short-listed) rather than buried
+/// behind "+ More models…".
 fn route_choices(
     models: &[GatewayModel],
     byok_providers: &HashSet<String>,
@@ -193,15 +202,18 @@ fn route_choices(
                 } else {
                     format!("{} ({})", m.display_name, identifier)
                 };
-                let featured = m.plan_fallback && !byok_only;
+                let plan_covered = m.plan_fallback && !byok_only;
                 RouteChoice {
                     label,
                     identifier,
-                    featured,
+                    // Plan-covered models are short-listed normally; under
+                    // byok_only everything left has already been filtered down
+                    // to BYOK-reachable models, so short-list all of them.
+                    featured: byok_only || plan_covered,
                     turbo,
-                    // BYOK is shown only for non-plan models; plan coverage wins,
-                    // unless byok_only forces every surviving choice through BYOK.
-                    byok: !featured && (byok_only || model_uses_byok(m, byok_providers)),
+                    plan_covered,
+                    // BYOK is shown only for non-plan models; plan coverage wins.
+                    byok: !plan_covered && model_uses_byok(m, byok_providers),
                 }
             })
         })
@@ -898,9 +910,23 @@ mod tests {
         let byok: HashSet<String> = ["openai".to_string()].into_iter().collect();
         let models = vec![mk(true, "PlanAndKey", &["pk-1"], &["openai"], true)];
         let choices = route_choices(&models, &byok, true);
-        assert!(!choices[0].featured);
+        assert!(!choices[0].plan_covered);
         assert!(choices[0].byok);
         assert!(choices[0].menu_label().contains("· your key"));
+    }
+
+    #[test]
+    fn byok_only_short_lists_every_surviving_choice() {
+        // Nothing else is offered under byok_only, so surviving models should be
+        // proposed directly instead of buried behind "+ More models…".
+        let byok: HashSet<String> = ["openai".to_string()].into_iter().collect();
+        let models = vec![
+            mk(true, "One", &["oss-1"], &["openai"], false),
+            mk(true, "Two", &["oss-2"], &["openai"], false),
+        ];
+        let choices = route_choices(&models, &byok, true);
+        assert_eq!(choices.len(), 2);
+        assert!(choices.iter().all(|c| c.featured));
     }
 
     #[test]
