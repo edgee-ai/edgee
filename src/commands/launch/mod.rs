@@ -41,13 +41,42 @@ enum Command {
     CopilotVscode(copilot_vscode::Options),
 }
 
+impl Command {
+    /// The target's own name, as `edgee relay` and the config keys spell it.
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Claude(_) => "claude",
+            Self::Codex(_) => "codex",
+            Self::OpenCode(_) => "opencode",
+            Self::CodeBuddy(_) => "codebuddy",
+            Self::Crush(_) => "crush",
+            Self::Cursor(_) => "cursor",
+            Self::CopilotVscode(_) => "copilot-vscode",
+        }
+    }
+}
+
 #[derive(Debug, clap::Parser)]
 pub struct Options {
+    /// Launch through a local relay (MITM) proxy — same as `edgee relay <target>`.
+    ///
+    /// Deliberately declared here, before the target, and NOT as a clap `global`
+    /// arg: everything after the target name belongs to the agent. A flag that
+    /// sits on the target would win against its passthrough whenever the user
+    /// puts it first, silently stealing an identically-named agent flag — which
+    /// is what `-p/--profile` used to do to Claude Code's `-p/--print`.
+    #[arg(long)]
+    relay: bool,
+
     #[command(subcommand)]
     command: Command,
 }
 
 pub async fn run(opts: Options) -> anyhow::Result<()> {
+    if opts.relay {
+        return crate::commands::relay::run_for_agent(opts.command.name()).await;
+    }
+
     match opts.command {
         Command::Claude(o) => claude::run(o).await,
         Command::CodeBuddy(o) => codebuddy::run(o).await,
@@ -212,4 +241,56 @@ async fn fetch_stats(
         .ok_or_else(|| anyhow::anyhow!("no org selected"))?;
     let client = crate::api::ApiClient::new(token)?;
     client.get_session_stats(org_id, session_id).await
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    fn claude_args(argv: &[&str]) -> Vec<String> {
+        let opts = crate::Options::try_parse_from(argv).expect("parses");
+        assert!(
+            opts.profile.is_none(),
+            "edgee consumed a flag meant for the agent: {argv:?}"
+        );
+        match opts.command {
+            crate::commands::Command::Launch(launch) => {
+                assert!(!launch.relay, "edgee consumed --relay from the passthrough");
+                match launch.command {
+                    Command::Claude(c) => c.args,
+                    other => panic!("wrong target: {other:?}"),
+                }
+            }
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
+    // The invariant: everything after the target name belongs to the agent. Any
+    // edgee flag that is also live on the target wins against the passthrough
+    // when the user puts it first, silently swallowing the agent's own flag of
+    // that name — `-p/--profile` did exactly that to Claude Code's `-p/--print`,
+    // turning `claude -p "my prompt"` into a switch to a profile named
+    // "my prompt". Keep edgee's flags ahead of the target, never `global`.
+    #[test]
+    fn edgee_flags_do_not_shadow_agent_flags() {
+        for flag in ["-p", "--profile", "--relay"] {
+            assert_eq!(
+                claude_args(&["edgee", "launch", "claude", flag, "my prompt"]),
+                [flag, "my prompt"],
+            );
+        }
+    }
+
+    #[test]
+    fn edgee_flags_still_work_ahead_of_the_target() {
+        let opts = crate::Options::try_parse_from(["edgee", "-p", "dev", "launch", "claude"])
+            .expect("parses");
+        assert_eq!(opts.profile.as_deref(), Some("dev"));
+
+        let opts = Options::try_parse_from(["launch", "--relay", "claude"]).expect("parses");
+        assert!(opts.relay);
+        assert_eq!(opts.command.name(), "claude");
+    }
 }

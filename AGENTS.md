@@ -25,7 +25,11 @@ Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
 - `edgee reset` — clears credentials.
 - `edgee update` — compiled in only under the `self-update` feature.
 
-Root flag: `-p/--profile` overrides the active profile. It must come **before** the subcommand (`edgee -p dev launch claude`) — deliberately not a clap `global` arg, so `launch`'s passthrough keeps a clean argv and `-p` reaches the agent (`edgee launch claude -p "prompt"` is Claude Code's `--print`).
+Root flag: `-p/--profile` overrides the active profile. It must come **before** the subcommand (`edgee -p dev launch claude`).
+
+**Argv rule for `launch`: everything after the target name belongs to the agent.** Edgee's own flags go *ahead* of the target (`edgee -p dev launch --relay claude`) and are never clap `global` args. A flag declared on the target wins against its `trailing_var_arg` passthrough whenever the user puts it first, silently swallowing an identically-named agent flag — `-p/--profile` used to do this to Claude Code's `-p/--print`, turning `claude -p "my prompt"` into a switch to a profile named "my prompt". Pinned by `edgee_flags_do_not_shadow_agent_flags` in `src/commands/launch/mod.rs`.
+
+Injected agent flags have a matching hazard: pass any flag the agent declares **variadic** as `--flag=value`, never `--flag value`, or it consumes the user's trailing args (see `mcp_injection_args` in `src/commands/launch/claude.rs`).
 
 ## Development Commands
 
