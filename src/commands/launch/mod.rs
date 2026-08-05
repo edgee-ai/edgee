@@ -283,6 +283,25 @@ mod tests {
         }
     }
 
+    // Both at once: edgee's `-p` ahead of the target and the agent's own `-p`
+    // after it. This is the combination `global = true` made unrepresentable.
+    #[test]
+    fn edgee_and_agent_can_both_use_dash_p() {
+        let opts = crate::Options::try_parse_from([
+            "edgee", "-p", "staging", "launch", "claude", "-p", "my prompt",
+        ])
+        .expect("parses");
+        assert_eq!(opts.profile.as_deref(), Some("staging"));
+
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::Claude(c) => assert_eq!(c.args, ["-p", "my prompt"]),
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
     #[test]
     fn edgee_flags_still_work_ahead_of_the_target() {
         let opts = crate::Options::try_parse_from(["edgee", "-p", "dev", "launch", "claude"])
