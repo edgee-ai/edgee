@@ -9,6 +9,10 @@ use super::util;
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
+    /// Launch through a local relay (MITM) proxy — same as `edgee relay claude`.
+    #[arg(long)]
+    pub relay: bool,
+
     /// Extra args passed through to the claude CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
@@ -17,11 +21,8 @@ pub struct Options {
 const EDGEE_ALLOWED_TOOLS: &str = "mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitRepo";
 
 pub async fn run(opts: Options) -> Result<()> {
-    // `--relay` moved ahead of the target so the passthrough stays clean. Claude
-    // Code has no such flag, so the old spelling would reach it and fail with a
-    // bare "unknown option" — name the actual fix instead.
-    if opts.args.first().is_some_and(|a| a == "--relay") {
-        anyhow::bail!("`--relay` now goes before the target: `edgee launch --relay claude`");
+    if opts.relay {
+        return crate::commands::relay::run_for_agent("claude").await;
     }
 
     let mut creds = crate::config::read()?;
