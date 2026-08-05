@@ -25,7 +25,7 @@ Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
 - `edgee reset` — clears credentials.
 - `edgee update` — compiled in only under the `self-update` feature.
 
-Global flag: `-p/--profile` overrides the active profile.
+Root flag: `-p/--profile` overrides the active profile. It must come **before** the subcommand (`edgee -p dev launch claude`) — deliberately not a clap `global` arg, so `launch`'s passthrough keeps a clean argv and `-p` reaches the agent (`edgee launch claude -p "prompt"` is Claude Code's `--print`).
 
 ## Development Commands
 

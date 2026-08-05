@@ -13,7 +13,7 @@ mod version_check;
 #[command(name = "edgee", about = "Edgee CLI", version)]
 struct Options {
     /// Profile to use
-    #[arg(long, short = 'p', global = true)]
+    #[arg(long, short = 'p')]
     profile: Option<String>,
 
     #[command(subcommand)]
