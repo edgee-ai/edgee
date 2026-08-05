@@ -213,3 +213,81 @@ async fn fetch_stats(
     let client = crate::api::ApiClient::new(token)?;
     client.get_session_stats(org_id, session_id).await
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    fn claude_args(argv: &[&str]) -> Vec<String> {
+        let opts = crate::Options::try_parse_from(argv).expect("parses");
+        assert!(
+            opts.profile.is_none(),
+            "edgee consumed a flag meant for the agent: {argv:?}"
+        );
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::Claude(c) => c.args,
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
+    // The invariant: everything after the target name belongs to the agent. An
+    // edgee flag that is also live on the target wins against the passthrough
+    // when the user puts it first, silently swallowing the agent's own flag of
+    // that name — `-p/--profile` did exactly that to Claude Code's `-p/--print`,
+    // turning `claude -p "my prompt"` into a switch to a profile named
+    // "my prompt". So: keep edgee's flags off the targets, and never `global`.
+    //
+    // `--relay` is the one exception still declared on a target (claude), which
+    // is safe only because Claude Code has no flag of that name. The shims pass
+    // `--` before the agent's args, so even that one cannot be shadowed there.
+    #[test]
+    fn edgee_flags_do_not_shadow_agent_flags() {
+        for flag in ["-p", "--profile"] {
+            assert_eq!(
+                claude_args(&["edgee", "launch", "claude", flag, "my prompt"]),
+                [flag, "my prompt"],
+            );
+        }
+    }
+
+    // Both at once: edgee's `-p` ahead of the target and the agent's own `-p`
+    // after it. This is the combination `global = true` made unrepresentable.
+    #[test]
+    fn edgee_and_agent_can_both_use_dash_p() {
+        let opts = crate::Options::try_parse_from([
+            "edgee", "-p", "staging", "launch", "claude", "-p", "my prompt",
+        ])
+        .expect("parses");
+        assert_eq!(opts.profile.as_deref(), Some("staging"));
+
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::Claude(c) => assert_eq!(c.args, ["-p", "my prompt"]),
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
+    // The `--` the shims emit is consumed by clap, not forwarded to the agent.
+    #[test]
+    fn shim_separator_is_not_forwarded_to_the_agent() {
+        assert_eq!(claude_args(&["edgee", "launch", "claude", "--"]), [] as [String; 0]);
+        assert_eq!(
+            claude_args(&["edgee", "launch", "claude", "--", "-p", "my prompt"]),
+            ["-p", "my prompt"],
+        );
+    }
+
+    #[test]
+    fn edgee_flags_still_work_ahead_of_the_target() {
+        let opts = crate::Options::try_parse_from(["edgee", "-p", "dev", "launch", "claude"])
+            .expect("parses");
+        assert_eq!(opts.profile.as_deref(), Some("dev"));
+    }
+}

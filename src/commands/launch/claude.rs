@@ -1,3 +1,6 @@
+use std::ffi::OsString;
+use std::path::Path;
+
 use anyhow::Result;
 use console::style;
 
@@ -14,6 +17,8 @@ pub struct Options {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
+
+const EDGEE_ALLOWED_TOOLS: &str = "mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitRepo";
 
 pub async fn run(opts: Options) -> Result<()> {
     if opts.relay {
@@ -127,19 +132,16 @@ pub async fn run(opts: Options) -> Result<()> {
     let use_mcp = wants_mcp && !mcp_disabled;
     if use_mcp {
         let mcp_config_path = write_mcp_config(&creds)?;
-        cmd.arg("--mcp-config").arg(&mcp_config_path);
         let session_url = match creds.org_slug.as_deref() {
             Some(slug) if !slug.is_empty() => {
                 format!("{}/sessions/{slug}/{session_id}", crate::config::console_base_url())
             }
             _ => format!("{}/sessions/{session_id}", crate::config::console_base_url()),
         };
-        cmd.arg("--append-system-prompt").arg(system_prompt(
-            &session_id,
-            repo_origin.as_deref(),
-            &session_url,
+        cmd.args(mcp_injection_args(
+            &mcp_config_path,
+            &system_prompt(&session_id, repo_origin.as_deref(), &session_url),
         ));
-        cmd.arg("--allowedTools").arg("mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitRepo");
     }
 
     cmd.args(&opts.args);
@@ -161,6 +163,28 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Flags that wire the Edgee MCP server into a session.
+///
+/// `--mcp-config <configs...>` and `--allowedTools <tools...>` are **variadic**
+/// in Claude Code, so they are passed as `--flag=value`. Separated by a space,
+/// commander keeps consuming every following non-flag arg as another value and
+/// eats whatever the user appended — their prompt (`claude "fix this"` starts an
+/// empty session) or a subcommand (`claude mcp add --transport http …` fails with
+/// "unknown option '--transport'", because `--transport` then lands on the root
+/// parser). `--append-system-prompt` takes a single value and is safe as a pair.
+fn mcp_injection_args(config_path: &Path, system_prompt: &str) -> Vec<OsString> {
+    // Built as OsString rather than formatted: config_path need not be UTF-8.
+    let mut mcp_config = OsString::from("--mcp-config=");
+    mcp_config.push(config_path);
+
+    vec![
+        mcp_config,
+        OsString::from("--append-system-prompt"),
+        OsString::from(system_prompt),
+        OsString::from(format!("--allowedTools={EDGEE_ALLOWED_TOOLS}")),
+    ]
 }
 
 /// Writes an MCP config file to the Edgee config directory with the user's auth token.
@@ -213,4 +237,44 @@ You MUST use the following Edgee MCP tools during this session:
     }
 
     prompt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Claude Code's `--mcp-config <configs...>` and `--allowedTools <tools...>`
+    // are variadic: passed as `--flag value`, commander swallows every following
+    // non-flag arg. Since the user's own args are appended after these, a space
+    // separator eats their prompt (`claude "fix this"` → empty session) or their
+    // subcommand (`claude mcp add --transport http …` → the subcommand is eaten
+    // and `--transport` errors on the root parser). `=` stops the swallowing.
+    #[test]
+    fn variadic_injected_flags_use_equals_form() {
+        let injected = mcp_injection_args(Path::new("/tmp/mcp.json"), "sys prompt");
+
+        assert!(injected.contains(&OsString::from("--mcp-config=/tmp/mcp.json")));
+        assert!(injected
+            .iter()
+            .any(|a| a.to_string_lossy() == format!("--allowedTools={EDGEE_ALLOWED_TOOLS}")));
+        assert!(
+            !injected
+                .iter()
+                .any(|a| a == "--mcp-config" || a == "--allowedTools"),
+            "variadic flags must not be passed as a space-separated pair: {injected:?}"
+        );
+    }
+
+    // Single-valued, so the pair form is safe — and required, since the prompt
+    // is multi-line text we should not have to escape into a `--flag=value`.
+    #[test]
+    fn append_system_prompt_stays_a_separate_value_arg() {
+        let injected = mcp_injection_args(Path::new("/tmp/mcp.json"), "sys prompt");
+        let at = injected
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .expect("flag present");
+
+        assert_eq!(injected[at + 1], OsString::from("sys prompt"));
+    }
 }

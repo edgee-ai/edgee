@@ -20,11 +20,19 @@ const SHIM_DIR_REL: &str = ".edgee/bin";
 // name — alias + shim-on-PATH double-wraps the launch.
 const USES_SHIMS: bool = cfg!(unix);
 
-const CLAUDE_ALIAS: AliasSpec = AliasSpec::new("claude", "edgee launch claude");
-const CODEBUDDY_ALIAS: AliasSpec = AliasSpec::new("codebuddy", "edgee launch codebuddy");
-const CODEX_ALIAS: AliasSpec = AliasSpec::new("codex", "edgee launch codex");
-const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch opencode");
-const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush");
+// Each launch command ends in `--` so the agent's args can never be mistaken
+// for Edgee's. Without it, an Edgee flag that shares a name with an agent flag
+// wins against the passthrough whenever the user puts it first — `claude -p
+// "my prompt"` used to switch to a profile named "my prompt". Edgee's own flags
+// go ahead of the target and are never clap `global` args, which fixes that at
+// the parser; the separator makes the shim path immune regardless. clap eats the
+// first `--` and passes any later one through, so agents that take their own
+// `--` still work.
+const CLAUDE_ALIAS: AliasSpec = AliasSpec::new("claude", "edgee launch claude --");
+const CODEBUDDY_ALIAS: AliasSpec = AliasSpec::new("codebuddy", "edgee launch codebuddy --");
+const CODEX_ALIAS: AliasSpec = AliasSpec::new("codex", "edgee launch codex --");
+const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch opencode --");
+const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush --");
 
 const ALL_ALIASES: [AliasSpec; 5] = [
     CLAUDE_ALIAS,
@@ -619,12 +627,12 @@ mod tests {
     #[test]
     fn alias_block_has_no_path_export() {
         let posix = render_alias_block(&ALL_ALIASES, ShellSyntax::Posix);
-        assert!(posix.contains("alias claude='edgee launch claude'"));
-        assert!(posix.contains("alias codex='edgee launch codex'"));
+        assert!(posix.contains("alias claude='edgee launch claude --'"));
+        assert!(posix.contains("alias codex='edgee launch codex --'"));
         assert!(!posix.contains("$HOME/.edgee/bin"));
 
         let fish = render_alias_block(&ALL_ALIASES, ShellSyntax::Fish);
-        assert!(fish.contains("alias claude 'edgee launch claude'"));
+        assert!(fish.contains("alias claude 'edgee launch claude --'"));
         assert!(!fish.contains("$HOME/.edgee/bin"));
     }
 
@@ -659,9 +667,9 @@ mod tests {
         let initial = render_alias_block(&ALL_ALIASES, ShellSyntax::Posix);
         let updated =
             subtract_aliases_from_text(&initial, &codex_only(), ShellSyntax::Posix).unwrap();
-        assert!(updated.contains("alias claude='edgee launch claude'"));
-        assert!(updated.contains("alias opencode='edgee launch opencode'"));
-        assert!(!updated.contains("alias codex='edgee launch codex'"));
+        assert!(updated.contains("alias claude='edgee launch claude --'"));
+        assert!(updated.contains("alias opencode='edgee launch opencode --'"));
+        assert!(!updated.contains("alias codex='edgee launch codex --'"));
     }
 
     #[test]
@@ -698,8 +706,8 @@ mod tests {
 
     #[test]
     fn block_contains_alias_detects_posix_and_fish() {
-        let posix = "alias claude='edgee launch claude'\n";
-        let fish = "alias claude 'edgee launch claude'\n";
+        let posix = "alias claude='edgee launch claude --'\n";
+        let fish = "alias claude 'edgee launch claude --'\n";
         assert!(block_contains_alias(posix, "claude"));
         assert!(block_contains_alias(fish, "claude"));
         assert!(!block_contains_alias(posix, "codex"));
@@ -716,7 +724,8 @@ mod tests {
 
         let shim = dir.join("claude");
         let body = std::fs::read_to_string(&shim).unwrap();
-        assert!(body.contains("exec edgee launch claude \"$@\""));
+        // The `--` guards the agent's args against Edgee's own flags.
+        assert!(body.contains("exec edgee launch claude -- \"$@\""));
 
         let mode = std::fs::metadata(&shim).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755);
