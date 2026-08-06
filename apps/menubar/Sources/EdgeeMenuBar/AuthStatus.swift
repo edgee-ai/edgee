@@ -1,7 +1,16 @@
 import Foundation
 
-/// Decoded from `edgee auth status --json`. Mirrors `AuthStatusJson` in the CLI
-/// (crates/cli/src/commands/auth/status.rs).
+// These mirror the CLI's `--json` output. Decoding uses
+// JSONDecoder.keyDecodingStrategy = .convertFromSnakeCase (see EdgeeCLI), so
+// snake_case JSON fields map onto these camelCase properties automatically — no
+// CodingKeys needed. The CLI's contract tests (crates/cli/src/commands/auth/*)
+// guard the field names against drift.
+//
+// Caveat: `.convertFromSnakeCase` also transforms *dictionary* keys, so the keys
+// of `AuthStatus.providers` (claude/codex/opencode/crush) must stay
+// underscore-free.
+
+/// Decoded from `edgee auth status --json`.
 struct AuthStatus: Codable {
     let loggedIn: Bool
     let profile: String
@@ -9,15 +18,6 @@ struct AuthStatus: Codable {
     let email: String?
     let orgSlug: String?
     let providers: [String: ProviderStatus]
-
-    enum CodingKeys: String, CodingKey {
-        case loggedIn = "logged_in"
-        case profile
-        case configPath = "config_path"
-        case email
-        case orgSlug = "org_slug"
-        case providers
-    }
 }
 
 struct ProviderStatus: Codable {
@@ -33,11 +33,6 @@ struct Profile: Codable, Identifiable {
     let orgSlug: String?
 
     var id: String { name }
-
-    enum CodingKeys: String, CodingKey {
-        case name, active, email
-        case orgSlug = "org_slug"
-    }
 }
 
 /// One entry from `edgee auth orgs --json` (`OrgEntry` in the CLI).
@@ -48,18 +43,10 @@ struct Org: Codable, Identifiable {
     let active: Bool
 }
 
-/// Decoded from `edgee auth login --non-interactive --json` (`LoginOutcome` in
-/// crates/cli/src/commands/auth/login.rs).
+/// Decoded from `edgee auth login --non-interactive --json` (`LoginOutcome`).
 struct LoginOutcome: Codable {
     let loggedIn: Bool
     let email: String?
     let orgSlug: String?
     let needsOrgSelection: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case loggedIn = "logged_in"
-        case email
-        case orgSlug = "org_slug"
-        case needsOrgSelection = "needs_org_selection"
-    }
 }

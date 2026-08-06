@@ -1,6 +1,7 @@
 import Foundation
 
 /// Decoded from `edgee stats --json` (`StatsJson` in crates/cli/src/commands/stats.rs).
+/// Field names come across via `.convertFromSnakeCase` (see EdgeeCLI) — no CodingKeys.
 struct Stats: Codable {
     let sessions: Int
     let totals: Totals
@@ -15,16 +16,6 @@ struct Stats: Codable {
         let uncompressedToolsTokens: UInt64
         let compressedToolsTokens: UInt64
         let compressionPct: UInt64?
-
-        enum CodingKeys: String, CodingKey {
-            case requests, errors
-            case inputTokens = "input_tokens"
-            case outputTokens = "output_tokens"
-            case tokenCostSavings = "token_cost_savings"
-            case uncompressedToolsTokens = "uncompressed_tools_tokens"
-            case compressedToolsTokens = "compressed_tools_tokens"
-            case compressionPct = "compression_pct"
-        }
     }
 
     struct SessionBrief: Codable, Identifiable {
@@ -40,18 +31,6 @@ struct Stats: Codable {
         let logsUrl: String
 
         var id: String { sessionId }
-
-        enum CodingKeys: String, CodingKey {
-            case sessionId = "session_id"
-            case toolName = "tool_name"
-            case endedAt = "ended_at"
-            case endedAtUnix = "ended_at_unix"
-            case requests, errors
-            case inputTokens = "input_tokens"
-            case outputTokens = "output_tokens"
-            case compressionPct = "compression_pct"
-            case logsUrl = "logs_url"
-        }
     }
 }
 

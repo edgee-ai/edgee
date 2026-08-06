@@ -33,28 +33,42 @@ enum EdgeeCLI {
         "/bin",
     ]
 
-    /// Fetch auth status via `edgee auth status --json`. Runs off the main actor.
-    static func authStatus() async -> AuthStatus? {
+    /// Decoder for every `--json` command. `.convertFromSnakeCase` maps the CLI's
+    /// snake_case fields onto our camelCase models, so the model structs need no
+    /// `CodingKeys`. (Note: this strategy also converts dictionary keys — see
+    /// AuthStatus.providers.)
+    private static let jsonDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }()
+
+    /// Run an edgee `--json` command off the main actor and decode its stdout.
+    /// Returns nil if the command failed to run/exited non-zero or didn't decode.
+    private static func runJSON<T: Decodable>(_ args: [String]) async -> T? {
         await Task.detached(priority: .userInitiated) {
-            guard let data = capture(["auth", "status", "--json"]) else { return nil }
-            return try? JSONDecoder().decode(AuthStatus.self, from: data)
+            capture(args).flatMap { try? jsonDecoder.decode(T.self, from: $0) }
         }.value
     }
 
-    /// Fetch aggregated stats via `edgee stats --json`. Runs off the main actor.
+    /// Auth status via `edgee auth status --json`.
+    static func authStatus() async -> AuthStatus? { await runJSON(["auth", "status", "--json"]) }
+
+    /// Aggregated stats via `edgee stats --json`.
     static func stats(limit: Int = 20) async -> Stats? {
-        await Task.detached(priority: .userInitiated) {
-            guard let data = capture(["stats", "--json", "--limit", "\(limit)"]) else { return nil }
-            return try? JSONDecoder().decode(Stats.self, from: data)
-        }.value
+        await runJSON(["stats", "--json", "--limit", "\(limit)"])
     }
 
-    /// List configured profiles via `edgee auth list --json`.
-    static func profiles() async -> [Profile] {
-        await Task.detached(priority: .userInitiated) {
-            guard let data = capture(["auth", "list", "--json"]) else { return [] }
-            return (try? JSONDecoder().decode([Profile].self, from: data)) ?? []
-        }.value
+    /// Configured profiles via `edgee auth list --json`.
+    static func profiles() async -> [Profile] { await runJSON(["auth", "list", "--json"]) ?? [] }
+
+    /// The account's organizations via `edgee auth orgs --json` (network).
+    static func orgs() async -> [Org] { await runJSON(["auth", "orgs", "--json"]) ?? [] }
+
+    /// Headless browser login via `edgee auth login --non-interactive --json`.
+    /// The subprocess opens the browser and blocks until the callback arrives.
+    static func login() async -> LoginOutcome? {
+        await runJSON(["auth", "login", "--non-interactive", "--json"])
     }
 
     /// Switch the active profile via `edgee auth switch <name>`. Returns success.
@@ -65,32 +79,11 @@ enum EdgeeCLI {
         }.value
     }
 
-    /// List the account's organizations via `edgee auth orgs --json` (network).
-    static func orgs() async -> [Org] {
-        await Task.detached(priority: .userInitiated) {
-            guard let data = capture(["auth", "orgs", "--json"]) else { return [] }
-            return (try? JSONDecoder().decode([Org].self, from: data)) ?? []
-        }.value
-    }
-
     /// Switch the active profile's org via `edgee auth orgs --set <id|slug>`.
     @discardableResult
     static func switchOrg(_ idOrSlug: String) async -> Bool {
         await Task.detached(priority: .userInitiated) {
             capture(["auth", "orgs", "--set", idOrSlug]) != nil
-        }.value
-    }
-
-    /// Run the browser login headlessly (no Terminal): `edgee auth login
-    /// --non-interactive --json`. The subprocess opens the browser itself and
-    /// blocks until the callback arrives, so this can take a while — run it off
-    /// the main actor. Returns the decoded outcome, or nil on failure.
-    static func login() async -> LoginOutcome? {
-        await Task.detached(priority: .userInitiated) {
-            guard let data = capture(["auth", "login", "--non-interactive", "--json"]) else {
-                return nil
-            }
-            return try? JSONDecoder().decode(LoginOutcome.self, from: data)
         }.value
     }
 
