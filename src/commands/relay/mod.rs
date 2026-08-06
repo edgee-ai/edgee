@@ -988,6 +988,15 @@ fn spawn_agent(
         let bin = claude_desktop_binary()?;
         let mut c = tokio::process::Command::new(bin);
         c.arg(format!("--proxy-server={proxy_url}"));
+        // Claude Desktop is a Chromium/Electron GUI app; launched from a terminal it
+        // spews a firehose of browser-process logs to stdout/stderr. None of it is
+        // actionable for the relay session, so silence the child's stdio (a GUI app
+        // needs no stdin either). This does NOT touch the relay's own traffic logging,
+        // which happens in the proxy, not the child. The `--wait` editors don't need
+        // this — their CLI shims stay quiet — and TUI agents must keep inherited stdio.
+        c.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .stdin(std::process::Stdio::null());
         c
     } else {
         // GUI editors launch their own binary (VS Code Copilot → `code`, Cursor →
