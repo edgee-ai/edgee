@@ -16,7 +16,14 @@ pub mod profile;
 /// Both map to the same provider key here via `copilot`, which is why this
 /// list uses the bare form.
 const PROVIDERS: &[&str] = &[
-    "claude", "codebuddy", "codex", "opencode", "crush", "cursor", "copilot",
+    "claude",
+    "claude_desktop",
+    "codebuddy",
+    "codex",
+    "opencode",
+    "crush",
+    "cursor",
+    "copilot",
 ];
 
 /// Pseudo-agent value selecting profile-wide (non-agent-specific) settings.

@@ -39,7 +39,14 @@ pub const COPILOT_VSCODE_APP: AppSpec = AppSpec {
     launch_target: "copilot-vscode",
 };
 
-pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, COPILOT_VSCODE_APP];
+pub const CLAUDE_DESKTOP_APP: AppSpec = AppSpec {
+    id: "claude-desktop",
+    display_name: "Claude Desktop (Edgee)",
+    host_label: "Claude Desktop",
+    launch_target: "claude-desktop",
+};
+
+pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, COPILOT_VSCODE_APP, CLAUDE_DESKTOP_APP];
 
 #[derive(Clone, Copy)]
 pub enum Action {
@@ -185,7 +192,24 @@ pub fn target_app_installed(app: &AppSpec) -> bool {
     match app.id {
         "cursor" => cursor_installed(),
         "copilot-vscode" => vscode_installed(),
+        "claude-desktop" => claude_desktop_installed(),
         _ => false,
+    }
+}
+
+fn claude_desktop_installed() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos_app_exists("Claude.app")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_claude_exe().is_some()
+    }
+    // Claude Desktop ships on macOS and Windows only.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        false
     }
 }
 
@@ -294,6 +318,19 @@ fn windows_cursor_exe() -> Option<PathBuf> {
     let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
     let candidate = local.join("Programs/cursor/Cursor.exe");
     candidate.is_file().then_some(candidate)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_claude_exe() -> Option<PathBuf> {
+    // Mirror the launch-side resolver in `commands::relay` so detection and launch
+    // agree: per-user (LOCALAPPDATA) and machine-wide (PROGRAMFILES) installs both.
+    let candidates = [
+        std::env::var_os("LOCALAPPDATA")
+            .map(|a| PathBuf::from(a).join("AnthropicClaude").join("claude.exe")),
+        std::env::var_os("PROGRAMFILES")
+            .map(|a| PathBuf::from(a).join("Claude").join("claude.exe")),
+    ];
+    candidates.into_iter().flatten().find(|p| p.is_file())
 }
 
 #[cfg(target_os = "windows")]
@@ -406,10 +443,11 @@ fn macos_source_icns(app: &AppSpec) -> Option<PathBuf> {
         "cursor" => find_macos_app("Cursor.app")?,
         "copilot-vscode" => find_macos_app("Visual Studio Code.app")
             .or_else(|| find_macos_app("Code - Insiders.app"))?,
+        "claude-desktop" => find_macos_app("Claude.app")?,
         _ => return None,
     };
     let resources = bundle.join("Contents/Resources");
-    for name in ["Cursor.icns", "Code.icns", "app.icns", "electron.icns"] {
+    for name in ["Cursor.icns", "Code.icns", "Claude.icns", "app.icns", "electron.icns"] {
         let p = resources.join(name);
         if p.is_file() {
             return Some(p);

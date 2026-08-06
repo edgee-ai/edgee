@@ -204,6 +204,7 @@ pub async fn ensure_onboarded(provider: &str) -> Result<()> {
 pub fn agent_label(provider: &str) -> &'static str {
     match provider {
         "claude" => "Claude Code",
+        "claude_desktop" => "Claude Desktop",
         "codebuddy" => "CodeBuddy",
         "codex" => "Codex",
         "opencode" => "OpenCode",
@@ -338,6 +339,7 @@ pub async fn fetch_provider_key(provider: &str) -> Result<crate::api::ApiKeyItem
 fn coding_assistant_name(provider: &str) -> Result<&'static str> {
     match provider {
         "claude" => Ok("claude_code"),
+        "claude_desktop" => Ok("claude_desktop"),
         "codebuddy" => Ok("codebuddy"),
         "codex" => Ok("codex"),
         "opencode" => Ok("opencode"),
@@ -354,6 +356,7 @@ fn provider_config_mut<'a>(
 ) -> Result<&'a mut Option<crate::config::ProviderConfig>> {
     match provider {
         "claude" => Ok(&mut creds.claude),
+        "claude_desktop" => Ok(&mut creds.claude_desktop),
         "codebuddy" => Ok(&mut creds.codebuddy),
         "codex" => Ok(&mut creds.codex),
         "opencode" => Ok(&mut creds.opencode),
@@ -370,6 +373,7 @@ fn provider_config<'a>(
 ) -> Result<Option<&'a crate::config::ProviderConfig>> {
     match provider {
         "claude" => Ok(creds.claude.as_ref()),
+        "claude_desktop" => Ok(creds.claude_desktop.as_ref()),
         "codebuddy" => Ok(creds.codebuddy.as_ref()),
         "codex" => Ok(creds.codex.as_ref()),
         "opencode" => Ok(creds.opencode.as_ref()),
@@ -538,6 +542,10 @@ mod tests {
     #[test]
     fn maps_provider_to_coding_assistant_name() {
         assert_eq!(coding_assistant_name("claude").unwrap(), "claude_code");
+        assert_eq!(
+            coding_assistant_name("claude_desktop").unwrap(),
+            "claude_desktop"
+        );
         assert_eq!(coding_assistant_name("codebuddy").unwrap(), "codebuddy");
         assert_eq!(coding_assistant_name("codex").unwrap(), "codex");
         assert_eq!(coding_assistant_name("opencode").unwrap(), "opencode");
@@ -551,6 +559,9 @@ mod tests {
         provider_config_mut(&mut creds, "claude")
             .unwrap()
             .replace(crate::config::ProviderConfig::default());
+        provider_config_mut(&mut creds, "claude_desktop")
+            .unwrap()
+            .replace(crate::config::ProviderConfig::default());
         provider_config_mut(&mut creds, "codebuddy")
             .unwrap()
             .replace(crate::config::ProviderConfig::default());
@@ -562,6 +573,7 @@ mod tests {
             .replace(crate::config::ProviderConfig::default());
 
         assert!(creds.claude.is_some());
+        assert!(creds.claude_desktop.is_some());
         assert!(creds.codebuddy.is_some());
         assert!(creds.codex.is_some());
         assert!(creds.opencode.is_some());
