@@ -41,8 +41,8 @@ struct RelayTarget: Identifiable {
             id: "copilot-vscode", name: "VS Code (Copilot)", symbol: "chevron.left.forwardslash.chevron.right",
             proxyOnly: false, detectPaths: appPaths("Visual Studio Code.app")),
         RelayTarget(
-            id: "claude", name: "Claude Desktop", symbol: "network",
-            proxyOnly: true, detectPaths: appPaths("Claude.app")),
+            id: "claude-desktop", name: "Claude Desktop", symbol: "network",
+            proxyOnly: false, detectPaths: appPaths("Claude.app")),
     ]
 }
 
