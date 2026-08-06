@@ -383,7 +383,7 @@ pub struct ProviderKeyStatus {
 pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStatus> {
     let creds = crate::config::read()?;
 
-    let cached = provider_config(&creds, provider)?;
+    let cached = creds.provider(provider);
     let cached_key_present = cached.is_some_and(|c| !c.api_key.is_empty());
     let cached_key_id = cached.and_then(|c| c.api_key_id.clone());
 
@@ -499,23 +499,6 @@ fn provider_config_mut<'a>(
         "crush" => Ok(&mut creds.crush),
         "copilot" => Ok(&mut creds.copilot),
         "cursor" => Ok(&mut creds.cursor),
-        _ => anyhow::bail!("Unsupported provider `{provider}`"),
-    }
-}
-
-fn provider_config<'a>(
-    creds: &'a crate::config::Credentials,
-    provider: &str,
-) -> Result<Option<&'a crate::config::ProviderConfig>> {
-    match provider {
-        "claude" => Ok(creds.claude.as_ref()),
-        "claude_desktop" => Ok(creds.claude_desktop.as_ref()),
-        "codebuddy" => Ok(creds.codebuddy.as_ref()),
-        "codex" => Ok(creds.codex.as_ref()),
-        "opencode" => Ok(creds.opencode.as_ref()),
-        "crush" => Ok(creds.crush.as_ref()),
-        "copilot" => Ok(creds.copilot.as_ref()),
-        "cursor" => Ok(creds.cursor.as_ref()),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
     }
 }

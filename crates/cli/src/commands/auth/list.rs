@@ -2,6 +2,8 @@ use anyhow::Result;
 use console::style;
 use serde::Serialize;
 
+use crate::commands::util;
+
 setup_command! {
     /// Emit machine-readable JSON instead of the human-readable list.
     #[arg(long)]
@@ -35,8 +37,7 @@ pub async fn run(opts: Options) -> Result<()> {
                 org_slug: profile.org_slug.clone().filter(|s| !s.is_empty()),
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&entries)?);
-        return Ok(());
+        return util::emit_json(&entries);
     }
 
     if file.profiles.is_empty() {
@@ -61,4 +62,24 @@ pub async fn run(opts: Options) -> Result<()> {
     println!();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Guards the field names the menubar app (Profile in AuthStatus.swift) decodes.
+    #[test]
+    fn json_shape_is_stable() {
+        let entry = ProfileEntry {
+            name: "default".into(),
+            active: true,
+            email: Some("a@b.co".into()),
+            org_slug: Some("acme".into()),
+        };
+        let v = serde_json::to_value(&entry).unwrap();
+        for key in ["name", "active", "email", "org_slug"] {
+            assert!(v.get(key).is_some(), "missing `{key}`");
+        }
+    }
 }

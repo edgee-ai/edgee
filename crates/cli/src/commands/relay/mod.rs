@@ -210,13 +210,14 @@ pub async fn run(opts: Options) -> Result<()> {
     }
     creds = crate::config::read()?;
 
-    let api_key = provider_api_key(&creds, &provider).ok_or_else(|| {
-        anyhow::anyhow!("no Edgee API key for '{provider}'; run `edgee auth login`")
-    })?;
+    let api_key = creds
+        .provider_api_key(&provider)
+        .ok_or_else(|| anyhow::anyhow!("no Edgee API key for '{provider}'; run `edgee auth login`"))?
+        .to_string();
     // Only wired for the VS Code relay; None elsewhere so `/v1/messages` keeps using
     // the relay's own key.
     let claude_api_key = if is_copilot_vscode(&agent) {
-        provider_api_key(&creds, "claude")
+        creds.provider_api_key("claude").map(str::to_string)
     } else {
         None
     };
@@ -444,25 +445,6 @@ fn default_port(provider: &str) -> u16 {
         "cursor" => 41300,
         "claude_desktop" => 41400,
         _ => 41100, // claude / copilot / proxy-only
-    }
-}
-
-/// The Edgee key for `provider` from the active profile, if present.
-fn provider_api_key(creds: &crate::config::Credentials, provider: &str) -> Option<String> {
-    let p = match provider {
-        "claude" => creds.claude.as_ref(),
-        "claude_desktop" => creds.claude_desktop.as_ref(),
-        "codex" => creds.codex.as_ref(),
-        "opencode" => creds.opencode.as_ref(),
-        "crush" => creds.crush.as_ref(),
-        "copilot" => creds.copilot.as_ref(),
-        "cursor" => creds.cursor.as_ref(),
-        _ => None,
-    }?;
-    if p.api_key.is_empty() {
-        None
-    } else {
-        Some(p.api_key.clone())
     }
 }
 

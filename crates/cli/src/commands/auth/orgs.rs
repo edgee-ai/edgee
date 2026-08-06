@@ -2,6 +2,8 @@ use anyhow::Result;
 use console::style;
 use serde::Serialize;
 
+use crate::commands::util;
+
 setup_command! {
     /// Switch the active profile's organization to this id or slug.
     #[arg(long)]
@@ -31,22 +33,27 @@ fn print_json(orgs: &[crate::api::Organization], active_id: Option<&str>) -> Res
             active: Some(o.id.as_str()) == active_id,
         })
         .collect();
-    println!("{}", serde_json::to_string_pretty(&entries)?);
-    Ok(())
+    util::emit_json(&entries)
 }
 
 pub async fn run(opts: Options) -> Result<()> {
     let mut creds = crate::config::read()?;
-    let token = creds
-        .user_token
-        .as_deref()
-        .filter(|t| !t.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run `edgee auth login` first."))?
-        .to_string();
+
+    // Machine consumers get an empty list (exit 0) rather than an error when
+    // there's no auth / no orgs, so the front-end can degrade gracefully.
+    let Some(token) = creds.user_token.clone().filter(|t| !t.is_empty()) else {
+        if opts.json {
+            return util::emit_json(&Vec::<OrgEntry>::new());
+        }
+        anyhow::bail!("Not authenticated. Run `edgee auth login` first.");
+    };
 
     let client = crate::api::ApiClient::new(&token)?;
     let orgs = client.list_organizations().await?;
     if orgs.is_empty() {
+        if opts.json {
+            return util::emit_json(&Vec::<OrgEntry>::new());
+        }
         anyhow::bail!("No organizations found for this account.");
     }
 
@@ -88,4 +95,24 @@ pub async fn run(opts: Options) -> Result<()> {
     println!();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Guards the field names the menubar app (Org in AuthStatus.swift) decodes.
+    #[test]
+    fn json_shape_is_stable() {
+        let entry = OrgEntry {
+            id: "abc".into(),
+            slug: "acme".into(),
+            name: "Acme".into(),
+            active: true,
+        };
+        let v = serde_json::to_value(&entry).unwrap();
+        for key in ["id", "slug", "name", "active"] {
+            assert!(v.get(key).is_some(), "missing `{key}`");
+        }
+    }
 }

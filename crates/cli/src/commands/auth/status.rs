@@ -4,7 +4,8 @@ use anyhow::Result;
 use console::style;
 use serde::Serialize;
 
-use crate::config::{self, ProviderConfig};
+use crate::commands::util;
+use crate::config;
 
 setup_command! {
     /// Emit machine-readable JSON instead of the human-readable summary.
@@ -43,20 +44,6 @@ const PROVIDERS: &[(&str, &str)] = &[
     ("crush", "Crush"),
 ];
 
-fn provider_config<'a>(creds: &'a config::Credentials, key: &str) -> Option<&'a ProviderConfig> {
-    match key {
-        "claude" => creds.claude.as_ref(),
-        "codex" => creds.codex.as_ref(),
-        "opencode" => creds.opencode.as_ref(),
-        "crush" => creds.crush.as_ref(),
-        _ => None,
-    }
-}
-
-fn is_configured(provider: Option<&ProviderConfig>) -> bool {
-    provider.map(|p| !p.api_key.is_empty()).unwrap_or(false)
-}
-
 pub async fn run(opts: Options) -> Result<()> {
     let creds = config::read()?;
 
@@ -67,22 +54,22 @@ pub async fn run(opts: Options) -> Result<()> {
         .is_some();
     let any_provider = PROVIDERS
         .iter()
-        .any(|(key, _)| is_configured(provider_config(&creds, key)));
+        .any(|(key, _)| creds.provider_configured(key));
     let logged_in = has_token || any_provider;
 
     if opts.json {
         let providers = PROVIDERS
             .iter()
             .filter_map(|(key, _)| {
-                let p = provider_config(&creds, key);
-                if !is_configured(p) {
+                let provider = creds.provider(key)?;
+                if provider.api_key.is_empty() {
                     return None;
                 }
                 Some((
                     key.to_string(),
                     ProviderStatus {
                         configured: true,
-                        mode: p.and_then(|p| p.connection.clone()),
+                        mode: provider.connection.clone(),
                     },
                 ))
             })
@@ -96,8 +83,7 @@ pub async fn run(opts: Options) -> Result<()> {
             org_slug: creds.org_slug.clone().filter(|s| !s.is_empty()),
             providers,
         };
-        println!("{}", serde_json::to_string_pretty(&status)?);
-        return Ok(());
+        return util::emit_json(&status);
     }
 
     if !logged_in {
@@ -135,8 +121,7 @@ pub async fn run(opts: Options) -> Result<()> {
     }
 
     for (key, name) in PROVIDERS {
-        let provider = provider_config(&creds, key);
-        if let Some(p) = provider.filter(|p| !p.api_key.is_empty()) {
+        if let Some(p) = creds.provider(key).filter(|p| !p.api_key.is_empty()) {
             println!(
                 "   {}  {}",
                 style(format!("{name}:")).dim(),
@@ -154,4 +139,33 @@ pub async fn run(opts: Options) -> Result<()> {
     println!();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Guards the field names the menubar app (AuthStatus.swift) decodes.
+    #[test]
+    fn json_shape_is_stable() {
+        let status = AuthStatusJson {
+            logged_in: true,
+            profile: "default".into(),
+            config_path: "/tmp/credentials.toml".into(),
+            email: Some("a@b.co".into()),
+            org_slug: Some("acme".into()),
+            providers: BTreeMap::from([(
+                "claude".to_string(),
+                ProviderStatus {
+                    configured: true,
+                    mode: Some("plan".into()),
+                },
+            )]),
+        };
+        let v = serde_json::to_value(&status).unwrap();
+        for key in ["logged_in", "profile", "config_path", "email", "org_slug", "providers"] {
+            assert!(v.get(key).is_some(), "missing `{key}`");
+        }
+        assert_eq!(v["providers"]["claude"]["mode"], "plan");
+    }
 }

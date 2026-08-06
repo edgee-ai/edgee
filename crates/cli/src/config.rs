@@ -45,6 +45,36 @@ pub struct Profile {
     pub cursor: Option<ProviderConfig>,
 }
 
+impl Profile {
+    /// The provider config for a canonical provider key (`claude`, `codebuddy`,
+    /// `codex`, `opencode`, `crush`, `copilot`, `cursor`), if present.
+    pub fn provider(&self, key: &str) -> Option<&ProviderConfig> {
+        match key {
+            "claude" => self.claude.as_ref(),
+            "claude_desktop" => self.claude_desktop.as_ref(),
+            "codebuddy" => self.codebuddy.as_ref(),
+            "codex" => self.codex.as_ref(),
+            "opencode" => self.opencode.as_ref(),
+            "crush" => self.crush.as_ref(),
+            "copilot" => self.copilot.as_ref(),
+            "cursor" => self.cursor.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The non-empty API key for a provider, if configured.
+    pub fn provider_api_key(&self, key: &str) -> Option<&str> {
+        self.provider(key)
+            .map(|p| p.api_key.as_str())
+            .filter(|k| !k.is_empty())
+    }
+
+    /// Whether the provider has a non-empty API key.
+    pub fn provider_configured(&self, key: &str) -> bool {
+        self.provider_api_key(key).is_some()
+    }
+}
+
 /// Type alias so existing call sites that use `Credentials` compile unchanged.
 pub type Credentials = Profile;
 
