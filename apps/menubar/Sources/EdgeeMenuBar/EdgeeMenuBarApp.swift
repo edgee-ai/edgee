@@ -7,14 +7,16 @@ import SwiftUI
 /// the Rust CLI stays the single source of truth for auth, stats, and launching.
 @main
 struct EdgeeMenuBarApp: App {
-    // Owned here (not in the view) so running relays survive the popover
-    // opening and closing.
+    // Owned here (not in the view) so running relays and cached panel data
+    // survive the popover opening and closing.
     @StateObject private var relays = RelayManager()
+    @StateObject private var model = MenuModel()
 
     var body: some Scene {
         MenuBarExtra {
             MenuContentView()
                 .environmentObject(relays)
+                .environmentObject(model)
         } label: {
             Image(nsImage: AppIcons.menuBar)
         }
