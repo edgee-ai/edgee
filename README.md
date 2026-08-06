@@ -94,7 +94,17 @@ edgee launch copilot-vscode
 
 # Claude Desktop (app)
 edgee launch claude-desktop
+
+# ChatGPT desktop app
+edgee launch codex-desktop
 ```
+
+> **ChatGPT desktop app.** Quit any running instance first — the app only picks up
+> the Edgee settings on a fresh start, and an already-running one keeps talking
+> straight to OpenAI. Edgee writes its provider into your `~/.codex/config.toml` and
+> **restores that file when the app exits**; your `auth.json` is never touched. While
+> the app is running your `codex` CLI reads the same config, so it routes through
+> Edgee too.
 
 > **Claude Desktop, one-time trust (macOS).** Claude Desktop (Chromium) checks TLS
 > against the macOS **system** keychain, so the first `edgee launch claude-desktop`
@@ -227,6 +237,7 @@ The `SessionStart` hook installed by `edgee statusline claude install` (or by th
 | Cursor (app) | `edgee launch cursor` | ✅ Supported |
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
 | Claude Desktop (app) | `edgee launch claude-desktop` | ✅ Supported |
+| ChatGPT desktop app | `edgee launch codex-desktop` | ✅ Supported |
 
 Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented in [`src/commands/launch/README.md`](src/commands/launch/README.md).
 

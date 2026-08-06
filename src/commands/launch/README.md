@@ -86,6 +86,35 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `claude-desktop` | Claude Desktop | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code) |
+| `codex-desktop` | ChatGPT desktop app | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`, so the Edgee provider is written into that file and restored on exit. See below. |
+
+### `codex-desktop` — config patch, not relay
+
+The ChatGPT desktop app embeds Codex (`ChatGPT.app/Contents/Resources/codex`,
+launched as `app-server` over stdio) and honors `base_url` + `http_headers` from a
+`model_providers` entry — the very settings `launch codex` passes as `-c` overrides.
+So this target needs no proxy, no MITM CA and no system-keychain trust.
+
+Two constraints are load-bearing:
+
+- **The config file is the only lever.** The app supplies its own argv
+  (`-c features.code_mode_host=true app-server`), so `-c` / `--profile` injection is
+  impossible.
+- **Never point `CODEX_HOME` at a private copy.** It *does* propagate into the
+  spawned child, but a second home means a second `auth.json`, and the ChatGPT OAuth
+  refresh token is single-use/rotating — whichever copy refreshes first invalidates
+  the other and the user must sign in again. `auth.json` is never read, copied, moved
+  or symlinked; only `config.toml` is touched.
+
+Consequence to keep in mind: while the app runs, the user's own `codex` CLI reads the
+same patched config and is therefore also routed through Edgee. That is inherent to
+sharing one codex home, and is why the patch is reverted on exit rather than left in
+place.
+
+The gateway must match the app's `User-Agent` (`Codex Desktop/…`) case-insensitively
+for the Responses passthrough to fire; a case-sensitive `starts_with("codex")` sent
+every desktop request down the keyed pipeline, which authenticates from
+`Authorization` — the app's ChatGPT OAuth JWT — and 401'd.
 
 ## Planned targets (same rules)
 
@@ -95,7 +124,6 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `pi` | Pi CLI | `pi` | CLI env |
 | `kilo` | Kilo Code CLI | `kilo` | CLI env |
 | `claude-vscode` | Claude Code in VS Code | `claude` | Relay or native config |
-| `codex-desktop` | ChatGPT / Codex desktop app | `codex` | Relay |
 
 ## Checklist for a new target
 

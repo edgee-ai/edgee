@@ -8,6 +8,7 @@ pub mod claude;
 pub mod claude_desktop;
 pub mod codebuddy;
 pub mod codex;
+pub mod codex_desktop;
 pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
@@ -43,6 +44,9 @@ enum Command {
     /// Claude Desktop app
     #[command(name = "claude-desktop")]
     ClaudeDesktop(claude_desktop::Options),
+    /// ChatGPT desktop app
+    #[command(name = "codex-desktop")]
+    CodexDesktop(codex_desktop::Options),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -61,6 +65,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o).await,
         Command::ClaudeDesktop(o) => claude_desktop::run(o).await,
+        Command::CodexDesktop(o) => codex_desktop::run(o).await,
     }
 }
 
