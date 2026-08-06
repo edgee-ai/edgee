@@ -24,23 +24,11 @@ hudsucker = "0.24"
 open = "5.3.4"
 rand = "0.10"
 rcgen = "0.14"
-<<<<<<< HEAD
-sha1 = "0.10"
-
-[dev-dependencies]
-tempfile = "3"
-
-[target.'cfg(windows)'.dependencies]
-which = "8"
-
-[features]
-default = ["self-update"]
-self-update = ["dep:self_update"]
-=======
 reqwest = { version = "0.13.2", default-features = false }
 self_update = { version = "0.44.0", default-features = false }
 serde = "1.0.228"
 serde_json = "1.0.149"
+sha1 = "0.10"
 time = "0.3.47"
 tokio = "1.52.1"
 toml = "1.1.2"
@@ -49,4 +37,3 @@ tracing-subscriber = "0.3"
 unicode-width = "0.2"
 uuid = "1.23.1"
 x25519-dalek = "3.0.0"
->>>>>>> 296b8f2 (refactor: split edgee-cli into lib+bin under a cargo workspace)
