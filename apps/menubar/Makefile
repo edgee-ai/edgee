@@ -15,7 +15,15 @@ unexport DEVELOPER_DIR
 unexport SDKROOT
 export PATH := /usr/bin:/bin:/usr/sbin:/sbin:$(PATH)
 
-.PHONY: build bundle run clean edgee-cli
+.PHONY: build bundle run clean edgee-cli icons
+
+# Regenerate the app icon (Edgee.icns) and menubar template (MenuBarIcon.pdf)
+# from the Edgee mark. Run after changing tools/gen-icons.swift; commit the
+# resulting Assets/. (swift/iconutil inherit the fixed env from above.)
+icons:
+	swift tools/gen-icons.swift Assets
+	iconutil -c icns Assets/Edgee.iconset -o Assets/Edgee.icns
+	rm -rf Assets/Edgee.iconset
 
 build:
 	swift build -c $(CONFIG)
