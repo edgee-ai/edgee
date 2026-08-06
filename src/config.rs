@@ -36,6 +36,7 @@ pub struct Profile {
     /// `EDGEE_DEBUG_LOG_E2EE_PASSPHRASE`
     pub debug_log_e2ee_passphrase: Option<String>,
     pub claude: Option<ProviderConfig>,
+    pub claude_desktop: Option<ProviderConfig>,
     pub codebuddy: Option<ProviderConfig>,
     pub codex: Option<ProviderConfig>,
     pub opencode: Option<ProviderConfig>,

@@ -91,7 +91,20 @@ edgee launch cursor
 
 # GitHub Copilot in VS Code
 edgee launch copilot-vscode
+
+# Claude Desktop (app)
+edgee launch claude-desktop
 ```
+
+> **Claude Desktop, one-time trust (macOS).** Claude Desktop (Chromium) checks TLS
+> against the macOS **system** keychain, so the first `edgee launch claude-desktop`
+> asks for your admin password once to trust a dedicated Edgee CA. That CA is
+> name-constrained to `anthropic.com` (SSL policy only), so it can vouch for nothing
+> else — but it persists after uninstalling Edgee. Remove it anytime with:
+>
+> ```bash
+> edgee relay claude-desktop --untrust
+> ```
 
 Any extra flags after the subcommand are forwarded to the underlying agent:
 
@@ -109,13 +122,14 @@ edgee alias                 # CLI shims + desktop wrappers (when the app is inst
 edgee alias claude          # one CLI agent
 edgee alias cursor          # Cursor.app wrapper (skipped if Cursor is not installed)
 edgee alias copilot-vscode  # VS Code wrapper (skipped if VS Code is not installed)
+edgee alias claude-desktop  # Claude Desktop wrapper (skipped if Claude Desktop is not installed)
 edgee alias remove          # undo
 ```
 
 This covers two kinds of targets:
 
 1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
-2. **Apps** (`cursor`, `copilot-vscode`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
+2. **Apps** (`cursor`, `copilot-vscode`, `claude-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
 
 ### Check savings
 
@@ -212,6 +226,7 @@ The `SessionStart` hook installed by `edgee statusline claude install` (or by th
 | Crush (CLI) | `edgee launch crush` | ✅ Supported |
 | Cursor (app) | `edgee launch cursor` | ✅ Supported |
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
+| Claude Desktop (app) | `edgee launch claude-desktop` | ✅ Supported |
 
 Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented in [`src/commands/launch/README.md`](src/commands/launch/README.md).
 
