@@ -59,11 +59,22 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
     }
 }
 
+/// Prints the end-of-session summary — but only when the session has something
+/// to show. A launch that exited without sending anything through the gateway
+/// (agent started and quit, wrong key, offline) prints nothing at all.
 async fn print_session_stats(
     creds: &crate::config::Credentials,
     session_id: &str,
     tool_name: &str,
 ) {
+    let stats = match fetch_stats(creds, session_id).await {
+        Ok(Some(stats)) if stats.has_activity() => Some(stats),
+        // Session unknown to the gateway, or recorded zero traffic.
+        Ok(_) => return,
+        // Couldn't find out — still point at the console.
+        Err(_) => None,
+    };
+
     let logs_url = session_log::logs_url_for_session(creds, session_id);
 
     println!();
@@ -73,17 +84,14 @@ async fn print_session_stats(
         style(format!("Thanks for using Edgee + {}!", tool_name)).dim()
     );
 
-    let stats = match fetch_stats(creds, session_id).await {
-        Ok(s) => s,
-        Err(_) => {
-            println!(
-                "  {} {}",
-                style("View your usage & compression stats at").dim(),
-                style(&logs_url).cyan().underlined()
-            );
-            println!();
-            return;
-        }
+    let Some(stats) = stats else {
+        println!(
+            "  {} {}",
+            style("View your usage & compression stats at").dim(),
+            style(&logs_url).cyan().underlined()
+        );
+        println!();
+        return;
     };
 
     match session_log::build_session_log_entry(
@@ -196,20 +204,18 @@ pub async fn resolve_gateway_base_url(creds: &crate::config::Credentials) -> Str
     gateway_base_url_with_org(fetch_active_org(creds).await.as_ref())
 }
 
+/// `Ok(None)` = nothing to report (no credentials, or the gateway has no such
+/// session). `Err` = we couldn't ask.
 async fn fetch_stats(
     creds: &crate::config::Credentials,
     session_id: &str,
-) -> Result<crate::api::SessionStats> {
-    let token = creds
-        .user_token
-        .as_deref()
-        .filter(|t| !t.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("not authenticated"))?;
-    let org_id = creds
-        .org_id
-        .as_deref()
-        .filter(|o| !o.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("no org selected"))?;
+) -> Result<Option<crate::api::SessionStats>> {
+    let Some(token) = creds.user_token.as_deref().filter(|t| !t.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(org_id) = creds.org_id.as_deref().filter(|o| !o.is_empty()) else {
+        return Ok(None);
+    };
     let client = crate::api::ApiClient::new(token)?;
     client.get_session_stats(org_id, session_id).await
 }
