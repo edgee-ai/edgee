@@ -120,7 +120,9 @@ enum EdgeeCLI {
         let process = makeProcess(args)
         let stdout = Pipe()
         process.standardOutput = stdout
-        process.standardError = Pipe()
+        // We never read stderr here; discard it so a chatty command can't fill an
+        // undrained pipe and deadlock while we block reading stdout.
+        process.standardError = FileHandle.nullDevice
 
         do {
             try process.run()
@@ -134,19 +136,52 @@ enum EdgeeCLI {
     }
 
     /// Spawn a long-running edgee subprocess (e.g. a relay) in the background —
-    /// no shell, no window. Returns the running process plus a pipe capturing its
-    /// stderr (for diagnostics on exit), or nil if it couldn't be launched.
-    static func spawn(_ args: [String]) -> (process: Process, stderr: Pipe)? {
+    /// no shell, no window. stdout is discarded and stderr is continuously drained
+    /// into a bounded tail, so the child never blocks on a full pipe (which would
+    /// silently wedge the relay). Returns the process and its stderr tail, or nil
+    /// if it couldn't be launched.
+    static func spawn(_ args: [String]) -> (process: Process, stderr: StderrTail)? {
         let process = makeProcess(args)
-        let stderr = Pipe()
-        process.standardOutput = Pipe()
-        process.standardError = stderr
+        process.standardOutput = FileHandle.nullDevice
+
+        let tail = StderrTail()
+        let pipe = Pipe()
+        process.standardError = pipe
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil  // EOF
+            } else {
+                tail.append(chunk)
+            }
+        }
 
         do {
             try process.run()
         } catch {
             return nil
         }
-        return (process, stderr)
+        return (process, tail)
+    }
+}
+
+/// A thread-safe, size-bounded accumulator for a subprocess's stderr — enough to
+/// surface the last error line without letting the buffer grow unbounded over a
+/// long-lived relay session.
+final class StderrTail: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(chunk)
+        if data.count > 8192 { data = data.suffix(4096) }
+    }
+
+    var text: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(data: data, encoding: .utf8) ?? ""
     }
 }

@@ -86,10 +86,7 @@ final class RelayManager: ObservableObject {
         processes[target.id] = spawned.process
 
         spawned.process.terminationHandler = { [weak self] proc in
-            let errText =
-                String(
-                    data: spawned.stderr.fileHandleForReading.readDataToEndOfFile(),
-                    encoding: .utf8) ?? ""
+            let errText = spawned.stderr.text
             Task { @MainActor in
                 guard let self else { return }
                 self.processes[target.id] = nil
