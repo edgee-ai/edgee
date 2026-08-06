@@ -343,6 +343,18 @@ pub struct SessionStats {
     pub total_mcp_surface_tokens_after: u64,
 }
 
+impl SessionStats {
+    /// Whether the session actually recorded traffic. A launch that exits
+    /// without sending a single request through the gateway reports all zeroes,
+    /// and there is nothing worth printing for it.
+    pub fn has_activity(&self) -> bool {
+        self.total_requests > 0
+            || self.total_input_tokens > 0
+            || self.total_output_tokens > 0
+            || self.total_errors > 0
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCompressionStat {
     pub count: u64,
@@ -559,7 +571,16 @@ impl ApiClient {
         Ok(())
     }
 
-    pub async fn get_session_stats(&self, org_id: &str, session_id: &str) -> Result<SessionStats> {
+    /// Closes the session and returns its stats.
+    ///
+    /// `None` means the gateway never saw this session (404) — the agent ran but
+    /// no request went through Edgee — as opposed to an error, which means we
+    /// simply could not find out.
+    pub async fn get_session_stats(
+        &self,
+        org_id: &str,
+        session_id: &str,
+    ) -> Result<Option<SessionStats>> {
         let url = format!(
             "{}/v1/organizations/{}/sessions/{}/end",
             self.base_url, org_id, session_id
@@ -570,8 +591,14 @@ impl ApiClient {
             .send()
             .await
             .context("Failed to get session stats")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
         check_status(&resp, "get session stats")?;
-        resp.json().await.context("Invalid session stats response")
+        resp.json()
+            .await
+            .map(Some)
+            .context("Invalid session stats response")
     }
 }
 
@@ -598,6 +625,30 @@ mod tests {
 
     fn catalog_model(json: &str) -> GatewayModel {
         serde_json::from_str(json).unwrap()
+    }
+
+    fn stats(json: &str) -> SessionStats {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn empty_session_has_no_activity() {
+        let zeroes = r#"{"total_requests":0,"total_cost":0,"total_input_tokens":0,
+            "total_output_tokens":0,"total_cached_input_tokens":0,
+            "total_cache_creation_input_tokens":0,"total_reasoning_output_tokens":0,
+            "total_token_cost_savings":0,"total_errors":0,
+            "total_uncompressed_tools_tokens":0,"total_compressed_tools_tokens":0,
+            "tool_compression_stats":null}"#;
+        assert!(!stats(zeroes).has_activity());
+
+        // A session that only errored still happened, and is worth reporting.
+        let mut errored = stats(zeroes);
+        errored.total_errors = 1;
+        assert!(errored.has_activity());
+
+        let mut used = stats(zeroes);
+        used.total_requests = 1;
+        assert!(used.has_activity());
     }
 
     #[test]
