@@ -32,7 +32,7 @@ struct ListResponse<T> {
     data: Vec<T>,
 }
 
-/// Console API error body: `{ "error": { "message": "...", ... } }`.
+/// Console API error body: `{ "error": { "message": "...", "params": [...] } }`.
 #[derive(Deserialize)]
 struct ErrorEnvelope {
     error: Option<ErrorBody>,
@@ -41,6 +41,30 @@ struct ErrorEnvelope {
 #[derive(Deserialize)]
 struct ErrorBody {
     message: Option<String>,
+    #[serde(default)]
+    params: Vec<ErrorParam>,
+}
+
+#[derive(Deserialize)]
+struct ErrorParam {
+    message: Option<String>,
+}
+
+impl ErrorEnvelope {
+    /// Best human-readable message: the specific per-parameter messages when
+    /// present (e.g. "Must be one of …"), otherwise the top-level message.
+    fn describe(&self) -> Option<String> {
+        let error = self.error.as_ref()?;
+        let params: Vec<String> = error
+            .params
+            .iter()
+            .filter_map(|p| p.message.clone())
+            .collect();
+        if !params.is_empty() {
+            return Some(params.join("; "));
+        }
+        error.message.clone().filter(|m| !m.is_empty())
+    }
 }
 
 #[derive(Deserialize)]
@@ -478,8 +502,24 @@ impl ApiClient {
             .send()
             .await
             .context("Failed to get or create API key")?;
-        check_status(&resp, "get or create API key")?;
-        resp.json().await.context("Invalid API key response")
+
+        let status = resp.status();
+        if status.is_success() {
+            return resp.json().await.context("Invalid API key response");
+        }
+        // Surface the server's explanation (e.g. an unsupported coding_assistant)
+        // instead of a bare status code.
+        let text = resp.text().await.unwrap_or_default();
+        let server_msg = serde_json::from_str::<ErrorEnvelope>(&text)
+            .ok()
+            .and_then(|e| e.describe());
+        match (status.as_u16(), server_msg) {
+            (401, _) => {
+                anyhow::bail!("Authentication expired. Please run `edgee auth login` again.")
+            }
+            (_, Some(msg)) => anyhow::bail!("{msg}"),
+            (s, None) => anyhow::bail!("Failed to get or create API key: HTTP {s}"),
+        }
     }
 
     /// Applies the full settings bundle (compression + fallback + reroutes) to an
