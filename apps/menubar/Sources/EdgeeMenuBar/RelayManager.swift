@@ -58,8 +58,16 @@ enum RelayRunState: Equatable {
 /// survive the popover opening and closing.
 @MainActor
 final class RelayManager: ObservableObject {
+    /// How long a relay must survive without exiting before we call it running.
+    /// Fast failures (not logged in, port in use, bad provider) exit well within
+    /// this window and flip straight to `.failed` instead.
+    private static let readyGrace: Duration = .milliseconds(1200)
+
     @Published private(set) var states: [String: RelayRunState] = [:]
     private var processes: [String: Process] = [:]
+    /// Ids we've asked to stop, so the termination handler can tell a
+    /// user-requested shutdown from an unexpected exit/crash.
+    private var stopping: Set<String> = []
 
     func state(_ id: String) -> RelayRunState { states[id] ?? .stopped }
 
@@ -75,6 +83,7 @@ final class RelayManager: ObservableObject {
     func start(_ target: RelayTarget) {
         guard processes[target.id] == nil else { return }
         states[target.id] = .starting
+        stopping.remove(target.id)
 
         var args = ["relay", target.id, "--non-interactive"]
         if target.proxyOnly { args.append("--no-launch") }
@@ -87,33 +96,44 @@ final class RelayManager: ObservableObject {
 
         spawned.process.terminationHandler = { [weak self] proc in
             let errText = spawned.stderr.text
+            let status = proc.terminationStatus
             Task { @MainActor in
                 guard let self else { return }
                 self.processes[target.id] = nil
-                // A SIGINT/terminate from us is a clean stop; a non-zero exit we
-                // didn't request is a failure worth surfacing.
-                if proc.terminationReason == .uncaughtSignal || proc.terminationStatus == 0 {
+                if self.stopping.remove(target.id) != nil {
                     self.states[target.id] = .stopped
                 } else {
+                    // Exited on its own — surface the last stderr line as the cause.
                     let lastLine =
                         errText.split(whereSeparator: \.isNewline).last.map(String.init)
-                        ?? "relay exited (code \(proc.terminationStatus))"
+                        ?? "relay exited (code \(status))"
                     self.states[target.id] = .failed(lastLine)
                 }
             }
         }
 
-        states[target.id] = .running
+        // Promote to `.running` only after it survives the grace period; a fast
+        // exit will already have flipped it to `.failed` via the handler.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.readyGrace)
+            guard let self else { return }
+            if self.processes[target.id] != nil, self.state(target.id) == .starting {
+                self.states[target.id] = .running
+            }
+        }
     }
 
     func stop(_ id: String) {
-        // SIGINT triggers the relay's graceful shutdown; terminationHandler
-        // flips the state back to .stopped.
-        processes[id]?.interrupt()
+        guard let process = processes[id] else { return }
+        // SIGINT triggers the relay's graceful shutdown; the handler flips to
+        // `.stopped` because we recorded the intent here.
+        stopping.insert(id)
+        process.interrupt()
     }
 
     func stopAll() {
-        for process in processes.values {
+        for (id, process) in processes {
+            stopping.insert(id)
             process.interrupt()
         }
     }

@@ -115,7 +115,7 @@ struct MenuContentView: View {
                 Text(target.name)
                 Spacer()
                 statusDot(state)
-                Button(buttonTitle(state, target)) { relays.toggle(target) }
+                Button(buttonTitle(state)) { relays.toggle(target) }
                     .buttonStyle(.borderless)
                     .disabled(state == .starting)
             }
@@ -139,7 +139,7 @@ struct MenuContentView: View {
         }
     }
 
-    private func buttonTitle(_ state: RelayRunState, _ target: RelayTarget) -> String {
+    private func buttonTitle(_ state: RelayRunState) -> String {
         switch state {
         case .running: return "Stop"
         case .starting: return "…"
