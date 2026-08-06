@@ -14,7 +14,7 @@ If `edgee stats` fails, you have the wrong package installed.
 
 ## CLI surface
 
-This is a Cargo workspace. The `edgee` CLI lives in `crates/cli` (package `edgee-cli`), split into a library (`crates/cli/src/lib.rs`, exposing `config`, `api`, `crypto`, `git`, `commands`) and a thin binary (`crates/cli/src/main.rs`). Other workspace crates (e.g. the macOS menubar app) reuse the library directly so the credentials format and console API client have a single source of truth. Paths below are relative to `crates/cli/`.
+This is a Cargo workspace. The `edgee` CLI lives in `crates/cli` (package `edgee-cli`), split into a library (`crates/cli/src/lib.rs`, exposing `config`, `api`, `crypto`, `git`, `commands`) and a thin binary (`crates/cli/src/main.rs`); the split keeps the internals unit-testable. The macOS menubar app (`apps/menubar/`) is a separate Swift app that does not link this crate — it drives the CLI as a subprocess and consumes the `--json` output of `auth status`/`auth list`/`auth orgs`/`stats`, so the CLI stays the single source of truth. Paths below are relative to `crates/cli/`.
 
 Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
 
