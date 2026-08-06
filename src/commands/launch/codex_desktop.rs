@@ -6,23 +6,31 @@
 //! `http_headers` from a custom `model_providers` entry — the same settings
 //! [`super::codex`] passes the CLI as `-c` overrides.
 //!
-//! Two constraints shape the implementation:
+//! Three constraints shape the implementation, each established empirically:
 //!
 //! * **The config file is the only lever.** The app spawns its codex with its own
-//!   argv (`-c features.code_mode_host=true app-server`), so we cannot inject `-c`
-//!   or `--profile` the way the CLI target does.
+//!   argv (`-c features.code_mode_host=true app-server`), so we cannot inject `-c`.
+//!   `--profile <name>` would be ideal — it layers `$CODEX_HOME/<name>.config.toml`
+//!   over the base config, touching nothing of the user's — but it is argv-only:
+//!   there is no `CODEX_PROFILE` env var, and the legacy `profile = "…"` config key
+//!   is a hard startup error in 0.147 ("no longer supported; use `--profile`").
 //! * **`CODEX_HOME` must not be redirected to a private copy.** It does propagate
 //!   into the spawned child, but a second home means a second `auth.json`, and the
 //!   ChatGPT OAuth *refresh* token is single-use/rotating: whichever copy refreshes
 //!   first invalidates the other, and the user gets "your refresh token was already
-//!   used. Please log out and sign in again."
+//!   used. Please log out and sign in again." Symlinking or hardlinking it does not
+//!   help — codex removes and atomically replaces that file. Nor can auth come from
+//!   the environment: `CODEX_ACCESS_TOKEN` is an agent-identity slot, not a ChatGPT
+//!   one, so it would force API-key billing instead of the user's plan.
+//! * **The app parses the config once, at startup, and keeps it in memory.** So the
+//!   patch only has to survive the handoff.
 //!
-//! So we patch the real `config.toml` in place, back it up, and restore it when the
-//! app exits. `auth.json` is never read, copied, moved or symlinked.
-//!
-//! While the app runs, the user's own `codex` CLI reads the same patched config and
-//! is therefore also routed through Edgee. That is inherent to sharing one codex
-//! home and is why the patch is reverted on exit rather than left behind.
+//! That last point is what shapes the lifecycle: patch `config.toml`, spawn the app
+//! **detached**, wait out [`CONFIG_HANDOFF_GRACE`], revert, and return. The command
+//! exits in ~10s while the app keeps running with the settings cached, so the user's
+//! `codex` CLI is unaffected from then on, the terminal is free to close, and no
+//! crash window can strand the patch. `auth.json` is never read, copied, moved or
+//! symlinked.
 
 use std::path::{Path, PathBuf};
 
@@ -102,7 +110,6 @@ pub async fn run(_opts: Options) -> Result<()> {
 
     print_launch_hint(&base_url, &session_id);
 
-    let spawned_at = std::time::Instant::now();
     let mut child = match spawn_app(&binary) {
         Ok(child) => child,
         Err(e) => {
@@ -112,36 +119,22 @@ pub async fn run(_opts: Options) -> Result<()> {
         }
     };
 
-    // `std::process::exit` skips `Drop`, so every exit path restores explicitly
-    // rather than relying on a guard.
-    let mut wait = Box::pin(child.wait());
-    let status = tokio::select! {
-        r = &mut wait => r.context("waiting for the ChatGPT desktop app")?,
-        _ = tokio::signal::ctrl_c() => {
-            drop(wait);
-            // On macOS a terminal Ctrl-C reaches the whole foreground process group,
-            // so the app may already be quitting; give it a moment, then force it.
-            // Otherwise it would keep running against a config we are about to revert.
-            if tokio::time::timeout(std::time::Duration::from_secs(2), child.wait())
-                .await
-                .is_err()
-            {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
-            }
-            let _ = restore_config(&config_path, &backup);
-            std::process::exit(130);
-        }
-    };
-    drop(wait);
+    // The app's bundled codex parses config.toml once at startup and keeps it in
+    // memory for the session, so the patch only has to survive the handoff — a few
+    // seconds — not the whole session. Waiting it out and reverting immediately is
+    // what lets this command exit while the app keeps running.
+    let quick_exit = wait_out_config_handoff(&mut child).await;
 
+    // Back to the user's own config before we return, so nothing outlives this
+    // command: the `codex` CLI is unaffected from here on, and there is no window in
+    // which a crash could strand the patch.
     restore_config(&config_path, &backup)?;
 
     // The desktop app holds a single-instance lock: when one was already running,
     // the binary we spawned hands off to it and exits ~immediately with success —
     // and that pre-existing instance loaded the *unpatched* config, so it is not
     // going through Edgee. Report it instead of exiting 0 as if it were.
-    if status.success() && spawned_at.elapsed() < std::time::Duration::from_millis(1500) {
+    if quick_exit {
         eprintln!(
             "{}",
             style(
@@ -154,13 +147,43 @@ pub async fn run(_opts: Options) -> Result<()> {
         std::process::exit(1);
     }
 
-    super::print_session_stats(&creds, &session_id, "ChatGPT Desktop").await;
-
-    if let Some(code) = status.code() {
-        std::process::exit(code);
-    }
+    print_handoff_complete(&creds, &session_id);
 
     Ok(())
+}
+
+/// How long to leave the patch in place after spawning the app, so its bundled
+/// codex can start and read `config.toml`.
+///
+/// Measured handoff is ~2s to spawn the child plus a moment to parse; 10s is a
+/// deliberately generous margin for a cold start. The failure mode if the app were
+/// somehow slower is benign: it reads the already-restored config and simply talks
+/// to OpenAI directly — no compression and no metering, but nothing broken.
+const CONFIG_HANDOFF_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A GUI app that exits this fast did not really start: it hit the single-instance
+/// lock and handed off to a process that already had the unpatched config.
+const HANDOFF_EXIT_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Hold the patch for [`CONFIG_HANDOFF_GRACE`], then report whether the app exited
+/// almost immediately (the single-instance handoff case).
+///
+/// Polls rather than sleeping straight through so the common handoff case is caught
+/// early instead of making the user wait out the full grace period.
+async fn wait_out_config_handoff(child: &mut tokio::process::Child) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < CONFIG_HANDOFF_GRACE {
+        match child.try_wait() {
+            // Exited already — only a near-instant success means "handed off".
+            Ok(Some(status)) => {
+                return status.success() && started.elapsed() < HANDOFF_EXIT_WINDOW;
+            }
+            Ok(None) => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+            // Can't tell; treat as still running and let the grace period elapse.
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+        }
+    }
+    false
 }
 
 /// Escape a value for a double-quoted TOML basic string.
@@ -311,21 +334,50 @@ fn apply_provider_block(config_path: &Path, backup: &Path, block: &ProviderBlock
     Ok(())
 }
 
-/// Put the user's config back and drop the backup. Idempotent: a missing backup
-/// means there is nothing to restore.
+/// Remove our managed blocks from the config, leaving everything else as it is
+/// **now** — not as it was when we patched.
+///
+/// This is deliberately surgical rather than a rollback to the backup. Codex
+/// rewrites `config.toml` while it runs (project `trust_level`s, plugin enable
+/// state, marketplace timestamps, the `[desktop]` block), so restoring the
+/// snapshot would silently discard everything the user did in the app that
+/// session — trust a new project, quit, lose the trust.
+///
+/// The backup is kept only as a fallback for the case where our markers are gone
+/// (see below) and as crash recovery for the next run. Idempotent: no backup means
+/// nothing to undo.
 fn restore_config(config_path: &Path, backup: &Path) -> Result<()> {
     if !backup.exists() {
         return Ok(());
     }
-    let original = std::fs::read_to_string(backup)
+    let backup_body = std::fs::read_to_string(backup)
         .with_context(|| format!("reading config backup {}", backup.display()))?;
-    if original.is_empty() {
-        // There was no config before we started; leave none behind.
+    let current = std::fs::read_to_string(config_path).unwrap_or_default();
+
+    if current.contains(MANAGED_BEGIN) {
+        let stripped = strip_managed_blocks(&current);
+        // An empty backup means the file did not exist before us. If stripping
+        // leaves nothing of substance, leave no file behind rather than an empty one.
+        if backup_body.is_empty() && stripped.trim().is_empty() {
+            let _ = std::fs::remove_file(config_path);
+        } else {
+            std::fs::write(config_path, stripped)
+                .with_context(|| format!("restoring {}", config_path.display()))?;
+        }
+    } else if backup_body.is_empty() {
+        // We created the file and cannot find our markers — don't guess at which
+        // parts are ours; the file is ours to remove.
         let _ = std::fs::remove_file(config_path);
     } else {
-        std::fs::write(config_path, original)
+        // Markers gone but the file existed before us: codex may have reserialized
+        // the file and dropped comments (our markers ARE comments). We can no
+        // longer tell our lines from the user's, so fall back to the snapshot. That
+        // loses this session's runtime writes, but never leaves Edgee's provider —
+        // and a stale key pointed at a gateway is the worse failure.
+        std::fs::write(config_path, &backup_body)
             .with_context(|| format!("restoring {}", config_path.display()))?;
     }
+
     let _ = std::fs::remove_file(backup);
     Ok(())
 }
@@ -358,15 +410,36 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Spawn the app bundle's own binary rather than `open`, so this process stays
-/// attached for the app's lifetime (which is what bounds the config patch).
+/// Spawn the app bundle's own binary rather than `open`, so the config patch is
+/// guaranteed to be in place before the process starts and we can observe a
+/// single-instance handoff by watching it exit.
+///
+/// **Detached**: the app is put in its own process group and does not inherit this
+/// terminal's stdio, so it survives both this command returning and the terminal
+/// being closed. Nothing about the running app depends on `edgee` afterwards — the
+/// config has already been reverted by then.
 fn spawn_app(binary: &Path) -> Result<tokio::process::Child> {
     let mut cmd = tokio::process::Command::new(binary);
     // Electron GUI apps launched from a terminal spew browser-process logs; none of
-    // it is actionable here, and a GUI app needs no stdin.
+    // it is actionable here, and a GUI app needs no stdin. Detaching stdio also means
+    // a closed terminal cannot write-fail the app.
     cmd.stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null());
+    // Own process group: a terminal SIGINT/SIGHUP goes to the foreground group, and
+    // we do not want Ctrl-C or a closed window to take the app down with us.
+    #[cfg(unix)]
+    cmd.process_group(0);
+    // Windows equivalent: detach from this console so it survives its parent.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    // Don't reap-block on this child at exit; we deliberately outlive it.
+    cmd.kill_on_drop(false);
     cmd.spawn()
         .with_context(|| format!("failed to launch {}", binary.display()))
 }
@@ -425,9 +498,29 @@ fn print_launch_hint(base_url: &str, session_id: &str) {
         "  {}",
         style("Quit any running ChatGPT app first — the config is only picked up by a").dim()
     );
+    println!("  {}", style("freshly started instance.").dim());
+    println!();
+}
+
+/// Printed once the app has taken the config and the user's file is back. The app
+/// keeps running; this command is done.
+fn print_handoff_complete(creds: &crate::config::Credentials, session_id: &str) {
     println!(
         "  {}",
-        style("freshly started instance. Your codex config is restored on exit.").dim()
+        style("Your codex config has been restored — the app keeps the settings in memory.").dim()
+    );
+    println!(
+        "  {}",
+        style("You can close this terminal; the app keeps running.").dim()
+    );
+    println!(
+        "  {} {}",
+        style("Usage & compression stats:").dim(),
+        style(crate::commands::util::session_log::logs_url_for_session(
+            creds, session_id
+        ))
+        .cyan()
+        .underlined()
     );
     println!();
 }
@@ -598,8 +691,85 @@ mod tests {
         assert!(std::fs::read_to_string(&cfg).unwrap().contains(PROVIDER_ID));
 
         restore_config(&cfg, &backup).unwrap();
-        assert_eq!(std::fs::read_to_string(&cfg).unwrap(), original);
+        // Semantic, not byte-exact: restore strips our block from the live file
+        // rather than rolling back to the snapshot, so incidental blank lines differ.
+        let after = std::fs::read_to_string(&cfg).unwrap();
+        assert_eq!(parse(&after), parse(original));
+        assert!(!after.contains(PROVIDER_ID));
         assert!(!backup.exists(), "backup should be cleaned up");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // The regression this function exists for: codex rewrites config.toml while the
+    // app runs, and restore must KEEP those writes while removing only our block.
+    // A rollback to the backup would silently drop the newly trusted project.
+    #[test]
+    fn restore_keeps_what_the_app_wrote_while_running() {
+        let dir = std::env::temp_dir().join(format!("edgee-cxd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("config.toml");
+        let backup = backup_path(&cfg);
+        std::fs::write(&cfg, "model = \"gpt-5.5\"\n\n[projects.\"/a\"]\ntrust_level = \"trusted\"\n")
+            .unwrap();
+
+        apply_provider_block(&cfg, &backup, &block()).unwrap();
+
+        // Simulate codex trusting a second project mid-session.
+        let patched = std::fs::read_to_string(&cfg).unwrap();
+        std::fs::write(
+            &cfg,
+            format!("{patched}\n[projects.\"/b\"]\ntrust_level = \"trusted\"\n"),
+        )
+        .unwrap();
+
+        restore_config(&cfg, &backup).unwrap();
+
+        let doc = parse(&std::fs::read_to_string(&cfg).unwrap());
+        assert_eq!(doc["projects"]["/a"]["trust_level"].as_str(), Some("trusted"));
+        assert_eq!(
+            doc["projects"]["/b"]["trust_level"].as_str(),
+            Some("trusted"),
+            "a project trusted during the session was discarded"
+        );
+        assert!(!doc.contains_key("model_provider"), "our provider survived");
+        assert!(!doc.contains_key("model_providers"), "our tables survived");
+        assert!(!backup.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // Markers are comments, so a reserialization by codex could drop them. We then
+    // cannot separate our lines from the user's — fall back to the snapshot rather
+    // than leave a live Edgee key pointed at a gateway.
+    #[test]
+    fn restore_falls_back_to_the_backup_when_markers_are_lost() {
+        let dir = std::env::temp_dir().join(format!("edgee-cxd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("config.toml");
+        let backup = backup_path(&cfg);
+        let original = "model = \"gpt-5.5\"\n";
+        std::fs::write(&cfg, original).unwrap();
+
+        apply_provider_block(&cfg, &backup, &block()).unwrap();
+        // Reserialized without comments: provider present, markers gone.
+        let no_markers: String = std::fs::read_to_string(&cfg)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        std::fs::write(&cfg, &no_markers).unwrap();
+        assert!(no_markers.contains(PROVIDER_ID));
+
+        restore_config(&cfg, &backup).unwrap();
+
+        let after = std::fs::read_to_string(&cfg).unwrap();
+        assert_eq!(after, original);
+        assert!(
+            !after.contains(PROVIDER_ID),
+            "must never leave the Edgee provider behind"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

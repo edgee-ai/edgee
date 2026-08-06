@@ -86,7 +86,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `claude-desktop` | Claude Desktop | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code) |
-| `codex-desktop` | ChatGPT desktop app | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`, so the Edgee provider is written into that file and restored on exit. See below. |
+| `codex-desktop` | ChatGPT desktop app | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched detached, and the file is reverted ~10s later. See below. |
 
 ### `codex-desktop` — config patch, not relay
 
@@ -95,21 +95,41 @@ launched as `app-server` over stdio) and honors `base_url` + `http_headers` from
 `model_providers` entry — the very settings `launch codex` passes as `-c` overrides.
 So this target needs no proxy, no MITM CA and no system-keychain trust.
 
-Two constraints are load-bearing:
+Three constraints are load-bearing, each established empirically:
 
 - **The config file is the only lever.** The app supplies its own argv
-  (`-c features.code_mode_host=true app-server`), so `-c` / `--profile` injection is
-  impossible.
-- **Never point `CODEX_HOME` at a private copy.** It *does* propagate into the
-  spawned child, but a second home means a second `auth.json`, and the ChatGPT OAuth
-  refresh token is single-use/rotating — whichever copy refreshes first invalidates
-  the other and the user must sign in again. `auth.json` is never read, copied, moved
-  or symlinked; only `config.toml` is touched.
+  (`-c features.code_mode_host=true app-server`), so `-c` injection is impossible.
+  `--profile <name>` is the design you'd want — it layers
+  `$CODEX_HOME/<name>.config.toml` and never touches the user's `config.toml` — but
+  it is **argv-only**: no `CODEX_PROFILE` env var exists, and the legacy
+  `profile = "…"` config key is a fatal startup error in 0.147 (*"no longer
+  supported; use `--profile`"*). If a future codex honors an env var for this, switch
+  to it — it removes the only invasive part of this integration.
+- **Never point `CODEX_HOME` at a private copy.** It *does* propagate into the spawned
+  child, but a second home means a second `auth.json`, and the ChatGPT OAuth refresh
+  token is single-use/rotating — whichever copy refreshes first invalidates the other
+  and the user must sign in again. Symlink/hardlink does not help either: codex
+  removes and atomically replaces the file. And auth cannot come from the
+  environment — `CODEX_ACCESS_TOKEN` is an agent-identity slot, so it would force
+  API-key billing instead of the user's ChatGPT plan.
+- **The app parses `config.toml` once at startup and caches it.** This is what makes
+  the whole thing cheap: the patch only needs to outlive the handoff.
 
-Consequence to keep in mind: while the app runs, the user's own `codex` CLI reads the
-same patched config and is therefore also routed through Edgee. That is inherent to
-sharing one codex home, and is why the patch is reverted on exit rather than left in
-place.
+So the lifecycle is patch → spawn **detached** → wait ~10s → revert → exit. The
+command returns while the app keeps running on the cached settings, so the user's
+`codex` CLI is unaffected once it returns, the terminal can be closed, and no crash
+window can strand the patch.
+
+The grace period is a timer, not a signal — we cannot observe codex reading the file.
+It polls so the single-instance handoff is caught early. If a cold start ever exceeded
+it, the app would read the reverted config and talk to OpenAI directly: no
+compression, no metering, nothing broken, but also no warning.
+
+Restore is **surgical**, not a rollback: codex rewrites `config.toml` at runtime
+(project `trust_level`s, plugin state, `[desktop]` prefs), so the managed block is
+stripped from the *current* file rather than restoring the backup snapshot, which
+would discard the user's session. The backup remains for crash recovery and for the
+case where codex reserializes the file and drops our marker comments.
 
 The gateway must match the app's `User-Agent` (`Codex Desktop/…`) case-insensitively
 for the Responses passthrough to fire; a case-sensitive `starts_with("codex")` sent
