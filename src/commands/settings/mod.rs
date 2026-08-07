@@ -20,6 +20,7 @@ const PROVIDERS: &[&str] = &[
     "claude_desktop",
     "codebuddy",
     "codex",
+    "codex_desktop",
     "opencode",
     "crush",
     "cursor",
