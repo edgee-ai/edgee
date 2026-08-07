@@ -37,8 +37,7 @@ pub struct Options {}
 pub async fn run(_opts: Options) -> Result<()> {
     let mut creds = crate::config::read()?;
 
-    // Its own `codex_desktop` provider key, so console and stats can tell the
-    // desktop app apart from the CLI (same split as `claude_desktop`).
+    // Its own key, so the desktop app reports separately from the `codex` CLI.
     if creds.user_token.as_deref().unwrap_or("").is_empty() {
         crate::commands::auth::login::perform_login().await?;
     }
