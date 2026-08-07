@@ -39,6 +39,7 @@ pub struct Profile {
     pub claude_desktop: Option<ProviderConfig>,
     pub codebuddy: Option<ProviderConfig>,
     pub codex: Option<ProviderConfig>,
+    pub codex_desktop: Option<ProviderConfig>,
     pub opencode: Option<ProviderConfig>,
     pub crush: Option<ProviderConfig>,
     pub copilot: Option<ProviderConfig>,

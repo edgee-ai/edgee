@@ -37,24 +37,27 @@ pub struct Options {}
 pub async fn run(_opts: Options) -> Result<()> {
     let mut creds = crate::config::read()?;
 
-    // Shares the `codex` provider key: one Edgee agent covers both surfaces.
+    // Its own `codex_desktop` provider key, so console and stats can tell the
+    // desktop app apart from the CLI (same split as `claude_desktop`).
     if creds.user_token.as_deref().unwrap_or("").is_empty() {
         crate::commands::auth::login::perform_login().await?;
     }
     crate::commands::auth::login::ensure_org_selected().await?;
-    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("codex")
+    let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("codex_desktop")
         .await?
         .created;
     if reprovisioned {
-        crate::commands::auth::login::ensure_onboarded("codex").await?;
+        crate::commands::auth::login::ensure_onboarded("codex_desktop").await?;
     }
     creds = crate::config::read()?;
 
     let api_key = creds
-        .codex
+        .codex_desktop
         .as_ref()
         .map(|c| c.api_key.clone())
-        .ok_or_else(|| anyhow::anyhow!("no Edgee API key for 'codex'; run `edgee auth login`"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("no Edgee API key for 'codex_desktop'; run `edgee auth login`")
+        })?;
     let session_id = uuid::Uuid::new_v4().to_string();
 
     util::ensure_first_run_installed().await;

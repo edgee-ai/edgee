@@ -207,6 +207,7 @@ pub fn agent_label(provider: &str) -> &'static str {
         "claude_desktop" => "Claude Desktop",
         "codebuddy" => "CodeBuddy",
         "codex" => "Codex",
+        "codex_desktop" => "Codex Desktop",
         "opencode" => "OpenCode",
         "crush" => "Crush",
         "copilot" => "GitHub Copilot",
@@ -342,6 +343,7 @@ fn coding_assistant_name(provider: &str) -> Result<&'static str> {
         "claude_desktop" => Ok("claude_desktop"),
         "codebuddy" => Ok("codebuddy"),
         "codex" => Ok("codex"),
+        "codex_desktop" => Ok("codex_desktop"),
         "opencode" => Ok("opencode"),
         "crush" => Ok("crush"),
         "copilot" => Ok("copilot"),
@@ -359,6 +361,7 @@ fn provider_config_mut<'a>(
         "claude_desktop" => Ok(&mut creds.claude_desktop),
         "codebuddy" => Ok(&mut creds.codebuddy),
         "codex" => Ok(&mut creds.codex),
+        "codex_desktop" => Ok(&mut creds.codex_desktop),
         "opencode" => Ok(&mut creds.opencode),
         "crush" => Ok(&mut creds.crush),
         "copilot" => Ok(&mut creds.copilot),
@@ -376,6 +379,7 @@ fn provider_config<'a>(
         "claude_desktop" => Ok(creds.claude_desktop.as_ref()),
         "codebuddy" => Ok(creds.codebuddy.as_ref()),
         "codex" => Ok(creds.codex.as_ref()),
+        "codex_desktop" => Ok(creds.codex_desktop.as_ref()),
         "opencode" => Ok(creds.opencode.as_ref()),
         "crush" => Ok(creds.crush.as_ref()),
         "copilot" => Ok(creds.copilot.as_ref()),
@@ -548,6 +552,10 @@ mod tests {
         );
         assert_eq!(coding_assistant_name("codebuddy").unwrap(), "codebuddy");
         assert_eq!(coding_assistant_name("codex").unwrap(), "codex");
+        assert_eq!(
+            coding_assistant_name("codex_desktop").unwrap(),
+            "codex_desktop"
+        );
         assert_eq!(coding_assistant_name("opencode").unwrap(), "opencode");
         assert!(coding_assistant_name("unknown").is_err());
     }
@@ -568,6 +576,9 @@ mod tests {
         provider_config_mut(&mut creds, "codex")
             .unwrap()
             .replace(crate::config::ProviderConfig::default());
+        provider_config_mut(&mut creds, "codex_desktop")
+            .unwrap()
+            .replace(crate::config::ProviderConfig::default());
         provider_config_mut(&mut creds, "opencode")
             .unwrap()
             .replace(crate::config::ProviderConfig::default());
@@ -576,6 +587,7 @@ mod tests {
         assert!(creds.claude_desktop.is_some());
         assert!(creds.codebuddy.is_some());
         assert!(creds.codex.is_some());
+        assert!(creds.codex_desktop.is_some());
         assert!(creds.opencode.is_some());
     }
 
