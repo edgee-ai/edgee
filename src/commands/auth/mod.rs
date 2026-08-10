@@ -1,5 +1,6 @@
 pub mod list;
 pub mod login;
+pub mod orgs;
 pub mod status;
 pub mod switch;
 
@@ -13,6 +14,8 @@ enum Command {
     List(list::Options),
     /// Switch the active profile globally
     Switch(switch::Options),
+    /// Show or switch the active profile's organization
+    Orgs(orgs::Options),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -27,5 +30,6 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Status(o) => status::run(o).await,
         Command::List(o) => list::run(o).await,
         Command::Switch(o) => switch::run(o).await,
+        Command::Orgs(o) => orgs::run(o).await,
     }
 }
