@@ -47,8 +47,9 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// The provider config for a canonical provider key (`claude`, `codebuddy`,
-    /// `codex`, `opencode`, `crush`, `copilot`, `cursor`), if present.
+    /// The provider config for a canonical provider key (`claude`,
+    /// `claude_desktop`, `codebuddy`, `codex`, `codex_desktop`, `opencode`,
+    /// `crush`, `copilot`, `cursor`), if present.
     pub fn provider(&self, key: &str) -> Option<&ProviderConfig> {
         match key {
             "claude" => self.claude.as_ref(),
@@ -74,6 +75,21 @@ impl Profile {
     /// Whether the provider has a non-empty API key.
     pub fn provider_configured(&self, key: &str) -> bool {
         self.provider_api_key(key).is_some()
+    }
+
+    /// Drop every provider config. Provider API keys are minted per-organization,
+    /// so they must be cleared when the active org changes — otherwise the relay
+    /// keeps routing on the previous org's key until it happens to hit a 404.
+    pub fn clear_provider_keys(&mut self) {
+        self.claude = None;
+        self.claude_desktop = None;
+        self.codebuddy = None;
+        self.codex = None;
+        self.codex_desktop = None;
+        self.opencode = None;
+        self.crush = None;
+        self.copilot = None;
+        self.cursor = None;
     }
 }
 

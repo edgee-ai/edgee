@@ -63,8 +63,14 @@ pub async fn run(opts: Options) -> Result<()> {
             .iter()
             .find(|o| o.id == target || o.slug == target)
             .ok_or_else(|| anyhow::anyhow!("Organization '{target}' not found"))?;
+        let changed = creds.org_id.as_deref() != Some(org.id.as_str());
         creds.org_id = Some(org.id.clone());
         creds.org_slug = Some(org.slug.clone());
+        if changed {
+            // Provider keys are org-scoped; drop them so they're re-provisioned
+            // under the new org on next launch/relay instead of routing on stale keys.
+            creds.clear_provider_keys();
+        }
         crate::config::write(&creds)?;
 
         if opts.json {

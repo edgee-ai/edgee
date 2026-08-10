@@ -382,6 +382,10 @@ pub struct ProviderKeyStatus {
 /// definitive not-found or expiry triggers re-provisioning. Transient errors
 /// keep the existing key so a network blip never wipes a valid setup.
 pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStatus> {
+    // Reject an unknown provider up front — otherwise a bad key falls through to
+    // `fetch_provider_key`, which hits the server before failing on store.
+    coding_assistant_name(provider)?;
+
     let creds = crate::config::read()?;
 
     let cached = creds.provider(provider);
@@ -568,7 +572,19 @@ async fn browser_auth(interactive: bool) -> Result<(String, Option<String>, Opti
     if interactive {
         println!("  {}", style("Waiting for authentication…").dim());
     }
-    let (mut stream, _) = listener.accept().await?;
+    // Interactive logins wait indefinitely — signup/email-verification can take a
+    // while. Headless callers (`--non-interactive`) get a bound instead, so an
+    // abandoned browser flow (tab closed, no callback) can't hang a front-end.
+    let (mut stream, _) = if interactive {
+        listener.accept().await?
+    } else {
+        match tokio::time::timeout(std::time::Duration::from_secs(300), listener.accept()).await {
+            Ok(result) => result?,
+            Err(_) => anyhow::bail!(
+                "Timed out waiting for the login callback (5 min). Re-run `edgee auth login`."
+            ),
+        }
+    };
 
     let mut buf = vec![0u8; 4096];
     let n = stream.read(&mut buf).await?;
