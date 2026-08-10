@@ -6,6 +6,10 @@ license = "Apache-2.0"
 homepage = "https://www.edgee.cloud"
 repository = "https://github.com/edgee-ai/edgee"
 
+[lib]
+name = "edgee_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "edgee"
 path = "src/main.rs"
