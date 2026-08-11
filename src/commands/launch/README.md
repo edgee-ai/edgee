@@ -5,6 +5,17 @@ relate to credentials, transport, and the hidden `edgee relay` command.
 
 Read this before adding a new agent.
 
+## Why the catalogue matters
+
+Wrapping the agent itself — with no code change on the user's side — is Edgee's
+core differentiator against app-oriented gateways. Every target added here
+widens the surface Edgee can route, meter, and govern. The catalogue below is
+also the foundation the upcoming desktop app builds on: it will wrap the whole
+local AI stack, CLI agents and desktop apps alike, from these same definitions.
+
+So target names are long-lived public API. Renaming one breaks user aliases,
+desktop wrappers, scripts, and docs at once. Get the name right the first time.
+
 ## Three layers (do not conflate them)
 
 | Layer | What it is | Examples |
