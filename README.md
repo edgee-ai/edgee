@@ -30,7 +30,7 @@ agent — Claude Code, Codex, Cursor, VS Code + Copilot, and more. Setup takes a
 The production gateway (routing, compression, metering, billing, observability) is operated by Edgee
 and is **not** built from this repo. Self-hosting is not supported here.
 
-<img width="1997" height="807" alt="ai-gateway-horizontal-light" src="https://github.com/user-attachments/assets/d68ff91d-a488-428e-b99d-f4e1c3ef9242" />
+<img width="2515" height="1422" alt="illustration" src="https://github.com/user-attachments/assets/4ca2fdc1-ffe2-4f7f-8db1-4e527bb1fc4d" />
 
 ## Why Edgee
 
