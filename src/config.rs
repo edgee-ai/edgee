@@ -387,6 +387,37 @@ pub fn mcp_injection_disabled_env_override() -> Option<bool> {
     parse_bool_flag(&std::env::var("EDGEE_MCP_INJECTION_DISABLED").ok()?)
 }
 
+/// Local kill switch for org plugin delivery (`EDGEE_PLUGINS_DISABLED=1`).
+///
+/// There is deliberately no profile-level equivalent: an `enforced` plugin is
+/// org policy, and a member opting out locally would defeat it. This exists for
+/// debugging and for CI, where materializing org config is just noise.
+pub fn plugins_disabled_env_override() -> Option<bool> {
+    parse_bool_flag(&std::env::var("EDGEE_PLUGINS_DISABLED").ok()?)
+}
+
+/// Edgee's home-anchored directory (`~/.edgee`), already the home of the
+/// `edgee launch` PATH shims.
+///
+/// Deliberately **not** [`config_dir`]: that prefers a project-local `./.edgee/`
+/// when one exists, which would put materialized plugin files inside the user's
+/// git working tree. Plugin delivery must never write into a repo.
+pub fn edgee_home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|h| !h.is_empty())
+        .map(|h| PathBuf::from(h).join(".edgee"))
+}
+
+/// Root of the materialized plugin tree for the active profile
+/// (`~/.edgee/plugins/<profile>`).
+///
+/// Profile-scoped because two profiles mean two orgs, and one org's plugins must
+/// never be served to another.
+pub fn plugins_dir() -> Option<PathBuf> {
+    Some(edgee_home()?.join("plugins").join(active_profile_name()))
+}
+
 pub fn mcp_base_url() -> String {
     if let Ok(v) = std::env::var("EDGEE_MCP_URL") {
         return v;

@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::util;
+use crate::commands::util::plugins;
 
 /// OpenCode clamps every request's `max_tokens` to its own `OUTPUT_TOKEN_MAX` of
 /// 32k (`maxOutputTokens()` in its provider transform), and falls back to that
@@ -305,6 +306,21 @@ pub async fn run(opts: Options) -> Result<()> {
             obj.insert("provider".to_string(), Value::Object(providers_map));
         }
     }
+
+    // Org plugins. OpenCode's schema exposes `skills.paths`, an `agent` map and
+    // an `mcp` map, so all three go into the config the CLI already generates —
+    // the user's own opencode.json is read but never written.
+    let plugin_report = plugins::sync_for_target(&creds, plugins::Target::Opencode).await;
+    if let Some(mcp) = plugins::config::opencode_mcp(&plugin_report.plugins) {
+        plugins::config::merge_object(&mut config, "mcp", mcp);
+    }
+    if let Some(agents) = plugins::config::opencode_agents(&plugin_report.plugins) {
+        plugins::config::merge_object(&mut config, "agent", agents);
+    }
+    if let Some(skills) = plugin_report.skills_root.as_ref() {
+        plugins::config::push_path(&mut config, "skills", "paths", &skills.to_string_lossy());
+    }
+    plugins::report_launch(&plugin_report);
 
     let config_content = serde_json::to_string_pretty(&config)?;
     let config_path =

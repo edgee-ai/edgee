@@ -11,6 +11,8 @@ setup_commands! {
     Auth(auth),
     /// Launch an AI tool routed through Edgee
     Launch(launch),
+    /// Show and install the plugins your organization has assigned to you
+    Plugins(plugins),
     /// Configure compression, fallback, and reroute settings for a coding-agent key
     Settings(settings),
     /// Show stored session stats

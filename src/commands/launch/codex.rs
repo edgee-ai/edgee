@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use super::util;
+use crate::commands::util::plugins;
 
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
@@ -82,6 +83,30 @@ pub async fn run(opts: Options) -> Result<()> {
         // logged in to codex — the header is simply omitted.
         "-c", "model_providers.edgee-cli.requires_openai_auth=true",
     ]);
+    // Org plugins. Codex exposes no way to add a skills directory — only to
+    // relocate the whole config root via CODEX_HOME — so we build a symlink
+    // mirror of it and add ours there. Symlinks mean the user's auth.json,
+    // history and databases are referenced, never copied, and their real
+    // ~/.codex is never written to. MCP servers ride `-c` overrides, the same
+    // mechanism already used above for the provider.
+    let plugin_report = plugins::sync_for_target(&creds, plugins::Target::Codex).await;
+    for arg in plugins::config::codex_mcp_args(&plugin_report.plugins) {
+        cmd.args(["-c", &arg]);
+    }
+    if let Some(skills_root) = plugin_report.skills_root.as_ref() {
+        if let Some(mirror) = plugins::codex_home_mirror() {
+            let source = plugins::codex_home_source();
+            // Delivering nothing beats delivering into a half-built mirror, so a
+            // failure here simply leaves CODEX_HOME alone.
+            if plugins::mirror::build(&source, &mirror, &["skills"]).is_ok()
+                && plugins::mirror::link_children(skills_root, &mirror.join("skills")).is_ok()
+            {
+                cmd.env("CODEX_HOME", &mirror);
+            }
+        }
+    }
+    plugins::report_launch(&plugin_report);
+
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {

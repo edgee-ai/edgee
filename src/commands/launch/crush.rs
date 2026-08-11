@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::util;
+use crate::commands::util::plugins;
 
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
@@ -267,6 +268,27 @@ pub async fn run(opts: Options) -> Result<()> {
         debug_log_headers,
     );
     insert_edgee_provider(&mut config, edgee_provider);
+
+    // Org plugins. Crush's own schema carries `options.skills_paths`, a top-level
+    // `hooks` map and an `mcp` map, so plugin delivery rides the same
+    // clone-and-redirect the provider already uses — the user's real crush.json
+    // is never touched.
+    let plugin_report = plugins::sync_for_target(&creds, plugins::Target::Crush).await;
+    if let Some(mcp) = plugins::config::crush_mcp(&plugin_report.plugins) {
+        plugins::config::merge_object(&mut config, "mcp", mcp);
+    }
+    if let Some(hooks) = plugins::config::crush_hooks(&plugin_report.plugins) {
+        plugins::config::merge_object(&mut config, "hooks", hooks);
+    }
+    if let Some(skills) = plugin_report.skills_root.as_ref() {
+        plugins::config::push_path(
+            &mut config,
+            "options",
+            "skills_paths",
+            &skills.to_string_lossy(),
+        );
+    }
+    plugins::report_launch(&plugin_report);
 
     // Crush reads `crush.json` from the directory named by CRUSH_GLOBAL_CONFIG,
     // so we write into a per-session temp directory and point the variable at it.

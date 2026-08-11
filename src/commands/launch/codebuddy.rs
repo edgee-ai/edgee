@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use super::util;
+use crate::commands::util::plugins;
 
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
@@ -76,6 +77,22 @@ pub async fn run(opts: Options) -> Result<()> {
             "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_entry}{debug_log_header}"
         ),
     );
+    // Org plugins. CodeBuddy documents CODEBUDDY_PLUGIN_DIRS as the env-var form
+    // of `--plugin-dir` and reads Claude Code's bundle format, so it receives the
+    // byte-identical tree — nothing is written into the user's ~/.codebuddy.
+    let plugins = plugins::sync_for_target(&creds, plugins::Target::Codebuddy).await;
+    if !plugins.plugin_dirs.is_empty() {
+        // Colon-separated, per CodeBuddy's own documentation.
+        let dirs = plugins
+            .plugin_dirs
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(":");
+        cmd.env("CODEBUDDY_PLUGIN_DIRS", dirs);
+    }
+    plugins::report_launch(&plugins);
+
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {
