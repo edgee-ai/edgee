@@ -1,12 +1,31 @@
 # Contributing to Edgee
 
-Thank you for considering a contribution. Edgee is Apache 2.0 licensed and we welcome bug reports, feature requests, and pull requests.
+Thank you for considering a contribution. This CLI is Apache 2.0 licensed and open source, and we
+welcome bug reports, feature requests, and pull requests.
+
+## Scope: what belongs in this repo
+
+This repository ships the **`edgee` command-line tool** — launching coding agents through Edgee,
+authentication, profiles, settings, session stats, the statusline integration, and the local relay
+for GUI apps. It is the only open-source Edgee repository, and it will stay open source.
+
+The **gateway** — routing, Strategies, token compression, metering, billing, observability — is a
+separate, Edgee-operated service and is not built from this repo. If your idea is about how requests
+are routed or compressed, it belongs there, not here. Self-hosting the gateway is not supported.
+
+Good contributions here: new launch targets, platform fixes (especially Windows and Linux), better
+CLI ergonomics and error messages, statusline and alias improvements, docs.
+
+[`AGENTS.md`](AGENTS.md) has the fuller picture: product context, CLI surface, repo map, and
+conventions. It's worth a read before your first PR.
 
 ## Prerequisites
 
 - **Rust** stable toolchain (1.85 or later). Install via [rustup](https://rustup.rs).
 - **cargo** is bundled with Rust.
 - On Linux you may need `pkg-config` and `libssl-dev` (or equivalent) for the TLS backend.
+- Optional: a [Nix](https://nixos.org) + [direnv](https://direnv.net) setup works out of the box —
+  `flake.nix` provides a dev shell with the full toolchain.
 
 ## Clone and build
 
@@ -28,6 +47,9 @@ Install the CLI locally:
 cargo install --path .
 edgee --version
 ```
+
+Or, to dogfood a local build without replacing an installed release, `make install` symlinks
+`target/release/edgee` into `~/.local/bin`.
 
 ## Run the CLI in development
 
@@ -60,6 +82,8 @@ cargo fmt --all
 cargo clippy --all-targets
 ```
 
+CI runs clippy with `-D warnings`, so any warning fails the build.
+
 ## Pre-commit gate
 
 All three checks must pass before committing:
@@ -70,13 +94,22 @@ cargo fmt --all && cargo clippy --all-targets && cargo test --all
 
 ## Pull request process
 
-1. Fork the repo and create a branch from `main`. Use the naming scheme `feat/<topic>`, `fix/<topic>`, or `chore/<topic>`.
+1. Fork the repo and create a branch from `main`. Use the naming scheme `feat/<topic>`,
+   `fix/<topic>`, or `chore/<topic>`.
 2. Make your changes and ensure the pre-commit gate passes locally.
-3. Open a PR against `main` with a concise, imperative title (e.g. `Add OpenAI streaming support`).
+3. Open a PR against `main` with a concise, imperative title (e.g. `Add Kilo Code launch target`).
 4. Reference the relevant GitHub issue in the PR description (e.g. `Closes #42`).
 5. A maintainer will review within a few business days. Small, focused PRs get reviewed fastest.
 
-For significant new features or architectural changes, open an issue first so we can discuss the approach before you invest time building.
+For significant new features or architectural changes, open an issue first so we can discuss the
+approach before you invest time building.
+
+## Adding a launch target
+
+`edgee launch <target>` names are not free-form: target names, provider keys, and transport are
+three separate concerns with rules. Read
+[`src/commands/launch/README.md`](src/commands/launch/README.md) before adding an agent — it has the
+naming convention, the current catalogue, a step-by-step checklist, and the anti-patterns to avoid.
 
 ## Tool-result trimming strategies
 
@@ -87,8 +120,10 @@ for how to add a new strategy.
 
 ## Repository layout
 
-See the [Repository layout](../README.md#repository-layout) section in the README for the crate tree and purpose table.
+See the [Repository layout](README.md#repository-layout) section in the README for the source tree
+and purpose table.
 
 ## License
 
-By contributing you agree that your work will be licensed under the Apache License 2.0.
+By contributing you agree that your work will be licensed under the Apache License 2.0. See
+[LICENSE](LICENSE).
