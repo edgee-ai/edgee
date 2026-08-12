@@ -7,12 +7,13 @@
 //! materialized last time, not a failed launch.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::api::{ApiClient, Plugin};
 use crate::config::{self, Credentials};
 
-use super::cache::{self, SyncOutcome};
+use super::cache::{self, CacheEntry, SyncOutcome};
 use super::delivery::Target;
 use super::materialize::{plan_tree, Plan};
 use super::writer;
@@ -20,7 +21,14 @@ use super::writer;
 /// The API can be slow; a launch cannot. `ApiClient` carries a single 30s
 /// timeout, which is far too long to make someone wait before their agent
 /// starts, so the plugin fetch gets its own much shorter budget.
-const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+///
+/// Two budgets, not one, because the two phases fail differently. The metadata
+/// list is a single small request. The bodies are a fan-out whose size depends
+/// on how much changed — so it gets its own deadline covering the whole batch,
+/// not one per request, and a slow server cannot multiply the wait by the number
+/// of edited plugins.
+const LIST_TIMEOUT: Duration = Duration::from_secs(5);
+const BODY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What the launch path needs to know once delivery is done.
 #[derive(Debug, Default)]
@@ -85,18 +93,36 @@ pub async fn sync_for_target(creds: &Credentials, target: Target) -> SyncReport 
 
     // A layout this CLI no longer writes cannot be reconciled into shape by
     // per-plugin change detection, because the plugins may be untouched while
-    // the files derived from them are stale. Start clean instead.
-    if root.exists() && !cache::layout_matches(&root) {
-        let _ = writer::wipe(&root, &guard);
-    }
+    // the files derived from them are stale. The tree has to be rebuilt from
+    // scratch — but only once we hold an answer to rebuild it *from*. Wiping
+    // first would mean a failed fetch leaves the member with nothing at all,
+    // which is exactly the deletion-on-transient-failure this module forbids.
+    let stale_layout = root.exists() && !cache::layout_matches(&root);
 
-    let fetched = fetch(token, org_id).await;
-    let cached = cache::read(&root, org_id);
+    // A cache written under a layout we no longer produce is not a cache we can
+    // serve: `resolve` would keep the existing tree, and the existing tree is
+    // the thing that is wrong.
+    let cached = if stale_layout {
+        None
+    } else {
+        cache::read(&root, org_id)
+    };
+    let fetched = fetch(token, org_id, cached.as_deref()).await;
     let from_cache = fetched.is_none() && cached.is_some();
 
-    let plugins = match cache::resolve(fetched, cached) {
+    let plugins = match cache::resolve(
+        fetched.as_deref().map(cache::plugins_of),
+        cached.as_deref().map(cache::plugins_of),
+    ) {
         SyncOutcome::Reconcile(plugins) => {
-            let _ = cache::write(&root, org_id, &plugins, &[]);
+            // Definitive answer in hand: now the old-layout tree can go.
+            if stale_layout {
+                let _ = writer::wipe(&root, &guard);
+            }
+            // `fetched` is what produced this arm, so it is always Some here.
+            if let Some(entries) = &fetched {
+                let _ = cache::write(&root, org_id, entries);
+            }
             plugins
         }
         SyncOutcome::UseCache(plugins) => plugins,
@@ -118,12 +144,66 @@ pub async fn sync_for_target(creds: &Credentials, target: Target) -> SyncReport 
 
 /// `None` means "we could not ask" — distinct from an empty list, which means
 /// "you have no plugins" and does sweep the tree.
-async fn fetch(token: &str, org_id: &str) -> Option<Vec<Plugin>> {
-    let client = ApiClient::new(token).ok()?;
-    tokio::time::timeout(FETCH_TIMEOUT, client.list_plugins(org_id))
+///
+/// Two phases. The metadata list says what exists and at which revision; the
+/// bodies are then fetched only for the active plugins the cache cannot cover.
+/// A launch that changed nothing since the last one issues exactly one request
+/// and downloads no component bodies at all.
+///
+/// A body we cannot obtain collapses the whole thing back to `None`. Returning a
+/// partial set would be worse than returning nothing: `writer::reconcile` sweeps
+/// every file that is not in the plan, so a plugin missing from a "successful"
+/// answer is a plugin deleted from disk. Only a complete answer changes local
+/// state — the same rule `cache::resolve` encodes for the offline case.
+async fn fetch(
+    token: &str,
+    org_id: &str,
+    cached: Option<&[CacheEntry]>,
+) -> Option<Vec<CacheEntry>> {
+    let client = Arc::new(ApiClient::new(token).ok()?);
+
+    let metadata = tokio::time::timeout(LIST_TIMEOUT, client.list_plugins_metadata(org_id))
         .await
         .ok()?
-        .ok()
+        .ok()?;
+
+    let mut plan = cache::merge(&metadata, cached);
+    if plan.stale.is_empty() {
+        return Some(plan.ready);
+    }
+
+    let fetched = tokio::time::timeout(BODY_TIMEOUT, fetch_bodies(client, org_id, &plan.stale))
+        .await
+        .ok()??;
+
+    plan.ready.extend(fetched);
+    Some(plan.ready)
+}
+
+/// Downloads the component bodies for `stale`, concurrently. `None` if any of
+/// them fails.
+///
+/// A `JoinSet` rather than loose handles because dropping it aborts whatever is
+/// still in flight — so when the deadline above fires, or one request fails, the
+/// rest stop with it instead of running on behind a launch that already moved.
+async fn fetch_bodies(
+    client: Arc<ApiClient>,
+    org_id: &str,
+    stale: &[Plugin],
+) -> Option<Vec<CacheEntry>> {
+    let mut requests = tokio::task::JoinSet::new();
+    for meta in stale {
+        let client = Arc::clone(&client);
+        let org_id = org_id.to_string();
+        let plugin_id = meta.id.clone();
+        requests.spawn(async move { client.get_plugin(&org_id, &plugin_id).await });
+    }
+
+    let mut entries = Vec::with_capacity(stale.len());
+    while let Some(joined) = requests.join_next().await {
+        entries.push(CacheEntry::complete(joined.ok()?.ok()?));
+    }
+    Some(entries)
 }
 
 fn report_for(plan: &Plan, root: &Path) -> SyncReport {

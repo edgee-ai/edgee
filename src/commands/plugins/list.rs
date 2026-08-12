@@ -95,12 +95,13 @@ fn state_of(plugin: &Plugin) -> State {
 }
 
 fn summarize(plugin: &Plugin) -> String {
+    let counts = plugin.component_counts;
     let mut parts = Vec::new();
     for (n, one, many) in [
-        (plugin.skills.len(), "skill", "skills"),
-        (plugin.subagents.len(), "subagent", "subagents"),
-        (plugin.hooks.len(), "hook", "hooks"),
-        (plugin.mcp_servers.len(), "MCP server", "MCP servers"),
+        (counts.skill, "skill", "skills"),
+        (counts.subagent, "subagent", "subagents"),
+        (counts.hook, "hook", "hooks"),
+        (counts.mcp, "MCP server", "MCP servers"),
     ] {
         if n > 0 {
             parts.push(format!("{n} {}", if n == 1 { one } else { many }));
@@ -115,7 +116,11 @@ fn summarize(plugin: &Plugin) -> String {
 
 pub async fn run(opts: Options) -> Result<()> {
     let (token, org_id) = org_context().await?;
-    let plugins = ApiClient::new(&token)?.list_plugins(&org_id).await?;
+    // Metadata only: this command counts components and names them, and never
+    // renders a skill body or a subagent prompt.
+    let plugins = ApiClient::new(&token)?
+        .list_plugins_metadata(&org_id)
+        .await?;
     let rows = rows(&plugins);
 
     println!();
@@ -187,10 +192,10 @@ fn print_delivery(plugins: &[Plugin], verbose: bool) {
         .into_iter()
         .filter(|kind| {
             active.iter().any(|p| match kind {
-                Kind::Skills => !p.skills.is_empty(),
-                Kind::Subagents => !p.subagents.is_empty(),
-                Kind::Hooks => !p.hooks.is_empty(),
-                Kind::McpServers => !p.mcp_servers.is_empty(),
+                Kind::Skills => p.component_counts.skill > 0,
+                Kind::Subagents => p.component_counts.subagent > 0,
+                Kind::Hooks => p.component_counts.hook > 0,
+                Kind::McpServers => p.component_counts.mcp > 0,
             })
         })
         .collect();
@@ -239,6 +244,7 @@ fn print_delivery(plugins: &[Plugin], verbose: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::PluginComponentCounts;
 
     fn plugin(name: &str, targeted: bool, active: bool) -> Plugin {
         Plugin {
@@ -292,11 +298,16 @@ mod tests {
         assert_eq!(rows[1].state, State::Installed);
     }
 
+    /// The summary reads `component_counts`, not the vectors: this command asks
+    /// for the metadata view, where the vectors arrive empty by design.
     #[test]
     fn summary_counts_components_and_singularizes() {
         let mut p = plugin("p", true, true);
-        p.skills = vec![Default::default()];
-        p.mcp_servers = vec![Default::default(), Default::default()];
+        p.component_counts = PluginComponentCounts {
+            skill: 1,
+            mcp: 2,
+            ..Default::default()
+        };
 
         assert_eq!(summarize(&p), "1 skill · 2 MCP servers");
         assert_eq!(summarize(&plugin("empty", true, true)), "no components");

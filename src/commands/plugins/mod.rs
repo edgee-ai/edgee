@@ -73,7 +73,8 @@ async fn set_installed(opts: InstallOptions, installed: bool) -> Result<()> {
     let (token, org_id) = org_context().await?;
     let client = ApiClient::new(&token)?;
 
-    let plugins = client.list_plugins(&org_id).await?;
+    // Metadata only: this list exists to turn a name into an id and a title.
+    let plugins = client.list_plugins_metadata(&org_id).await?;
     let Some(plugin) = find(&plugins, &opts.name) else {
         // The API would 404 anyway, but resolving locally lets us say which
         // name was not found rather than echoing a bare status code.

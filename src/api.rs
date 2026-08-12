@@ -367,7 +367,7 @@ pub struct KeySettings {
 }
 
 /// A skill: markdown instructions the assistant loads when the task matches.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct PluginSkill {
     #[serde(default)]
     pub name: String,
@@ -382,7 +382,7 @@ pub struct PluginSkill {
 }
 
 /// A subagent: a named system prompt the assistant can delegate to.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct PluginSubagent {
     #[serde(default)]
     pub name: String,
@@ -397,7 +397,7 @@ pub struct PluginSubagent {
 }
 
 /// A hook: a shell command bound to an assistant lifecycle event.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct PluginHook {
     #[serde(default)]
     pub name: String,
@@ -417,7 +417,7 @@ pub struct PluginHook {
 
 /// An MCP server. Both transports share one struct, matching the server, which
 /// clears the fields belonging to the other transport on write.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct PluginMcpServer {
     #[serde(default)]
     pub name: String,
@@ -436,12 +436,29 @@ pub struct PluginMcpServer {
     pub headers: HashMap<String, String>,
 }
 
+/// How many components of each kind a plugin carries.
+///
+/// Sent on every plugin payload, including the metadata view that leaves the
+/// four component vectors empty — so anything that only counts reads this and
+/// never has to know which view it was handed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginComponentCounts {
+    #[serde(default)]
+    pub skill: usize,
+    #[serde(default)]
+    pub subagent: usize,
+    #[serde(default)]
+    pub hook: usize,
+    #[serde(default)]
+    pub mcp: usize,
+}
+
 /// An org plugin (`GET /v1/organizations/{org}/plugins`), already filtered
 /// server-side to what targets the caller.
 ///
 /// `mode` is a String rather than an enum on purpose: a third mode added
 /// server-side must never turn into a deserialization failure at launch time.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct Plugin {
     pub id: String,
     #[serde(default)]
@@ -462,6 +479,12 @@ pub struct Plugin {
     #[serde(default, deserialize_with = "de_collection_lenient")]
     pub mcp_servers: Vec<PluginMcpServer>,
 
+    /// Counts for all four kinds, present even on the metadata view where the
+    /// vectors above arrive empty. Read this rather than `.len()` anywhere the
+    /// payload may not carry the bodies.
+    #[serde(default)]
+    pub component_counts: PluginComponentCounts,
+
     /// `enforced` or `optional`. Display only — `active` already accounts for it.
     #[serde(default)]
     pub mode: String,
@@ -477,6 +500,13 @@ pub struct Plugin {
     /// `version` is author-controlled and can stay put across a content edit.
     #[serde(default)]
     pub updated_at: String,
+    /// Bumped by every server-side mutation. This is what the launch-time sync
+    /// compares against the cache to decide whether to re-download the bodies.
+    ///
+    /// Zero means the server did not send one — a plugin stored before the field
+    /// existed. Treat it as "unknown" and always re-fetch, never as a match.
+    #[serde(default)]
+    pub revision: u64,
 }
 
 impl Plugin {
@@ -747,12 +777,20 @@ impl ApiClient {
         resp.json().await.context("Invalid provider keys response")
     }
 
-    /// Lists the org plugins that target the signed-in user. Returns a raw array
-    /// (no `{ data: [...] }` wrapper), like `list_provider_keys`.
+    /// Lists the org plugins that target the signed-in user, without the
+    /// component bodies — names, flags, `revision` and `component_counts` only.
+    /// Returns a raw array (no `{ data: [...] }` wrapper), like
+    /// `list_provider_keys`.
     ///
     /// Admins receive the whole org catalogue, including plugins that do not
     /// target them — read `targeted`/`active` rather than assuming membership.
-    pub async fn list_plugins(&self, org_id: &str) -> Result<Vec<Plugin>> {
+    ///
+    /// This is the only shape the endpoint has: server-side the components sit in
+    /// a separate row that the list query does not read. Callers must not
+    /// materialize from it — the four component vectors come back empty, and
+    /// writing that to disk would delete every delivered file. Pair it with
+    /// `get_plugin` for the ones whose revision moved.
+    pub async fn list_plugins_metadata(&self, org_id: &str) -> Result<Vec<Plugin>> {
         let url = format!("{}/v1/organizations/{}/plugins", self.base_url, org_id);
         let resp = self
             .http
@@ -762,6 +800,23 @@ impl ApiClient {
             .context("Failed to list plugins")?;
         check_status(&resp, "list plugins")?;
         resp.json().await.context("Invalid plugins response")
+    }
+
+    /// One plugin with its component bodies. 404s for a plugin that does not
+    /// target the caller, so a member cannot read another squad's package.
+    pub async fn get_plugin(&self, org_id: &str, plugin_id: &str) -> Result<Plugin> {
+        let url = format!(
+            "{}/v1/organizations/{}/plugins/{}",
+            self.base_url, org_id, plugin_id
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch plugin")?;
+        check_status(&resp, "fetch plugin")?;
+        resp.json().await.context("Invalid plugin response")
     }
 
     /// Opts the signed-in user in or out of an **optional** plugin.
