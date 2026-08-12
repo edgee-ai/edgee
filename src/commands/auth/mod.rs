@@ -1,5 +1,6 @@
 pub mod list;
 pub mod login;
+pub mod logout;
 pub mod orgs;
 pub mod status;
 pub mod switch;
@@ -8,6 +9,8 @@ pub mod switch;
 enum Command {
     /// Log in to Edgee
     Login(login::Options),
+    /// Log out (clear the active profile's credentials, or `--all`)
+    Logout(logout::Options),
     /// Show authentication status
     Status(status::Options),
     /// List all configured profiles
@@ -27,6 +30,7 @@ pub struct Options {
 pub async fn run(opts: Options) -> anyhow::Result<()> {
     match opts.command {
         Command::Login(o) => login::run(o).await,
+        Command::Logout(o) => logout::run(o).await,
         Command::Status(o) => status::run(o).await,
         Command::List(o) => list::run(o).await,
         Command::Switch(o) => switch::run(o).await,
