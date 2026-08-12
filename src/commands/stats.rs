@@ -11,6 +11,12 @@ setup_command! {
     /// Emit machine-readable JSON instead of the human-readable report.
     #[arg(long)]
     pub json: bool,
+    /// Org usage window when logged in (JSON): 1h, 3h, 6h, 24h, 7d, 30d.
+    #[arg(long, default_value = "24h")]
+    pub period: String,
+    /// Use local session logs even when logged in (JSON).
+    #[arg(long)]
+    pub local: bool,
 }
 
 /// Compression percentage from before/after tool-token totals, or `None` when
@@ -27,7 +33,15 @@ fn compression_pct(before: u64, after: u64) -> Option<u64> {
 /// macOS menubar app) so they don't scrape the human report.
 #[derive(Serialize)]
 struct StatsJson {
+    /// "api" (org-wide, windowed) or "local" (this machine's session logs).
+    source: &'static str,
+    /// The time window when `source == "api"` (e.g. "24h").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window: Option<String>,
     sessions: usize,
+    /// Live online-session count when `source == "api"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_sessions: Option<u64>,
     totals: Totals,
     recent: Vec<SessionBrief>,
 }
@@ -107,10 +121,57 @@ fn build_stats_json(logs: &[util::SessionLogEntry], limit: Option<usize>) -> Sta
         .collect();
 
     StatsJson {
+        source: "local",
+        window: None,
         sessions: logs.len(),
+        active_sessions: None,
         totals: compute_totals(logs),
         recent,
     }
+}
+
+/// Build the JSON shape from an org-wide API usage summary. The per-session
+/// `recent` list is omitted (front-ends don't use it in remote mode).
+fn stats_json_from_summary(
+    summary: &crate::api::OrgUsageSummary,
+    period: &str,
+    active: Option<u64>,
+) -> StatsJson {
+    StatsJson {
+        source: "api",
+        window: Some(period.to_string()),
+        sessions: summary.distinct_sessions as usize,
+        active_sessions: active,
+        totals: Totals {
+            requests: summary.total_requests,
+            errors: summary.error_requests,
+            input_tokens: summary.input_tokens,
+            output_tokens: summary.output_tokens,
+            cached_input_tokens: summary.cached_input_tokens,
+            token_cost_savings: summary.token_cost_savings,
+            uncompressed_tools_tokens: summary.uncompressed_tools_tokens,
+            compressed_tools_tokens: summary.compressed_tools_tokens,
+            compression_pct: compression_pct(
+                summary.uncompressed_tools_tokens,
+                summary.compressed_tools_tokens,
+            ),
+        },
+        recent: Vec::new(),
+    }
+}
+
+/// Fetch org-wide usage from the console API. Returns `None` when not logged in,
+/// no org is selected, or any API/network error — so the caller falls back to
+/// local session logs.
+async fn fetch_remote_stats(period: &str) -> Option<StatsJson> {
+    let creds = crate::config::read().ok()?;
+    let token = creds.user_token.as_deref().filter(|t| !t.is_empty())?;
+    let org = creds.org_id.as_deref().filter(|o| !o.is_empty())?;
+    let client = crate::api::ApiClient::new(token).ok()?;
+    let summary = client.get_org_usage(org, period).await.ok()?;
+    // Online count is best-effort; a failure just leaves `active_sessions` unset.
+    let active = client.get_online_sessions_count(org).await.ok();
+    Some(stats_json_from_summary(&summary, period, active))
 }
 
 fn fmt_compression_cell(before: u64, after: u64) -> (String, bool) {
@@ -126,6 +187,13 @@ pub async fn run(opts: Options) -> Result<()> {
     let logs = util::read_all_session_logs()?;
 
     if opts.json {
+        // Prefer org-wide, windowed API usage when logged in; fall back to local
+        // session logs when logged out, offline, or `--local`.
+        if !opts.local {
+            if let Some(remote) = fetch_remote_stats(&opts.period).await {
+                return util::emit_json(&remote);
+            }
+        }
         return util::emit_json(&build_stats_json(&logs, opts.limit));
     }
 
@@ -264,6 +332,7 @@ mod tests {
         let v = serde_json::to_value(&out).unwrap();
         assert!(v.get("sessions").is_some());
         assert!(v.get("recent").is_some());
+        assert_eq!(v.get("source").and_then(|s| s.as_str()), Some("local"));
         let totals = v.get("totals").expect("totals");
         for key in [
             "requests",
@@ -305,5 +374,42 @@ mod tests {
         ] {
             assert!(bv.get(key).is_some(), "missing session.{key}");
         }
+    }
+
+    // The API `/usage` summary envelope decodes and maps onto the JSON shape.
+    #[test]
+    fn api_usage_maps_to_stats_json() {
+        let envelope = r#"{
+            "summary": {
+                "total_requests": 241,
+                "distinct_sessions": 12,
+                "error_requests": 3,
+                "input_tokens": 189000,
+                "cached_input_tokens": 3300000,
+                "output_tokens": 34000,
+                "token_cost_savings": 42,
+                "uncompressed_tools_tokens": 100,
+                "compressed_tools_tokens": 60
+            },
+            "stats_by_time": {},
+            "delta": {}
+        }"#;
+        // Decode just the summary the way the API client does.
+        #[derive(serde::Deserialize)]
+        struct Env {
+            summary: crate::api::OrgUsageSummary,
+        }
+        let env: Env = serde_json::from_str(envelope).unwrap();
+        let out = stats_json_from_summary(&env.summary, "1h", Some(2));
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["source"], "api");
+        assert_eq!(v["window"], "1h");
+        assert_eq!(v["sessions"], 12);
+        assert_eq!(v["active_sessions"], 2);
+        assert_eq!(v["totals"]["requests"], 241);
+        assert_eq!(v["totals"]["errors"], 3);
+        assert_eq!(v["totals"]["cached_input_tokens"], 3_300_000u64);
+        assert_eq!(v["totals"]["compression_pct"], 40); // (100-60)/100
+        assert_eq!(v["recent"].as_array().unwrap().len(), 0);
     }
 }

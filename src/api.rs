@@ -8,6 +8,42 @@ pub struct ApiClient {
     base_url: String,
 }
 
+/// Org-wide usage aggregate from `GET /v1/organizations/{org}/usage` (ClickHouse
+/// backed, windowed by `period`). Only the fields the CLI/front-ends surface are
+/// decoded; everything else in the summary is ignored. `#[serde(default)]` keeps
+/// it decoding if the console omits a field.
+#[derive(Debug, Default, Deserialize)]
+pub struct OrgUsageSummary {
+    #[serde(default)]
+    pub total_requests: u64,
+    #[serde(default)]
+    pub distinct_sessions: u64,
+    #[serde(default)]
+    pub error_requests: u64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cached_input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub token_cost_savings: u64,
+    #[serde(default)]
+    pub uncompressed_tools_tokens: u64,
+    #[serde(default)]
+    pub compressed_tools_tokens: u64,
+}
+
+#[derive(Deserialize)]
+struct UsageResponse {
+    summary: OrgUsageSummary,
+}
+
+#[derive(Deserialize)]
+struct OnlineSessionsResponse {
+    online_sessions: u64,
+}
+
 #[derive(Deserialize)]
 pub struct Organization {
     pub id: String,
@@ -434,6 +470,43 @@ impl ApiClient {
             .context("Failed to fetch organization")?;
         check_status(&resp, "fetch organization")?;
         resp.json().await.context("Invalid organization response")
+    }
+
+    /// Org-wide usage aggregate for a time window (`period`: 1h/3h/6h/24h/7d/30d).
+    /// This is the account-scoped, cross-device data the console dashboard uses —
+    /// unlike `edgee stats`'s local session logs.
+    pub async fn get_org_usage(&self, org_id: &str, period: &str) -> Result<OrgUsageSummary> {
+        let url = format!(
+            "{}/v1/organizations/{}/usage?period={}",
+            self.base_url, org_id, period
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch org usage")?;
+        check_status(&resp, "fetch org usage")?;
+        let body: UsageResponse = resp.json().await.context("Invalid usage response")?;
+        Ok(body.summary)
+    }
+
+    /// Number of sessions currently online for the org (live "active" count).
+    pub async fn get_online_sessions_count(&self, org_id: &str) -> Result<u64> {
+        let url = format!(
+            "{}/v1/organizations/{}/sessions/online-count",
+            self.base_url, org_id
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch online session count")?;
+        check_status(&resp, "fetch online session count")?;
+        let body: OnlineSessionsResponse =
+            resp.json().await.context("Invalid online-count response")?;
+        Ok(body.online_sessions)
     }
 
     /// Lists the gateway model catalog (with `plan_fallback`, `aliases`, etc.) used
