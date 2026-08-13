@@ -472,13 +472,26 @@ impl ApiClient {
         resp.json().await.context("Invalid organization response")
     }
 
-    /// Org-wide usage aggregate for a time window (`period`: 1h/3h/6h/24h/7d/30d).
-    /// This is the account-scoped, cross-device data the console dashboard uses —
-    /// unlike `edgee stats`'s local session logs.
-    pub async fn get_org_usage(&self, org_id: &str, period: &str) -> Result<OrgUsageSummary> {
+    /// Usage aggregate for a time window (`period`: 1h/3h/6h/24h/7d/30d). This is
+    /// the account-scoped, cross-device data the console dashboard uses — unlike
+    /// `edgee stats`'s local session logs.
+    ///
+    /// `user_id` narrows the aggregate to one member (the console's "My usage"
+    /// toggle). Only org admins can widen or redirect the scope; the API pins
+    /// regular members to themselves regardless of what we send, so passing our
+    /// own id is the way to get "my usage" for everyone.
+    pub async fn get_org_usage(
+        &self,
+        org_id: &str,
+        period: &str,
+        user_id: Option<&str>,
+    ) -> Result<OrgUsageSummary> {
         let url = format!(
-            "{}/v1/organizations/{}/usage?period={}",
-            self.base_url, org_id, period
+            "{}/v1/organizations/{}/usage?period={}{}",
+            self.base_url,
+            org_id,
+            period,
+            user_id.map_or(String::new(), |id| format!("&user_id={id}"))
         );
         let resp = self
             .http
@@ -491,11 +504,18 @@ impl ApiClient {
         Ok(body.summary)
     }
 
-    /// Number of sessions currently online for the org (live "active" count).
-    pub async fn get_online_sessions_count(&self, org_id: &str) -> Result<u64> {
+    /// Number of sessions currently online (live "active" count), narrowed to one
+    /// member when `user_id` is set — same scoping rules as [`Self::get_org_usage`].
+    pub async fn get_online_sessions_count(
+        &self,
+        org_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<u64> {
         let url = format!(
-            "{}/v1/organizations/{}/sessions/online-count",
-            self.base_url, org_id
+            "{}/v1/organizations/{}/sessions/online-count{}",
+            self.base_url,
+            org_id,
+            user_id.map_or(String::new(), |id| format!("?user_id={id}"))
         );
         let resp = self
             .http

@@ -11,7 +11,7 @@ setup_command! {
     /// Emit machine-readable JSON instead of the human-readable report.
     #[arg(long)]
     pub json: bool,
-    /// Org usage window when logged in (JSON): 1h, 3h, 6h, 24h, 7d, 30d.
+    /// Usage window for your org activity when logged in (JSON): 1h, 3h, 6h, 24h, 7d, 30d.
     #[arg(long, default_value = "24h")]
     pub period: String,
     /// Use local session logs even when logged in (JSON).
@@ -33,7 +33,8 @@ fn compression_pct(before: u64, after: u64) -> Option<u64> {
 /// macOS menubar app) so they don't scrape the human report.
 #[derive(Serialize)]
 struct StatsJson {
-    /// "api" (org-wide, windowed) or "local" (this machine's session logs).
+    /// "api" (your usage across devices, windowed) or "local" (this machine's
+    /// session logs).
     source: &'static str,
     /// The time window when `source == "api"` (e.g. "24h").
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,7 +131,7 @@ fn build_stats_json(logs: &[util::SessionLogEntry], limit: Option<usize>) -> Sta
     }
 }
 
-/// Build the JSON shape from an org-wide API usage summary. The per-session
+/// Build the JSON shape from an API usage summary. The per-session
 /// `recent` list is omitted (front-ends don't use it in remote mode).
 fn stats_json_from_summary(
     summary: &crate::api::OrgUsageSummary,
@@ -160,17 +161,21 @@ fn stats_json_from_summary(
     }
 }
 
-/// Fetch org-wide usage from the console API. Returns `None` when not logged in,
-/// no org is selected, or any API/network error — so the caller falls back to
-/// local session logs.
+/// Fetch the signed-in user's usage within their org from the console API.
+/// Returns `None` when not logged in, no org is selected, or any API/network
+/// error — so the caller falls back to local session logs.
 async fn fetch_remote_stats(period: &str) -> Option<StatsJson> {
     let creds = crate::config::read().ok()?;
     let token = creds.user_token.as_deref().filter(|t| !t.is_empty())?;
     let org = creds.org_id.as_deref().filter(|o| !o.is_empty())?;
+    // Scope to this account: without it an org admin gets the whole org's numbers,
+    // which is not what "my stats" means. Credentials predating `user_id` leave it
+    // unset — the API still pins regular members to their own rows.
+    let user = creds.user_id.as_deref().filter(|u| !u.is_empty());
     let client = crate::api::ApiClient::new(token).ok()?;
-    let summary = client.get_org_usage(org, period).await.ok()?;
+    let summary = client.get_org_usage(org, period, user).await.ok()?;
     // Online count is best-effort; a failure just leaves `active_sessions` unset.
-    let active = client.get_online_sessions_count(org).await.ok();
+    let active = client.get_online_sessions_count(org, user).await.ok();
     Some(stats_json_from_summary(&summary, period, active))
 }
 
@@ -187,7 +192,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let logs = util::read_all_session_logs()?;
 
     if opts.json {
-        // Prefer org-wide, windowed API usage when logged in; fall back to local
+        // Prefer the account's windowed API usage when logged in; fall back to local
         // session logs when logged out, offline, or `--local`.
         if !opts.local {
             if let Some(remote) = fetch_remote_stats(&opts.period).await {
