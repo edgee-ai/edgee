@@ -52,7 +52,7 @@ installed files (except `codex-desktop`'s config, reverted ~10 s later), or its 
 
 ### Claude Code (`edgee launch claude`)
 
-Implementation: [`src/commands/launch/claude.rs`](../src/commands/launch/claude.rs)
+Implementation: `[src/commands/launch/claude.rs](../src/commands/launch/claude.rs)`
 
 ```
 ANTHROPIC_BASE_URL      = https://<gateway>
@@ -106,18 +106,12 @@ fail with `401`). Edgee's gateway meets that obligation.
 
 Two consequences worth stating:
 
-1. Edgee never sees, stores, or replays the user's Anthropic credential. It is forwarded in the
-  `Authorization` header the client sets, and Edgee's own auth travels in a separate header.
-2. Anthropic is aware of and specifies this traffic pattern. What it does *not* do is endorse
-  specific vendors: "Anthropic doesn't endorse, maintain, or audit third-party gateway products,
-   and doesn't support routing Claude Code to non-Claude models through any gateway." That second
-   clause matters for the routing pillar (see [FAQ 2](#faq)).
-
-
+1. Edgee never extracts, stores, or replays the user's Anthropic credential. It transits the gateway in the `Authorization` header the client sets, is forwarded upstream unchanged, and is not persisted; Edgee's own auth travels in a separate header. The CLI never reads it at all.
+2. Anthropic is aware of and specifies this traffic pattern. What it does *not* do is endorse specific vendors: "Anthropic doesn't endorse, maintain, or audit third-party gateway products, and doesn't support routing Claude Code to non-Claude models through any gateway." That second clause matters for the routing pillar (see [FAQ 2](#faq)).
 
 ### Codex CLI (`edgee launch codex`)
 
-Implementation: [`src/commands/launch/codex.rs`](../src/commands/launch/codex.rs)
+Implementation: `[src/commands/launch/codex.rs](../src/commands/launch/codex.rs)`
 
 Edgee passes documented `-c` config overrides to the child process:
 
@@ -142,14 +136,13 @@ separate header. Same shape as Claude Code: **the agent keeps its identity, Edge
 
 ### OpenCode (`edgee launch opencode`)
 
-Implementation: [`src/commands/launch/opencode.rs`](../src/commands/launch/opencode.rs)
+Implementation: `[src/commands/launch/opencode.rs](../src/commands/launch/opencode.rs)`
 
 Edgee reads the user's existing `opencode.json`/`.jsonc`, merges in a `provider.edgee` block, writes
 the result to a per-session temp file, and points the child at it with `OPENCODE_CONFIG`. The user's
 own file is never modified.
 
-- [`OPENCODE_CONFIG`](https://opencode.ai/docs/config/): "Specify a custom config file path using
-the `OPENCODE_CONFIG` environment variable."
+- `[OPENCODE_CONFIG](https://opencode.ai/docs/config/)`: "Specify a custom config file path using the `OPENCODE_CONFIG` environment variable."
 - [Custom / OpenAI-compatible providers](https://opencode.ai/docs/providers/) documents exactly
 the block Edgee writes: `npm: "@ai-sdk/openai-compatible"`, `options.baseURL`, `options.apiKey`,
 `options.headers` ("Custom headers sent with each request"), and the `models` map with
@@ -163,7 +156,7 @@ provider and pays through their Edgee/BYOK credentials. No subscription intercep
 
 ### CodeBuddy (`edgee launch codebuddy`)
 
-Implementation: [`src/commands/launch/codebuddy.rs`](../src/commands/launch/codebuddy.rs)
+Implementation: `[src/commands/launch/codebuddy.rs](../src/commands/launch/codebuddy.rs)`
 
 ```
 CODEBUDDY_BASE_URL       = https://<gateway>/v1
@@ -181,10 +174,9 @@ gateways/proxies that require auth or routing headers", a verbatim description o
 > string. Repo attribution is therefore malformed for CodeBuddy sessions. Small fix, not yet made.
 
 
-
 ### Crush (`edgee launch crush`)
 
-Implementation: [`src/commands/launch/crush.rs`](../src/commands/launch/crush.rs)
+Implementation: `[src/commands/launch/crush.rs](../src/commands/launch/crush.rs)`
 
 Edgee reads the user's global `crush.json`, merges in a `providers.edgee` entry
 (`type: "openai-compat"`, `base_url`, `api_key`, `extra_headers`, `models[]`), writes it to a
@@ -202,8 +194,8 @@ the Transport A integrations.
 
 ## Transport B: config-file patch (`codex-desktop`)
 
-Implementation: [`src/commands/launch/codex_desktop.rs`](../src/commands/launch/codex_desktop.rs);
-full rationale in [`src/commands/launch/README.md`](../src/commands/launch/README.md#codex-desktop--config-patch-not-relay).
+Implementation: `[src/commands/launch/codex_desktop.rs](../src/commands/launch/codex_desktop.rs)`;
+full rationale in `[src/commands/launch/README.md](../src/commands/launch/README.md#codex-desktop--config-patch-not-relay)`.
 
 The ChatGPT desktop app runs a bundled `codex app-server` that reads `$CODEX_HOME/config.toml` and
 honours the same `model_providers` keys as the CLI. The app supplies its own argv, so `-c` injection
@@ -232,7 +224,7 @@ seconds and fully reverted.
 
 ## Transport C: local relay
 
-Implementation: [`src/commands/relay/mod.rs`](../src/commands/relay/mod.rs), [`src/commands/relay/handler.rs`](../src/commands/relay/handler.rs)
+Implementation: `[src/commands/relay/mod.rs](../src/commands/relay/mod.rs)`, `[src/commands/relay/handler.rs](../src/commands/relay/handler.rs)`
 
 Used only for GUI targets with no configuration surface: `cursor`, `copilot-vscode`, `claude-desktop`. `edgee relay` is a hidden subcommand, transport is an implementation detail, not public UX.
 
@@ -303,11 +295,13 @@ manual GUI configuration that cannot be driven from a launch command, which woul
 one-command onboarding that makes the product adopt itself across a 500-developer org. But if a
 vendor update breaks interception, the surface is migrated to Transport A rather than lost.
 
-| Surface | Documented Transport A path | What it costs |
-|---|---|---|
-| `claude-desktop` | **Anthropic's own third-party inference configuration** — Developer → Configure Third-Party Inference, or [distributed by an administrator through managed settings](https://code.claude.com/docs/en/llm-gateway-connect#configure-each-surface) | Enabling Developer Mode per device (or an admin rollout). The app then runs local sessions only: no SSH or Anthropic-hosted cloud environments, no Remote Control |
-| `copilot-vscode` | **Custom Endpoint provider** in `chatLanguageModels.json` — `url`, `apiKey`, `apiType`, `requestHeaders`, [documented for "self-hosted models, enterprise gateways"](https://code.visualstudio.com/docs/copilot/customization/language-models) | This is BYOK: it *replaces* the Copilot subscription rather than preserving it, and Copilot Business/Enterprise admins control whether the policy is allowed at all |
-| `cursor` | **Settings → Models → OpenAI API Key + Override OpenAI Base URL** ([Bring your own API key](https://cursor.com/help/models-and-usage/api-keys)) | Chat models only (tab completion stays on Cursor's own models), the override disables Cursor's built-in Pro models, Cursor's Zero Data Retention policy no longer applies, and there is no per-model base URL |
+
+| Surface          | Documented Transport A path                                                                                                                                                                                                                      | What it costs                                                                                                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claude-desktop` | **Anthropic's own third-party inference configuration** — Developer → Configure Third-Party Inference, or [distributed by an administrator through managed settings](https://code.claude.com/docs/en/llm-gateway-connect#configure-each-surface) | Enabling Developer Mode per device (or an admin rollout). The app then runs local sessions only: no SSH or Anthropic-hosted cloud environments, no Remote Control                                             |
+| `copilot-vscode` | **Custom Endpoint provider** in `chatLanguageModels.json` — `url`, `apiKey`, `apiType`, `requestHeaders`, [documented for "self-hosted models, enterprise gateways"](https://code.visualstudio.com/docs/copilot/customization/language-models)   | This is BYOK: it *replaces* the Copilot subscription rather than preserving it, and Copilot Business/Enterprise admins control whether the policy is allowed at all                                           |
+| `cursor`         | **Settings → Models → OpenAI API Key + Override OpenAI Base URL** ([Bring your own API key](https://cursor.com/help/models-and-usage/api-keys))                                                                                                  | Chat models only (tab completion stays on Cursor's own models), the override disables Cursor's built-in Pro models, Cursor's Zero Data Retention policy no longer applies, and there is no per-model base URL |
+
 
 Two honest observations about that table. First, the Claude Desktop fallback is the strongest of the
 three: Anthropic documents it as a first-class gateway surface, and an admin-distributed
@@ -336,17 +330,37 @@ For three GUI apps: by a local loopback proxy that decrypts four known inference
 **2. Is it consistent with the providers' terms?**
 The *technical* mechanisms for Transport A are the vendors' own documented extension points, and Anthropic explicitly documents subscription traffic routed through a third-party gateway, including what such a gateway must forward. That is a strong position and it is verifiable from public docs.
 
-It is not, by itself, a legal opinion. Two things need counsel, not engineering, before the
-roadshow:
+Before the clauses themselves, one thing to settle: **which contract applies depends on how the developer pays for the model**, and both cases occur in a real Edgee deployment.
 
-- **Consumer-plan terms.** Anthropic's and OpenAI's consumer subscription terms govern what a
-subscription may be used for. The documented gateway path shows the *client* supports it; whether
-routing that traffic through a commercial third party at scale is within the plan's terms is a
-contract question. Get it answered in writing rather than inferred from developer docs.
-- **The routing pillar specifically.** Anthropic states it "doesn't support routing Claude Code to
-non-Claude models through any gateway." That does not make it prohibited, but it means
-cross-vendor rerouting is explicitly outside the supported envelope, and any diligence process
-will find that sentence. Have the answer ready.
+| What the developer is on | Governing contract |
+|---|---|
+| A ChatGPT subscription (Plus, Pro) | OpenAI [Terms of Use](https://openai.com/policies/row-terms-of-use/) |
+| A claude.ai subscription | Anthropic [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) |
+| OpenAI API credits, or their own OpenAI key under BYOK | OpenAI [Services Agreement](https://openai.com/policies/services-agreement/) |
+
+This matters because the clauses do not carry across. OpenAI's prohibition on transferring API keys, for instance, lives in the Services Agreement, which states it "does not apply to OpenAI services used by consumers or individuals", so it says nothing about a developer on a ChatGPT subscription. Reading a business-tier clause onto a consumer plan, or the reverse, is the easiest way to reach a wrong conclusion here. The *Where* column below therefore names the document behind each clause.
+
+With that settled, here are the restrictions that could plausibly be raised, and where Edgee sits against each:
+
+
+| Clause                                                                                                                                                                                                      | Where                                                                             | Our position                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "You may not share your Account login information, Anthropic API key, or Account credentials with anyone else" / "You may not share your account credentials or make your account available to anyone else" | Anthropic §2; OpenAI ToU, *Registration*                                          | No credential is shared. One user authenticates with their own credential, on their own machine, for their own use. It transits the gateway inside the request their own client initiates; Edgee neither extracts, stores, nor replays it. Anthropic's [gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol) specifies what a gateway must do with exactly this traffic, a vendor that writes that spec is not treating transit as making an account available to someone else |
+| "Modify, copy, lease, sell or distribute any of our Services"; no reselling the Services; "buy, sell, or transfer API keys from, to, or with a third party"                                                 | OpenAI ToU, *What you cannot do*; Anthropic §3; OpenAI Services Agreement §3.3(g) | Edgee sells no model access. Customers arrive with their own subscription or their own provider keys, and pay Edgee for the gateway, routing, compression, metering, governance. No provider credential is minted, brokered, or transferred, on either the consumer or the API path                                                                                                                                                                                                               |
+| "circumvent any rate limits or restrictions or bypass any protective measures or safety mitigations"; "violate or circumvent Usage Limits or otherwise configure the Services to avoid Usage Limits"        | OpenAI ToU + Services Agreement §3.3(h)–(i); Anthropic §3–§4                      | Nothing is circumvented. Because the user's own credential stays active, the provider enforces their quota exactly as before. Compression *reduces* consumption against that same cap, and budget rerouting means a request is not sent to that provider at all, declining to consume a service is not evading its limits. Note both texts frame this as a species of interfering with or disrupting the Services                                                                                 |
+| "Automatically or programmatically extract data or Output"                                                                                                                                                  | OpenAI ToU, *What you cannot do*                                                  | Metering counts tokens, it does not retain Output. Debug logs are opt-in and encrypted to a public key the CLI derives from the user's own passphrase, discarding the private key immediately (`[src/crypto.rs](../src/crypto.rs)`); the passphrase never reaches Edgee, so the ciphertext is undecryptable by us. No Output corpus is accumulated, and none is used for training, which is what this clause sits next to                                                                         |
+| "access the Services through automated or non-human means" outside an API key or where explicitly allowed                                                                                                   | Anthropic §3(7)                                                                   | The client is Claude Code, Anthropic's own product, explicitly supported on subscription plans. Edgee originates no traffic; it forwards what the user's agent sends                                                                                                                                                                                                                                                                                                                              |
+| No reverse engineering, decompiling, or discovering underlying components                                                                                                                                   | Anthropic §3(3); OpenAI ToU + Services Agreement §3.3(d)                          | Transports A and B use published configuration surfaces only. Transport C reads a proprietary wire protocol as it crosses a proxy running on the user's own machine, observation of one's own traffic, not decompilation or model extraction. It remains the mechanism least anchored in a documented contract                                                                                                                                                                                    |
+
+
+**Our view.** These terms govern *who* uses an account and *whether limits are evaded*, not which network path a request takes. Edgee changes only the path. One user, one credential, one quota, one bill, on infrastructure their employer chose, which is what every enterprise egress proxy already does. If credential transit through infrastructure were itself the violation, TLS-inspecting corporate proxies would be too.
+
+The design constraint that keeps this true is worth stating because it is what a review will probe:
+**Edgee never multiplexes several users onto one subscription and never rotates credentials to defeat a per-account cap.** That is the line, and the architecture does not permit crossing it, provider keys are issued per user, per agent.
+
+On routing specifically, Anthropic states it "doesn't support routing Claude Code to non-Claude models through any gateway." That is a support-scope statement in developer documentation, not a prohibition in the terms: it means Anthropic won't help debug it, not that it is disallowed. The substantive obligations above are unaffected by which model ultimately serves a request.
+
+Residual risk, stated plainly: terms can change, and neither provider has a clause that addresses proxies by name, silence cuts both ways. The clause with the most textual friction is OpenAI's ban on programmatically extracting Output, because a metering gateway necessarily sees the stream; the answer is architectural rather than interpretive, which is why the end-to-end encryption of debug logs matters. The broader mitigation is structural: BYOK and API-credit routing are untouched by any change to consumer-plan terms, so no single term governs the business.
 
 **3. Can a vendor update break the product?**
 Yes, at very different severities per transport. See the next section.
@@ -367,6 +381,7 @@ Technically, per transport:
 - **Transport C** could be broken cheaply and possibly unintentionally (certificate pinning, an HTTP/2-only transport, or a protocol change). Unlike Transport B, all three of these surfaces have a documented vendor-supported gateway configuration to fall back on, so a break costs onboarding simplicity rather than the surface itself. See [If the relay breaks: fall back to Transport A](#if-the-relay-breaks-fall-back-to-transport-a).
 
 
+
 Contractually: a provider can change subscription terms at any time. BYOK and API-credit routing work identically and are unaffected, so the business does not depend on any single credential mode.
 
 **6. Are there official partnerships or integrations?**
@@ -380,10 +395,10 @@ What is true, and strong enough on its own: Edgee uses the vendors' own publishe
 ## Fragility: what a vendor update can break
 
 
-| Transport                   | Blast radius | Failure mode                                                                                                     | Recovery                                                   |
-| --------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| **A - CLI env/config**      | Low          | A renamed env var or config key breaks one target; requests fall back to the vendor's own endpoint               | One-line change, ship in a CLI release                     |
-| **B - codex-desktop patch** | Medium       | A schema change, or a cold start exceeding the 10 s grace, silently sends traffic direct to OpenAI               | Against accidental drift: config keys are shared with the CLI, so they move together. Against a deliberate close: no fallback on this surface — see [FAQ 5](#faq) |
+| Transport                   | Blast radius | Failure mode                                                                                                              | Recovery                                                                                                                                                          |
+| --------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A - CLI env/config**      | Low          | A renamed env var or config key breaks one target; requests fall back to the vendor's own endpoint                        | One-line change, ship in a CLI release                                                                                                                            |
+| **B - codex-desktop patch** | Medium       | A schema change, or a cold start exceeding the 10 s grace, silently sends traffic direct to OpenAI                        | Against accidental drift: config keys are shared with the CLI, so they move together. Against a deliberate close: no fallback on this surface — see [FAQ 5](#faq) |
 | **C - relay**               | **High**     | Certificate pinning, HTTP/2-only transport, or a protocol change breaks the relay outright, with no relay-side workaround | [Migrate the surface to Transport A](#if-the-relay-breaks-fall-back-to-transport-a): all three have a documented vendor gateway path, at the cost of manual setup |
 
 
@@ -393,4 +408,3 @@ Structural mitigations already in the codebase: every target degrades to the ven
 rather than failing closed; the launch catalogue is deliberately wide, so no single vendor decision
 removes the product; and `src/commands/launch/README.md` treats target names as long-lived public
 API so integrations can be swapped underneath without breaking user aliases.
-
