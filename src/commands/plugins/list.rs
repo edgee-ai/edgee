@@ -2,6 +2,8 @@
 
 use anyhow::Result;
 use console::style;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::api::{ApiClient, Plugin};
 use crate::commands::util::plugins::delivery::{delivery, Delivery, Kind, Target};
@@ -21,7 +23,12 @@ pub struct Options {
 pub struct Row {
     pub name: String,
     pub title: String,
-    pub version: String,
+    /// When the plugin last changed, phrased for a human.
+    ///
+    /// Where a version number used to be. A version said nothing anyone could
+    /// act on — every machine runs the current one by construction, since a
+    /// launch takes whatever the server has.
+    pub edited: String,
     pub state: State,
     pub summary: String,
 }
@@ -49,6 +56,44 @@ impl State {
     }
 }
 
+/// "edited 3 days ago", from the server's RFC 3339 timestamp.
+///
+/// Degrades to a vague phrase rather than failing: a timestamp we cannot parse
+/// is a cosmetic problem, and this is one column of a listing.
+fn last_edited(updated_at: &str) -> String {
+    let Ok(at) = OffsetDateTime::parse(updated_at, &Rfc3339) else {
+        return "edited recently".to_string();
+    };
+
+    let elapsed = OffsetDateTime::now_utc() - at;
+    let minutes = elapsed.whole_minutes();
+    let hours = elapsed.whole_hours();
+    let days = elapsed.whole_days();
+
+    // Clock skew, or a plugin saved a moment ago: either way "just now" is true
+    // enough and beats a negative duration.
+    if minutes < 1 {
+        return "edited just now".to_string();
+    }
+    if hours < 1 {
+        return plural(minutes, "minute");
+    }
+    if days < 1 {
+        return plural(hours, "hour");
+    }
+    if days < 30 {
+        return plural(days, "day");
+    }
+    if days < 365 {
+        return plural(days / 30, "month");
+    }
+    plural(days / 365, "year")
+}
+
+fn plural(n: i64, unit: &str) -> String {
+    format!("edited {n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
 /// Sorts active first, then what you could install, then the admin-only view.
 /// Within a group, by name, so the listing is stable between runs.
 pub fn rows(plugins: &[Plugin]) -> Vec<Row> {
@@ -57,7 +102,7 @@ pub fn rows(plugins: &[Plugin]) -> Vec<Row> {
         .map(|p| Row {
             name: p.name.clone(),
             title: p.title().to_string(),
-            version: p.version.clone(),
+            edited: last_edited(&p.updated_at),
             state: state_of(p),
             summary: summarize(p),
         })
@@ -155,7 +200,7 @@ pub async fn run(opts: Options) -> Result<()> {
         println!(
             "  {glyph} {}  {}  {}  {}",
             style(&row.title).bold(),
-            style(&row.version).dim(),
+            style(&row.edited).dim(),
             label,
             style(&row.summary).dim()
         );
@@ -250,11 +295,43 @@ mod tests {
         Plugin {
             id: format!("plg_{name}"),
             name: name.to_string(),
-            version: "1.0.0".to_string(),
             targeted,
             active,
             ..Default::default()
         }
+    }
+
+    /// The listing degrades rather than breaks on a timestamp it cannot read —
+    /// an unparseable date is one dim column, not a failed command.
+    #[test]
+    fn last_edited_falls_back_on_an_unreadable_timestamp() {
+        assert_eq!(last_edited(""), "edited recently");
+        assert_eq!(last_edited("yesterday-ish"), "edited recently");
+    }
+
+    /// A server clock slightly ahead of ours must not print a negative age.
+    #[test]
+    fn last_edited_reads_a_future_timestamp_as_just_now() {
+        let ahead = OffsetDateTime::now_utc() + time::Duration::minutes(5);
+        let formatted = ahead.format(&Rfc3339).unwrap();
+
+        assert_eq!(last_edited(&formatted), "edited just now");
+    }
+
+    #[test]
+    fn last_edited_picks_a_unit_and_singularizes() {
+        let ago = |d: time::Duration| {
+            last_edited(&(OffsetDateTime::now_utc() - d).format(&Rfc3339).unwrap())
+        };
+
+        assert_eq!(ago(time::Duration::seconds(20)), "edited just now");
+        assert_eq!(ago(time::Duration::minutes(1)), "edited 1 minute ago");
+        assert_eq!(ago(time::Duration::minutes(42)), "edited 42 minutes ago");
+        assert_eq!(ago(time::Duration::hours(1)), "edited 1 hour ago");
+        assert_eq!(ago(time::Duration::days(1)), "edited 1 day ago");
+        assert_eq!(ago(time::Duration::days(9)), "edited 9 days ago");
+        assert_eq!(ago(time::Duration::days(45)), "edited 1 month ago");
+        assert_eq!(ago(time::Duration::days(400)), "edited 1 year ago");
     }
 
     #[test]
