@@ -16,7 +16,7 @@ The short answer:
 
 **For the CLI agents (the large majority of usage) Edgee sets the configuration variables the vendors themselves publish for exactly this purpose.** There is no binary patching, no code injection, no credential extraction, no reverse-engineered API.  
 
-For three GUI targets (Cursor, Copilot in VS Code, Claude Desktop) Edgee runs a **local, opt-in, scoped MITM relay**, which is a materially different and more sensitive posture. That difference is stated plainly in [Transport C](#transport-c--local-relay) and in [Fragility](#fragility-what-a-vendor-update-can-break).
+For three GUI targets (Cursor, Copilot in VS Code, Claude Desktop) Edgee runs a **local, opt-in, scoped MITM relay**, which is a materially different and more sensitive posture. That difference is stated plainly in [Transport C](#transport-c-local-relay) and in [Fragility](#fragility-what-a-vendor-update-can-break).
 
 ---
 
@@ -52,7 +52,7 @@ installed files (except `codex-desktop`'s config, reverted ~10 s later), or its 
 
 ### Claude Code (`edgee launch claude`)
 
-Implementation: `[src/commands/launch/claude.rs](../src/commands/launch/claude.rs)`
+Implementation: [`src/commands/launch/claude.rs`](../src/commands/launch/claude.rs)
 
 ```
 ANTHROPIC_BASE_URL      = https://<gateway>
@@ -111,13 +111,13 @@ Two consequences worth stating:
 2. Anthropic is aware of and specifies this traffic pattern. What it does *not* do is endorse
   specific vendors: "Anthropic doesn't endorse, maintain, or audit third-party gateway products,
    and doesn't support routing Claude Code to non-Claude models through any gateway." That second
-   clause matters for the routing pillar (see [Contractual posture](#contractual-posture)).
+   clause matters for the routing pillar (see [FAQ 2](#faq)).
 
 
 
 ### Codex CLI (`edgee launch codex`)
 
-Implementation: `[src/commands/launch/codex.rs](../src/commands/launch/codex.rs)`
+Implementation: [`src/commands/launch/codex.rs`](../src/commands/launch/codex.rs)
 
 Edgee passes documented `-c` config overrides to the child process:
 
@@ -142,13 +142,13 @@ separate header. Same shape as Claude Code: **the agent keeps its identity, Edge
 
 ### OpenCode (`edgee launch opencode`)
 
-Implementation: `[src/commands/launch/opencode.rs](../src/commands/launch/opencode.rs)`
+Implementation: [`src/commands/launch/opencode.rs`](../src/commands/launch/opencode.rs)
 
 Edgee reads the user's existing `opencode.json`/`.jsonc`, merges in a `provider.edgee` block, writes
 the result to a per-session temp file, and points the child at it with `OPENCODE_CONFIG`. The user's
 own file is never modified.
 
-- `[OPENCODE_CONFIG](https://opencode.ai/docs/config/)`: "Specify a custom config file path using
+- [`OPENCODE_CONFIG`](https://opencode.ai/docs/config/): "Specify a custom config file path using
 the `OPENCODE_CONFIG` environment variable."
 - [Custom / OpenAI-compatible providers](https://opencode.ai/docs/providers/) documents exactly
 the block Edgee writes: `npm: "@ai-sdk/openai-compatible"`, `options.baseURL`, `options.apiKey`,
@@ -163,7 +163,7 @@ provider and pays through their Edgee/BYOK credentials. No subscription intercep
 
 ### CodeBuddy (`edgee launch codebuddy`)
 
-Implementation: `[src/commands/launch/codebuddy.rs](../src/commands/launch/codebuddy.rs)`
+Implementation: [`src/commands/launch/codebuddy.rs`](../src/commands/launch/codebuddy.rs)
 
 ```
 CODEBUDDY_BASE_URL       = https://<gateway>/v1
@@ -184,7 +184,7 @@ gateways/proxies that require auth or routing headers", a verbatim description o
 
 ### Crush (`edgee launch crush`)
 
-Implementation: `[src/commands/launch/crush.rs](../src/commands/launch/crush.rs)`
+Implementation: [`src/commands/launch/crush.rs`](../src/commands/launch/crush.rs)
 
 Edgee reads the user's global `crush.json`, merges in a `providers.edgee` entry
 (`type: "openai-compat"`, `base_url`, `api_key`, `extra_headers`, `models[]`), writes it to a
@@ -202,8 +202,8 @@ the Transport A integrations.
 
 ## Transport B: config-file patch (`codex-desktop`)
 
-Implementation: `[src/commands/launch/codex_desktop.rs](../src/commands/launch/codex_desktop.rs)`;
-full rationale in `[src/commands/launch/README.md](../src/commands/launch/README.md#codex-desktop--config-patch-not-relay)`.
+Implementation: [`src/commands/launch/codex_desktop.rs`](../src/commands/launch/codex_desktop.rs);
+full rationale in [`src/commands/launch/README.md`](../src/commands/launch/README.md#codex-desktop--config-patch-not-relay).
 
 The ChatGPT desktop app runs a bundled `codex app-server` that reads `$CODEX_HOME/config.toml` and
 honours the same `model_providers` keys as the CLI. The app supplies its own argv, so `-c` injection
@@ -232,7 +232,7 @@ seconds and fully reverted.
 
 ## Transport C: local relay
 
-Implementation: `[src/commands/relay/mod.rs](../src/commands/relay/mod.rs)`, `[src/commands/relay/handler.rs](../src/commands/relay/handler.rs)`
+Implementation: [`src/commands/relay/mod.rs`](../src/commands/relay/mod.rs), [`src/commands/relay/handler.rs`](../src/commands/relay/handler.rs)
 
 Used only for GUI targets with no configuration surface: `cursor`, `copilot-vscode`, `claude-desktop`. `edgee relay` is a hidden subcommand, transport is an implementation detail, not public UX.
 
