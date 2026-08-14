@@ -35,12 +35,8 @@ pub struct Row {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum State {
-    /// In force and not yours to remove — org policy.
-    Enforced,
-    /// In force because you opted in. You can remove it again.
-    Installed,
-    /// Offered to you, not installed.
-    Available,
+    /// Assigned to you: it is on this machine, and it is not yours to remove.
+    Assigned,
     /// Visible only because you are an admin — it targets someone else.
     NotAssigned,
 }
@@ -48,9 +44,7 @@ pub enum State {
 impl State {
     fn label(self) -> &'static str {
         match self {
-            State::Enforced => "enforced",
-            State::Installed => "installed",
-            State::Available => "available",
+            State::Assigned => "assigned",
             State::NotAssigned => "not assigned",
         }
     }
@@ -109,10 +103,8 @@ pub fn rows(plugins: &[Plugin]) -> Vec<Row> {
         .collect();
     rows.sort_by(|a, b| {
         let rank = |s: State| match s {
-            State::Enforced => 0,
-            State::Installed => 1,
-            State::Available => 2,
-            State::NotAssigned => 3,
+            State::Assigned => 0,
+            State::NotAssigned => 1,
         };
         rank(a.state)
             .cmp(&rank(b.state))
@@ -123,15 +115,7 @@ pub fn rows(plugins: &[Plugin]) -> Vec<Row> {
 
 fn state_of(plugin: &Plugin) -> State {
     if plugin.active {
-        // Worth distinguishing: one of these the member can undo, the other is
-        // org policy and `edgee plugins remove` will refuse it.
-        if plugin.is_enforced() {
-            State::Enforced
-        } else {
-            State::Installed
-        }
-    } else if plugin.targeted {
-        State::Available
+        State::Assigned
     } else {
         // Admins receive the whole org catalogue, so an untargeted plugin is not
         // an error — it just is not theirs.
@@ -190,11 +174,10 @@ pub async fn run(opts: Options) -> Result<()> {
         }
 
         let (glyph, label) = match row.state {
-            State::Enforced | State::Installed => (
+            State::Assigned => (
                 style("✓").green().bold(),
                 style(row.state.label()).green(),
             ),
-            State::Available => (style("○").dim(), style(row.state.label()).dim()),
             State::NotAssigned => (style("·").dim(), style(row.state.label()).dim()),
         };
         println!(
@@ -204,18 +187,6 @@ pub async fn run(opts: Options) -> Result<()> {
             label,
             style(&row.summary).dim()
         );
-
-        match row.state {
-            State::Available => println!(
-                "    {}",
-                style(format!("edgee plugins install {}", row.name)).dim()
-            ),
-            State::Installed => println!(
-                "    {}",
-                style(format!("edgee plugins remove {}", row.name)).dim()
-            ),
-            _ => {}
-        }
     }
 
     println!();
@@ -291,11 +262,10 @@ mod tests {
     use super::*;
     use crate::api::PluginComponentCounts;
 
-    fn plugin(name: &str, targeted: bool, active: bool) -> Plugin {
+    fn plugin(name: &str, active: bool) -> Plugin {
         Plugin {
             id: format!("plg_{name}"),
             name: name.to_string(),
-            targeted,
             active,
             ..Default::default()
         }
@@ -335,51 +305,31 @@ mod tests {
     }
 
     #[test]
-    fn rows_sort_in_force_first_then_available_then_admin_view() {
-        let rows = rows(&[
-            plugin("zeta-not-mine", false, false),
-            plugin("beta-offered", true, false),
-            plugin("alpha-active", true, true),
-        ]);
+    fn rows_sort_assigned_first_then_the_admin_view() {
+        let rows = rows(&[plugin("zeta-not-mine", false), plugin("alpha-mine", true)]);
 
         assert_eq!(
             rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
-            vec!["alpha-active", "beta-offered", "zeta-not-mine"]
+            vec!["alpha-mine", "zeta-not-mine"]
         );
-        assert_eq!(rows[0].state, State::Installed);
-        assert_eq!(rows[1].state, State::Available);
-        assert_eq!(rows[2].state, State::NotAssigned);
+        assert_eq!(rows[0].state, State::Assigned);
+        assert_eq!(rows[1].state, State::NotAssigned);
     }
 
     #[test]
     fn rows_are_ordered_by_name_within_a_group() {
-        let rows = rows(&[plugin("b", true, true), plugin("a", true, true)]);
+        let rows = rows(&[plugin("b", true), plugin("a", true)]);
         assert_eq!(
             rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
             vec!["a", "b"]
         );
     }
 
-    /// Both are in force, but only one is the member's to undo — so the listing
-    /// distinguishes them rather than calling both "active".
-    #[test]
-    fn enforced_and_installed_are_distinguished() {
-        let mut enforced = plugin("e", true, true);
-        enforced.mode = "enforced".into();
-        let mut installed = plugin("i", true, true);
-        installed.mode = "optional".into();
-
-        let rows = rows(&[installed, enforced]);
-
-        assert_eq!(rows[0].state, State::Enforced);
-        assert_eq!(rows[1].state, State::Installed);
-    }
-
     /// The summary reads `component_counts`, not the vectors: this command asks
     /// for the metadata view, where the vectors arrive empty by design.
     #[test]
     fn summary_counts_components_and_singularizes() {
-        let mut p = plugin("p", true, true);
+        let mut p = plugin("p", true);
         p.component_counts = PluginComponentCounts {
             skill: 1,
             mcp: 2,
@@ -387,6 +337,6 @@ mod tests {
         };
 
         assert_eq!(summarize(&p), "1 skill · 2 MCP servers");
-        assert_eq!(summarize(&plugin("empty", true, true)), "no components");
+        assert_eq!(summarize(&plugin("empty", true)), "no components");
     }
 }

@@ -415,21 +415,18 @@ pub struct PluginHook {
     pub timeout: u32,
 }
 
-/// An MCP server. Both transports share one struct, matching the server, which
-/// clears the fields belonging to the other transport on write.
+/// A remote MCP server the assistant connects to over HTTP.
+///
+/// There is no stdio counterpart. A stdio server runs as a local child process,
+/// so it presupposes a binary on this machine that the plugin never ships; the
+/// API refuses to store one.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct PluginMcpServer {
     #[serde(default)]
     pub name: String,
-    /// `stdio` or `http`.
+    /// Always `http`. Kept so a second transport can appear without a migration.
     #[serde(default)]
     pub transport: String,
-    #[serde(default)]
-    pub command: String,
-    #[serde(default, deserialize_with = "de_collection_lenient")]
-    pub args: Vec<String>,
-    #[serde(default, deserialize_with = "de_collection_lenient")]
-    pub env: HashMap<String, String>,
     #[serde(default)]
     pub url: String,
     #[serde(default, deserialize_with = "de_collection_lenient")]
@@ -456,8 +453,8 @@ pub struct PluginComponentCounts {
 /// An org plugin (`GET /v1/organizations/{org}/plugins`), already filtered
 /// server-side to what targets the caller.
 ///
-/// `mode` is a String rather than an enum on purpose: a third mode added
-/// server-side must never turn into a deserialization failure at launch time.
+/// There is no install state and no per-member opt-in: an assigned plugin lands
+/// on the machine at the next launch. `active` is the whole story.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct Plugin {
     pub id: String,
@@ -485,15 +482,13 @@ pub struct Plugin {
     #[serde(default)]
     pub component_counts: PluginComponentCounts,
 
-    /// `enforced` or `optional`. Display only — `active` already accounts for it.
-    #[serde(default)]
-    pub mode: String,
-    /// Whether the assignment covers this user, before mode and install state.
-    /// Admins receive the whole org catalogue, so untargeted items do arrive.
-    #[serde(default, deserialize_with = "de_bool_lenient")]
-    pub targeted: bool,
-    /// Whether this plugin is in force for this user: targeted, and either
-    /// enforced or self-installed. **The only field materialization filters on.**
+    /// Whether this plugin is in force for this user: the org's assignment covers
+    /// them, so it lands on this machine at the next launch. **The only field
+    /// materialization filters on.**
+    ///
+    /// There is no opt-in — an assigned plugin arrives. Admins receive the whole
+    /// org catalogue, so a false here is how they tell the rows aimed at someone
+    /// else from the ones aimed at them.
     #[serde(default, deserialize_with = "de_bool_lenient")]
     pub active: bool,
     /// Server-set on every write. The change signal for the on-disk cache —
@@ -517,50 +512,6 @@ impl Plugin {
         } else {
             &self.display_name
         }
-    }
-
-    pub fn is_enforced(&self) -> bool {
-        self.mode == "enforced"
-    }
-}
-
-/// Outcome of opting in or out of an optional plugin.
-#[derive(Debug)]
-pub enum PluginInstallOutcome {
-    Updated(Box<Plugin>),
-    /// 404 — the plugin does not target this user, so it is not theirs to install.
-    NotTargeted,
-    /// 409 — enforced by an administrator. Carries the server's own wording.
-    Refused(String),
-}
-
-/// Maps an install/uninstall response to an outcome.
-///
-/// Split out of the async method so the status/body mapping is unit-testable
-/// without HTTP, the same way `catalog_model` is in the tests below.
-fn install_outcome(status: u16, body: &str) -> Result<PluginInstallOutcome> {
-    let server_msg = || {
-        serde_json::from_str::<ErrorEnvelope>(body)
-            .ok()
-            .and_then(|e| e.error)
-            .and_then(|e| e.message)
-            .filter(|m| !m.is_empty())
-    };
-
-    match status {
-        200..=299 => {
-            let plugin = serde_json::from_str::<Plugin>(body).context("Invalid plugin response")?;
-            Ok(PluginInstallOutcome::Updated(Box::new(plugin)))
-        }
-        404 => Ok(PluginInstallOutcome::NotTargeted),
-        409 => Ok(PluginInstallOutcome::Refused(server_msg().unwrap_or_else(
-            || "This plugin is enforced by an administrator.".to_string(),
-        ))),
-        401 => anyhow::bail!("Authentication expired. Please run `edgee auth login` again."),
-        _ => match server_msg() {
-            Some(msg) => anyhow::bail!("{msg}"),
-            None => anyhow::bail!("Failed to update plugin: HTTP {status}"),
-        },
     }
 }
 
@@ -817,33 +768,6 @@ impl ApiClient {
             .context("Failed to fetch plugin")?;
         check_status(&resp, "fetch plugin")?;
         resp.json().await.context("Invalid plugin response")
-    }
-
-    /// Opts the signed-in user in or out of an **optional** plugin.
-    ///
-    /// The endpoint acts on the caller only — there is no user parameter, so a
-    /// member can never install on someone else's behalf. Enforced plugins are
-    /// refused (409) and plugins that do not target the caller are 404; both come
-    /// back as outcomes rather than errors so the command can phrase them well.
-    pub async fn set_plugin_installed(
-        &self,
-        org_id: &str,
-        plugin_id: &str,
-        installed: bool,
-    ) -> Result<PluginInstallOutcome> {
-        let url = format!(
-            "{}/v1/organizations/{}/plugins/{}/install",
-            self.base_url, org_id, plugin_id
-        );
-        let req = if installed {
-            self.http.post(&url)
-        } else {
-            self.http.delete(&url)
-        };
-        let resp = req.send().await.context("Failed to update plugin")?;
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        install_outcome(status, &body)
     }
 
     /// Whether the org has a paid AI Gateway plan (or active trial), which is what
@@ -1275,14 +1199,10 @@ mod tests {
           }],
           "mcp_servers": [{
             "id": "mcp_1", "name": "docs", "transport": "http",
-            "url": "https://example.com/mcp", "headers": { "X-Token": "t" },
-            "args": [], "env": {}
+            "url": "https://example.com/mcp", "headers": { "X-Token": "t" }
           }],
           "assignment": { "scope": "org", "squad_ids": [], "member_ids": [] },
-          "mode": "enforced",
-          "installed_by": [],
           "editable": true,
-          "targeted": true,
           "active": true,
           "created_at": "2026-08-01T10:00:00Z",
           "updated_at": "2026-08-06T12:00:00Z",
@@ -1298,7 +1218,7 @@ mod tests {
         assert_eq!(p.title(), "House conventions");
         assert_eq!(p.version, "1.2.0");
         assert_eq!(p.updated_at, "2026-08-06T12:00:00Z");
-        assert!(p.active && p.targeted && p.is_enforced());
+        assert!(p.active);
 
         assert_eq!(p.skills.len(), 1);
         assert_eq!(p.skills[0].when_to_use, "Writing or amending a commit.");
@@ -1320,57 +1240,25 @@ mod tests {
     fn plugin_tolerates_missing_and_null_collections() {
         let bare: Plugin = serde_json::from_str(r#"{"id":"p1"}"#).unwrap();
         assert!(bare.skills.is_empty() && bare.mcp_servers.is_empty());
-        assert!(!bare.active && !bare.targeted);
+        assert!(!bare.active);
 
         let nulled: Plugin =
-            serde_json::from_str(r#"{"id":"p2","skills":null,"active":null,"targeted":null}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"id":"p2","skills":null,"active":null}"#).unwrap();
         assert!(nulled.skills.is_empty());
         assert!(!nulled.active);
     }
 
-    /// A mode we do not know about must still parse — it only affects display,
-    /// because `active` already encodes whether the plugin is in force.
+    /// Fields the server no longer sends, and ones it may grow later, must not
+    /// turn into a launch-time failure — this used to carry `mode`, `targeted`
+    /// and `installed_by`.
     #[test]
-    fn plugin_accepts_an_unknown_mode() {
-        let p: Plugin =
-            serde_json::from_str(r#"{"id":"p","mode":"suggested","active":true}"#).unwrap();
-        assert_eq!(p.mode, "suggested");
-        assert!(!p.is_enforced());
-        assert!(p.active);
-    }
-
-    #[test]
-    fn install_outcome_maps_status_and_envelope() {
-        let updated = install_outcome(200, plugin_json()).unwrap();
-        match updated {
-            PluginInstallOutcome::Updated(p) => assert_eq!(p.name, "house-conventions"),
-            other => panic!("expected Updated, got {other:?}"),
-        }
-
-        assert!(matches!(
-            install_outcome(404, "").unwrap(),
-            PluginInstallOutcome::NotTargeted
-        ));
-
-        // The server's own wording is what the user should see.
-        let refused = install_outcome(
-            409,
-            r#"{"error":{"message":"this plugin is enforced by an administrator and cannot be installed or removed individually"}}"#,
+    fn plugin_ignores_fields_it_does_not_know() {
+        let p: Plugin = serde_json::from_str(
+            r#"{"id":"p","mode":"optional","targeted":true,"installed_by":["u1"],"active":true}"#,
         )
         .unwrap();
-        match refused {
-            PluginInstallOutcome::Refused(msg) => assert!(msg.contains("enforced")),
-            other => panic!("expected Refused, got {other:?}"),
-        }
 
-        // A 409 with no parseable envelope still explains itself.
-        match install_outcome(409, "not json").unwrap() {
-            PluginInstallOutcome::Refused(msg) => assert!(!msg.is_empty()),
-            other => panic!("expected Refused, got {other:?}"),
-        }
-
-        assert!(install_outcome(401, "").is_err());
-        assert!(install_outcome(500, "").is_err());
+        assert_eq!(p.id, "p");
+        assert!(p.active);
     }
 }

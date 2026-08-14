@@ -313,26 +313,22 @@ fn mcp_json(servers: &[PluginMcpServer]) -> Option<String> {
     let mut map = serde_json::Map::new();
 
     for server in servers {
-        if server.name.is_empty() {
+        if server.name.is_empty() || server.url.is_empty() {
             continue;
         }
-        // Only the fields belonging to the declared transport are emitted; the
-        // server already clears the others, and writing both would be config the
-        // assistant may read either way.
-        let entry = match server.transport.as_str() {
-            "stdio" if !server.command.is_empty() => serde_json::json!({
-                "command": server.command,
-                "args": server.args,
-                "env": server.env,
-            }),
-            "http" if !server.url.is_empty() => serde_json::json!({
+        // Only http exists: a stdio server would need a local binary the plugin
+        // never installs, so the API refuses to store one.
+        if server.transport != "http" {
+            continue;
+        }
+        map.insert(
+            server.name.clone(),
+            serde_json::json!({
                 "type": "http",
                 "url": server.url,
                 "headers": server.headers,
             }),
-            _ => continue,
-        };
-        map.insert(server.name.clone(), entry);
+        );
     }
 
     if map.is_empty() {
@@ -418,19 +414,17 @@ mod tests {
     /// Nothing else may gate materialization, or the CLI and API can disagree.
     #[test]
     fn only_active_plugins_are_materialized() {
-        let mut enforced = plugin("enforced-one", true);
-        enforced.skills = vec![skill("a")];
-        let mut inactive = plugin("offered-not-installed", false);
-        inactive.skills = vec![skill("b")];
-        // An admin receives untargeted plugins too; `active` is false for them.
-        let mut untargeted = plugin("someone-elses", false);
-        untargeted.targeted = false;
-        untargeted.skills = vec![skill("c")];
+        let mut assigned = plugin("assigned-one", true);
+        assigned.skills = vec![skill("a")];
+        // An admin receives plugins aimed at other people too; `active` is false
+        // for those, and that is the only thing keeping them off this machine.
+        let mut someone_elses = plugin("someone-elses", false);
+        someone_elses.skills = vec![skill("b")];
 
-        let plan = plan_tree(&[enforced, inactive, untargeted], Target::Claude);
+        let plan = plan_tree(&[assigned, someone_elses], Target::Claude);
 
-        assert_eq!(plan.plugin_dirs, vec!["enforced-one"]);
-        assert!(paths(&plan).iter().all(|p| p.starts_with("enforced-one/")));
+        assert_eq!(plan.plugin_dirs, vec!["assigned-one"]);
+        assert!(paths(&plan).iter().all(|p| p.starts_with("assigned-one/")));
     }
 
     #[test]
@@ -628,26 +622,26 @@ mod tests {
     }
 
     #[test]
-    fn mcp_servers_emit_transport_specific_shapes() {
+    fn mcp_servers_emit_http_entries_and_skip_the_rest() {
         let mut p = plugin("house", true);
         p.mcp_servers = vec![
-            PluginMcpServer {
-                name: "local".into(),
-                transport: "stdio".into(),
-                command: "npx".into(),
-                args: vec!["-y".into(), "docs".into()],
-                ..Default::default()
-            },
             PluginMcpServer {
                 name: "remote".into(),
                 transport: "http".into(),
                 url: "https://example.com/mcp".into(),
                 ..Default::default()
             },
-            // Neither shape is satisfiable — must not emit a broken entry.
+            // No url — must not emit a half-written entry.
             PluginMcpServer {
                 name: "broken".into(),
+                transport: "http".into(),
+                ..Default::default()
+            },
+            // A withdrawn transport, as an old cache entry could still carry.
+            PluginMcpServer {
+                name: "local".into(),
                 transport: "stdio".into(),
+                url: "https://example.com/mcp".into(),
                 ..Default::default()
             },
         ];
@@ -656,11 +650,10 @@ mod tests {
             serde_json::from_str(&find(&plan_tree(&[p], Target::Claude), ".mcp.json")).unwrap();
         let servers = &json["mcpServers"];
 
-        assert_eq!(servers["local"]["command"], "npx");
-        assert!(servers["local"].get("url").is_none());
         assert_eq!(servers["remote"]["type"], "http");
-        assert!(servers["remote"].get("command").is_none());
+        assert_eq!(servers["remote"]["url"], "https://example.com/mcp");
         assert!(servers.get("broken").is_none());
+        assert!(servers.get("local").is_none());
     }
 
     /// Two plugins each shipping a `review` skill must not overwrite each other

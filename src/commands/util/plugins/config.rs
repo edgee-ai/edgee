@@ -42,23 +42,14 @@ pub fn crush_mcp(plugins: &[Plugin]) -> Option<Value> {
 }
 
 fn crush_mcp_entry(server: &PluginMcpServer) -> Option<Value> {
-    if server.name.is_empty() {
+    if server.name.is_empty() || server.url.is_empty() || server.transport != "http" {
         return None;
     }
-    match server.transport.as_str() {
-        "stdio" if !server.command.is_empty() => Some(json!({
-            "type": "stdio",
-            "command": server.command,
-            "args": server.args,
-            "env": server.env,
-        })),
-        "http" if !server.url.is_empty() => Some(json!({
-            "type": "http",
-            "url": server.url,
-            "headers": server.headers,
-        })),
-        _ => None,
-    }
+    Some(json!({
+        "type": "http",
+        "url": server.url,
+        "headers": server.headers,
+    }))
 }
 
 /// Crush `hooks`: `{ "<Event>": [ { name, matcher, command, timeout } ] }`.
@@ -111,28 +102,15 @@ pub fn opencode_mcp(plugins: &[Plugin]) -> Option<Value> {
     let mut out = Map::new();
     for plugin in active(plugins) {
         for server in &plugin.mcp_servers {
-            if server.name.is_empty() {
+            if server.name.is_empty() || server.url.is_empty() || server.transport != "http" {
                 continue;
             }
-            let entry = match server.transport.as_str() {
-                "stdio" if !server.command.is_empty() => {
-                    let mut command = vec![server.command.clone()];
-                    command.extend(server.args.iter().cloned());
-                    json!({
-                        "type": "local",
-                        "command": command,
-                        "environment": server.env,
-                        "enabled": true,
-                    })
-                }
-                "http" if !server.url.is_empty() => json!({
-                    "type": "remote",
-                    "url": server.url,
-                    "headers": server.headers,
-                    "enabled": true,
-                }),
-                _ => continue,
-            };
+            let entry = json!({
+                "type": "remote",
+                "url": server.url,
+                "headers": server.headers,
+                "enabled": true,
+            });
             out.insert(qualified(plugin, &server.name), entry);
         }
     }
@@ -177,30 +155,16 @@ pub fn codex_mcp_args(plugins: &[Plugin]) -> Vec<String> {
     let mut args = Vec::new();
     for plugin in active(plugins) {
         for server in &plugin.mcp_servers {
-            if server.name.is_empty() {
+            if server.name.is_empty() || server.url.is_empty() || server.transport != "http" {
                 continue;
             }
             let key = format!("mcp_servers.{}", qualified(plugin, &server.name));
-            match server.transport.as_str() {
-                "stdio" if !server.command.is_empty() => {
-                    args.push(format!("{key}.command={}", toml_string(&server.command)));
-                    if !server.args.is_empty() {
-                        args.push(format!("{key}.args={}", toml_array(&server.args)));
-                    }
-                    if !server.env.is_empty() {
-                        args.push(format!("{key}.env={}", toml_table(&server.env)));
-                    }
-                }
-                "http" if !server.url.is_empty() => {
-                    args.push(format!("{key}.url={}", toml_string(&server.url)));
-                    if !server.headers.is_empty() {
-                        args.push(format!(
-                            "{key}.http_headers={}",
-                            toml_table(&server.headers)
-                        ));
-                    }
-                }
-                _ => continue,
+            args.push(format!("{key}.url={}", toml_string(&server.url)));
+            if !server.headers.is_empty() {
+                args.push(format!(
+                    "{key}.http_headers={}",
+                    toml_table(&server.headers)
+                ));
             }
         }
     }
@@ -227,11 +191,6 @@ fn toml_string(value: &str) -> String {
     }
     out.push('"');
     out
-}
-
-fn toml_array(values: &[String]) -> String {
-    let parts: Vec<String> = values.iter().map(|v| toml_string(v)).collect();
-    format!("[{}]", parts.join(", "))
 }
 
 fn toml_table(map: &std::collections::HashMap<String, String>) -> String {
@@ -301,15 +260,14 @@ mod tests {
         }
     }
 
+    /// A server declaring a transport the API no longer stores. Nothing should
+    /// emit it — an old cache entry must not resurrect a shape that has been
+    /// withdrawn.
     fn stdio(name: &str) -> PluginMcpServer {
         PluginMcpServer {
             name: name.to_string(),
             transport: "stdio".into(),
-            command: "npx".into(),
-            args: vec!["-y".into(), "docs".into()],
-            env: [("TOKEN".to_string(), "t".to_string())]
-                .into_iter()
-                .collect(),
+            url: "https://example.com/mcp".into(),
             ..Default::default()
         }
     }
@@ -326,7 +284,7 @@ mod tests {
     #[test]
     fn inactive_plugins_contribute_nothing() {
         let mut p = plugin("off", false);
-        p.mcp_servers = vec![stdio("docs")];
+        p.mcp_servers = vec![http("docs")];
         p.subagents = vec![PluginSubagent {
             name: "r".into(),
             prompt: "go".into(),
@@ -339,35 +297,41 @@ mod tests {
     }
 
     #[test]
-    fn crush_mcp_uses_stdio_and_http_discriminants() {
+    fn crush_mcp_uses_the_http_discriminant() {
         let mut p = plugin("house", true);
-        p.mcp_servers = vec![stdio("local"), http("remote")];
+        p.mcp_servers = vec![http("remote")];
 
         let v = crush_mcp(&[p]).unwrap();
 
-        assert_eq!(v["house__local"]["type"], "stdio");
-        assert_eq!(v["house__local"]["command"], "npx");
-        assert_eq!(v["house__local"]["args"][1], "docs");
         assert_eq!(v["house__remote"]["type"], "http");
-        assert!(v["house__remote"].get("command").is_none());
+        assert_eq!(v["house__remote"]["url"], "https://example.com/mcp");
     }
 
-    /// OpenCode's schema differs on all three points, so they are asserted.
+    /// OpenCode's schema differs from everyone else's, so the discriminant is
+    /// asserted rather than assumed.
     #[test]
-    fn opencode_mcp_folds_args_into_command_and_renames_env() {
+    fn opencode_mcp_uses_the_remote_discriminant() {
         let mut p = plugin("house", true);
-        p.mcp_servers = vec![stdio("local"), http("remote")];
+        p.mcp_servers = vec![http("remote")];
 
         let v = opencode_mcp(&[p]).unwrap();
 
-        assert_eq!(v["house__local"]["type"], "local");
-        // command carries the program AND its arguments
-        assert_eq!(v["house__local"]["command"][0], "npx");
-        assert_eq!(v["house__local"]["command"][2], "docs");
-        // `environment`, not `env`
-        assert_eq!(v["house__local"]["environment"]["TOKEN"], "t");
-        assert!(v["house__local"].get("env").is_none());
         assert_eq!(v["house__remote"]["type"], "remote");
+        assert_eq!(v["house__remote"]["url"], "https://example.com/mcp");
+        assert_eq!(v["house__remote"]["enabled"], true);
+    }
+
+    /// A stdio server needs a local binary a plugin never installs. The API
+    /// rejects one, and every writer drops it too — a cache written before the
+    /// transport was withdrawn must not put one back into a config file.
+    #[test]
+    fn stdio_servers_are_never_emitted() {
+        let mut p = plugin("house", true);
+        p.mcp_servers = vec![stdio("local")];
+
+        assert!(crush_mcp(&[p.clone()]).is_none());
+        assert!(opencode_mcp(&[p.clone()]).is_none());
+        assert!(codex_mcp_args(&[p]).is_empty());
     }
 
     /// Two plugins shipping the same server name must not collide in a flat map.
@@ -442,19 +406,18 @@ mod tests {
     #[test]
     fn codex_mcp_args_are_well_formed_toml_overrides() {
         let mut p = plugin("house", true);
-        p.mcp_servers = vec![stdio("local"), http("remote")];
+        let mut server = http("remote");
+        server.headers = [("X-Token".to_string(), "t".to_string())]
+            .into_iter()
+            .collect();
+        p.mcp_servers = vec![server];
 
         let args = codex_mcp_args(&[p]);
 
-        assert!(args.contains(&r#"mcp_servers.house__local.command="npx""#.to_string()));
-        assert!(args.contains(&r#"mcp_servers.house__local.args=["-y", "docs"]"#.to_string()));
-        assert!(args.contains(&r#"mcp_servers.house__local.env={"TOKEN"="t"}"#.to_string()));
         assert!(args
             .contains(&r#"mcp_servers.house__remote.url="https://example.com/mcp""#.to_string()));
-        // stdio keys must not leak onto an http server
-        assert!(!args
-            .iter()
-            .any(|a| a.starts_with("mcp_servers.house__remote.command")));
+        assert!(args
+            .contains(&r#"mcp_servers.house__remote.http_headers={"X-Token"="t"}"#.to_string()));
     }
 
     /// An unescaped quote or newline makes Codex treat the whole value as a
@@ -464,13 +427,18 @@ mod tests {
         let mut p = plugin("house", true);
         p.mcp_servers = vec![PluginMcpServer {
             name: "odd".into(),
-            transport: "stdio".into(),
-            command: "say \"hi\"\nthere\u{1b}".into(),
-            ..Default::default()
+            transport: "http".into(),
+            url: "https://example.com/mcp".into(),
+            headers: [(
+                "X-Odd".to_string(),
+                "say \"hi\"\nthere\u{1b}".to_string(),
+            )]
+            .into_iter()
+            .collect(),
         }];
 
         let args = codex_mcp_args(&[p]);
-        let command = args.iter().find(|a| a.contains(".command=")).unwrap();
+        let command = args.iter().find(|a| a.contains(".http_headers=")).unwrap();
 
         assert!(command.contains(r#"\""#));
         assert!(command.contains(r"\n"));
