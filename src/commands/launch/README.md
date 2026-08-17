@@ -89,6 +89,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `opencode` | OpenCode CLI | `opencode` |
 | `codebuddy` | CodeBuddy CLI | `codebuddy` |
 | `crush` | Crush CLI | `crush` |
+| `pi` | Pi CLI | `pi` | 
 
 ### Apps & editors (relay today)
 
@@ -147,12 +148,54 @@ for the Responses passthrough to fire; a case-sensitive `starts_with("codex")` s
 every desktop request down the keyed pipeline, which authenticates from
 `Authorization` — the app's ChatGPT OAuth JWT — and 401'd.
 
+## `pi` — additive provider in the user's own config
+
+`opencode` and `crush` build a merged config in `$TMPDIR` and point the agent at
+it (`OPENCODE_CONFIG`, `CRUSH_GLOBAL_CONFIG`), so the user's files are never
+touched. Pi has no such lever, and the one that looks like it is a trap:
+`PI_CODING_AGENT_DIR` relocates the **entire** agent directory — `models.json`
+but also `auth.json`, `settings.json`, `keybindings.json`, `sessions/`,
+`themes/`, `tools/`, `prompts/`, `bin/`, plus extension, skill and plugin
+discovery. Pointing it at a temp dir launches pi with no history, no logins, no
+settings and none of the user's plugins. `--models` is not an alternative: it
+takes model *patterns* for Ctrl+P cycling, not a config path.
+
+So this target writes into the real `~/.pi/agent/models.json`, under a single
+`providers.edgee` key. Custom providers merge into pi's built-in catalog by
+`provider + id`, so the block is purely **additive** — nothing the user already
+had is overridden. That is what makes it safe to leave in place, and why there
+is no patch-and-revert dance like `codex-desktop`: this adds a provider rather
+than hijacking one the user depends on.
+
+Three details are load-bearing:
+
+- **Env interpolation uses bare names, not `$NAME`.** Pi's `resolveConfigValue`
+  does `process.env[value] || value` — the *whole value* is the variable name.
+  The published docs show `"$MY_API_KEY"`, which cannot match (no variable is
+  *named* `$MY_API_KEY`) and makes pi send the literal string as the credential.
+  Because of that fallback, an unset variable is transmitted verbatim as the key,
+  so launch refuses to start without one rather than letting the gateway 401.
+- **The Edgee key is therefore never written to disk** — the config stores the
+  names `EDGEE_API_KEY` / `EDGEE_SESSION_ID` and launch supplies the values. This
+  is strictly better than the OpenCode and Crush temp configs, which embed the
+  key. The trade-off: a bare `pi` run sees the Edgee models but cannot
+  authenticate them.
+- **`baseUrl` takes no `/v1`, and `api` is `anthropic-messages`.** Pi's built-in
+  Anthropic provider is `https://api.anthropic.com` and pi appends
+  `/v1/messages`, exactly like `ANTHROPIC_BASE_URL` for Claude Code. The gateway
+  translates that shape for the whole catalog, so non-Anthropic models
+  (`zai/…`, `openai/…`) route through it too.
+
+Models are **not** declared with `reasoning: true`: pi maps that to
+`thinking.type=enabled`, which Sonnet 5 rejects in favour of
+`thinking.type=adaptive` plus `output_config.effort`. Revisit once pi emits the
+newer shape or the gateway normalises it.
+
 ## Planned targets (same rules)
 
 | Target | Product | Likely provider | Likely transport |
 |---|---|---|---|
 | `copilot` | GitHub Copilot CLI | `copilot` | CLI env |
-| `pi` | Pi CLI | `pi` | CLI env |
 | `kilo` | Kilo Code CLI | `kilo` | CLI env |
 | `claude-vscode` | Claude Code in VS Code | `claude` | Relay or native config |
 
