@@ -23,6 +23,7 @@ const PROVIDERS: &[&str] = &[
     "codex_desktop",
     "opencode",
     "crush",
+    "pi",
     "cursor",
     "copilot",
 ];

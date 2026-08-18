@@ -89,6 +89,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `opencode` | OpenCode CLI | `opencode` |
 | `codebuddy` | CodeBuddy CLI | `codebuddy` |
 | `crush` | Crush CLI | `crush` |
+| `pi` | Pi CLI | `pi` |
 
 ### Apps & editors (relay today)
 
@@ -147,12 +148,63 @@ for the Responses passthrough to fire; a case-sensitive `starts_with("codex")` s
 every desktop request down the keyed pipeline, which authenticates from
 `Authorization` — the app's ChatGPT OAuth JWT — and 401'd.
 
+## `pi` — additive provider in the user's own config
+
+`opencode` and `crush` build a merged config in `$TMPDIR` and point the agent at
+it (`OPENCODE_CONFIG`, `CRUSH_GLOBAL_CONFIG`), so the user's files are never
+touched. Pi has no such lever, and the one that looks like it is a trap:
+`PI_CODING_AGENT_DIR` relocates the **entire** agent directory — `models.json`
+but also `auth.json`, `settings.json`, `keybindings.json`, `sessions/`,
+`themes/`, `tools/`, `prompts/`, `bin/`, plus extension, skill and plugin
+discovery. Pointing it at a temp dir launches pi with no history, no logins, no
+settings and none of the user's plugins. `--models` is not an alternative: it
+takes model *patterns* for Ctrl+P cycling, not a config path.
+
+So this target writes into the real `~/.pi/agent/models.json`, under a single
+`providers.edgee` key. Custom providers merge into pi's built-in catalog by
+`provider + id`, so the block is purely **additive** — nothing the user already
+had is overridden. That is what makes it safe to leave in place, and why there
+is no patch-and-revert dance like `codex-desktop`: this adds a provider rather
+than hijacking one the user depends on.
+
+Three details are load-bearing:
+
+- **Env references are `$NAME`, and this requires pi ≥ 0.79.4.** That release
+  deliberately reversed the syntax (upstream #5661): before it, the *whole value*
+  was the variable name (bare `EDGEE_API_KEY`) and an unset variable fell through
+  to the literal string; from it, bare uppercase values are literals and `$NAME`
+  is the only env reference. The two spellings are mutually exclusive — each is
+  an inert literal on the other side of that boundary — and both fail
+  identically, with the gateway answering 401 because it was handed
+  `EDGEE_API_KEY` or `$EDGEE_API_KEY` as a credential. Check the pi version first
+  when debugging a 401 here.
+- **The Edgee key is therefore never written to disk** — the config stores the
+  references `$EDGEE_API_KEY` / `$EDGEE_SESSION_ID` and launch supplies the
+  values. This is strictly better than the OpenCode and Crush temp configs, which
+  embed the key. The trade-off: a bare `pi` run sees the Edgee models but cannot
+  authenticate them.
+- **An empty gateway model list is fatal here, unlike for OpenCode.** A pi custom
+  provider is defined by its models, so registering one with none opens the
+  session on "No models available". `fetch_gateway_models` is best-effort and
+  returns empty on any failure (an unreachable gateway, e.g. a dev profile
+  pointing at a `localhost` port with nothing on it), so launch bails before
+  writing rather than leaving a dead provider in the user's config.
+- **`baseUrl` takes no `/v1`, and `api` is `anthropic-messages`.** Pi's built-in
+  Anthropic provider is `https://api.anthropic.com` and pi appends
+  `/v1/messages`, exactly like `ANTHROPIC_BASE_URL` for Claude Code. The gateway
+  translates that shape for the whole catalog, so non-Anthropic models
+  (`zai/…`, `openai/…`) route through it too.
+
+Models are **not** declared with `reasoning: true`: pi maps that to
+`thinking.type=enabled`, which Sonnet 5 rejects in favour of
+`thinking.type=adaptive` plus `output_config.effort`. Revisit once pi emits the
+newer shape or the gateway normalises it.
+
 ## Planned targets (same rules)
 
 | Target | Product | Likely provider | Likely transport |
 |---|---|---|---|
 | `copilot` | GitHub Copilot CLI | `copilot` | CLI env |
-| `pi` | Pi CLI | `pi` | CLI env |
 | `kilo` | Kilo Code CLI | `kilo` | CLI env |
 | `claude-vscode` | Claude Code in VS Code | `claude` | Relay or native config |
 

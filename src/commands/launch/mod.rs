@@ -13,6 +13,7 @@ pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
 pub mod opencode;
+pub mod pi;
 pub(crate) mod util;
 
 use anyhow::Result;
@@ -35,6 +36,8 @@ enum Command {
     CodeBuddy(codebuddy::Options),
     /// Crush CLI
     Crush(crush::Options),
+    /// Pi CLI
+    Pi(pi::Options),
     /// Cursor IDE
     #[command(next_help_heading = "Apps & editors")]
     Cursor(cursor::Options),
@@ -62,6 +65,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Codex(o) => codex::run(o).await,
         Command::OpenCode(o) => opencode::run(o).await,
         Command::Crush(o) => crush::run(o).await,
+        Command::Pi(o) => pi::run(o).await,
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o).await,
         Command::ClaudeDesktop(o) => claude_desktop::run(o).await,

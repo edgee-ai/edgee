@@ -138,47 +138,6 @@ fn find_user_config() -> Option<Value> {
     None
 }
 
-#[derive(serde::Deserialize)]
-struct GatewayModelList {
-    #[serde(default)]
-    data: Vec<GatewayModelEntry>,
-}
-
-#[derive(serde::Deserialize)]
-struct GatewayModelEntry {
-    id: String,
-}
-
-/// Fetches the gateway's OpenAI-style `/v1/models` listing so the OpenCode
-/// provider config can be populated with a concrete `models` map.
-///
-/// The endpoint serves anonymous callers the whole catalog, but narrows the
-/// listing for a *resolved* key: with BYOK-only enforced (org, squad or key
-/// scope), it returns only models the key has provider credentials for. It
-/// resolves the key from `x-api-key`/`Authorization: Bearer` only — Edgee's own
-/// `x-edgee-api-key` header is not read there, so sending that alone would
-/// silently produce the unfiltered catalog and offer models every request would
-/// be rejected for. Returns an empty vec on any failure so launch falls back to
-/// a provider with no explicit `models` map.
-async fn fetch_gateway_models(gateway_url: &str, api_key: &str) -> Vec<String> {
-    let url = format!("{}/v1/models", gateway_url);
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    let resp = match client.get(&url).header("x-api-key", api_key).send().await {
-        Ok(r) if r.status().is_success() => r,
-        _ => return Vec::new(),
-    };
-    match resp.json::<GatewayModelList>().await {
-        Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
 fn build_edgee_provider(
     api_key: &str,
     session_id: &str,
@@ -300,7 +259,7 @@ pub async fn run(opts: Options) -> Result<()> {
     });
 
     let (models, catalog) = tokio::join!(
-        fetch_gateway_models(&gateway_url, api_key),
+        util::fetch_gateway_models(&gateway_url, api_key),
         util::fetch_model_catalog(&creds)
     );
     let models = util::without_app_subscription_models(models, &catalog);
