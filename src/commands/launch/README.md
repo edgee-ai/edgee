@@ -89,7 +89,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `opencode` | OpenCode CLI | `opencode` |
 | `codebuddy` | CodeBuddy CLI | `codebuddy` |
 | `crush` | Crush CLI | `crush` |
-| `pi` | Pi CLI | `pi` | 
+| `pi` | Pi CLI | `pi` |
 
 ### Apps & editors (relay today)
 
@@ -169,17 +169,26 @@ than hijacking one the user depends on.
 
 Three details are load-bearing:
 
-- **Env interpolation uses bare names, not `$NAME`.** Pi's `resolveConfigValue`
-  does `process.env[value] || value` — the *whole value* is the variable name.
-  The published docs show `"$MY_API_KEY"`, which cannot match (no variable is
-  *named* `$MY_API_KEY`) and makes pi send the literal string as the credential.
-  Because of that fallback, an unset variable is transmitted verbatim as the key,
-  so launch refuses to start without one rather than letting the gateway 401.
+- **Env references are `$NAME`, and this requires pi ≥ 0.79.4.** That release
+  deliberately reversed the syntax (upstream #5661): before it, the *whole value*
+  was the variable name (bare `EDGEE_API_KEY`) and an unset variable fell through
+  to the literal string; from it, bare uppercase values are literals and `$NAME`
+  is the only env reference. The two spellings are mutually exclusive — each is
+  an inert literal on the other side of that boundary — and both fail
+  identically, with the gateway answering 401 because it was handed
+  `EDGEE_API_KEY` or `$EDGEE_API_KEY` as a credential. Check the pi version first
+  when debugging a 401 here.
 - **The Edgee key is therefore never written to disk** — the config stores the
-  names `EDGEE_API_KEY` / `EDGEE_SESSION_ID` and launch supplies the values. This
-  is strictly better than the OpenCode and Crush temp configs, which embed the
-  key. The trade-off: a bare `pi` run sees the Edgee models but cannot
+  references `$EDGEE_API_KEY` / `$EDGEE_SESSION_ID` and launch supplies the
+  values. This is strictly better than the OpenCode and Crush temp configs, which
+  embed the key. The trade-off: a bare `pi` run sees the Edgee models but cannot
   authenticate them.
+- **An empty gateway model list is fatal here, unlike for OpenCode.** A pi custom
+  provider is defined by its models, so registering one with none opens the
+  session on "No models available". `fetch_gateway_models` is best-effort and
+  returns empty on any failure (an unreachable gateway, e.g. a dev profile
+  pointing at a `localhost` port with nothing on it), so launch bails before
+  writing rather than leaving a dead provider in the user's config.
 - **`baseUrl` takes no `/v1`, and `api` is `anthropic-messages`.** Pi's built-in
   Anthropic provider is `https://api.anthropic.com` and pi appends
   `/v1/messages`, exactly like `ANTHROPIC_BASE_URL` for Claude Code. The gateway

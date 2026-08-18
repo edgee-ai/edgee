@@ -26,22 +26,27 @@
 //! ## No credential at rest
 //!
 //! Pi resolves `apiKey` and header values through `resolveConfigValue`, which
-//! treats the **whole value as an environment variable name** and falls back to
-//! the literal string when unset. So the block stores the *names*
-//! `EDGEE_API_KEY` / `EDGEE_SESSION_ID`, and `run` supplies the values at spawn
-//! time. The Edgee key is never written to disk — unlike the OpenCode and Crush
-//! temp configs, which embed it.
+//! expands `$NAME` / `${NAME}` references against the environment. So the block
+//! stores *references* — `$EDGEE_API_KEY`, `$EDGEE_SESSION_ID` — and `run`
+//! supplies the values at spawn time. The Edgee key is never written to disk,
+//! unlike the OpenCode and Crush temp configs, which embed it.
 //!
-//! Note this is not the documented syntax: pi's published docs show `"$MY_KEY"`,
-//! but a leading `$` makes the lookup miss (there is no variable *named*
-//! `$MY_KEY`) and pi then sends the literal string `$MY_KEY` as the credential.
-//! Bare names are what actually works. The same fallback means an unset variable
-//! is sent verbatim as the key, so `run` refuses to launch without one rather
-//! than letting the gateway answer 401.
+//! **This requires pi 0.79.4 or newer**, and the version boundary is a trap
+//! worth knowing about. Before 0.79.4 the whole value was the variable name
+//! (bare `EDGEE_API_KEY`) and an unset variable silently fell through to the
+//! literal string; 0.79.4 reversed that, making bare uppercase values literals
+//! and `$NAME` the only env reference (upstream #5661). The two spellings are
+//! mutually exclusive — each is an inert literal on the other side of that
+//! boundary, and the symptom is identical either way: the gateway answers 401
+//! because it was handed the string `EDGEE_API_KEY` or `$EDGEE_API_KEY` as a
+//! credential. We emit the current, documented form.
 //!
-//! The flip side of storing names: a bare `pi` run outside `edgee launch pi` can
-//! see the Edgee models but cannot authenticate them. That is the deliberate
-//! trade — the credential stays out of the config file.
+//! Modern pi resolves an unset reference to `undefined` rather than leaking the
+//! literal, so the failure mode there is at least a clean "no credential".
+//!
+//! The flip side of storing references: a bare `pi` run outside
+//! `edgee launch pi` can see the Edgee models but cannot authenticate them. That
+//! is the deliberate trade — the credential stays out of the config file.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -52,9 +57,15 @@ use super::util;
 /// writes lives under it; nothing else in the file is touched.
 const PROVIDER_KEY: &str = "edgee";
 
-/// Env var names embedded in the config, resolved by pi at request time.
+/// Env vars whose values `run` supplies at spawn time. The config embeds them
+/// as `$NAME` references (see [`env_ref`]), never their values.
 const API_KEY_ENV: &str = "EDGEE_API_KEY";
 const SESSION_ID_ENV: &str = "EDGEE_SESSION_ID";
+
+/// Renders an env var name as the `$NAME` reference pi expands at request time.
+fn env_ref(name: &str) -> String {
+    format!("${name}")
+}
 
 /// Output cap declared for every model. The gateway catalog carries a context
 /// window but no per-model output limit, and pi has no "unset" for `maxTokens`
@@ -167,14 +178,13 @@ fn build_edgee_provider(
     debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
 ) -> Value {
     let mut headers = serde_json::json!({
-        "x-edgee-api-key": API_KEY_ENV,
-        "x-edgee-session-id": SESSION_ID_ENV,
+        "x-edgee-api-key": env_ref(API_KEY_ENV),
+        "x-edgee-session-id": env_ref(SESSION_ID_ENV),
     });
     // Unlike the key and session id, these are embedded literally: they derive
     // from the profile passphrase and so are stable across launches, and a
-    // public key plus salt is not a secret. Env-var indirection would be worse
-    // here — an unset name is sent verbatim, which would put the string
-    // "EDGEE_DEBUG_PUBKEY" on the wire as a pubkey.
+    // public key plus salt is not a secret. Env-var indirection would only add
+    // a way for them to resolve to nothing on a bare `pi` run.
     if let (Some(headers_obj), Some(debug_headers)) = (headers.as_object_mut(), debug_log_headers) {
         headers_obj.insert(
             "x-edgee-debug-pubkey".to_string(),
@@ -190,7 +200,7 @@ fn build_edgee_provider(
         "name": "Edgee",
         "baseUrl": gateway_url,
         "api": "anthropic-messages",
-        "apiKey": API_KEY_ENV,
+        "apiKey": env_ref(API_KEY_ENV),
         "headers": headers,
     });
 
@@ -277,6 +287,18 @@ pub async fn run(opts: Options) -> Result<()> {
         util::fetch_model_catalog(&creds)
     );
     let models = util::without_app_subscription_models(models, &catalog);
+    // `fetch_gateway_models` is best-effort and yields an empty list on any
+    // failure. OpenCode survives that — its provider still works without an
+    // explicit model map. Pi does not: a custom provider is *defined* by its
+    // models, so an empty list registers a provider pi can offer nothing from
+    // and the session opens on "No models available". Stop before touching the
+    // user's config rather than launching into that dead end.
+    if models.is_empty() {
+        anyhow::bail!(
+            "The gateway at {gateway_url} returned no models, and Pi needs an explicit model list.\n\
+             Check that the gateway is reachable and your key is valid, then run `edgee launch pi` again."
+        );
+    }
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let provider = build_edgee_provider(&gateway_url, &models, &catalog, debug_log_headers);
 
@@ -326,15 +348,35 @@ mod tests {
     }
 
     #[test]
-    fn stores_env_var_names_not_the_credential() {
+    fn stores_env_references_not_the_credential() {
         let provider =
             build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
 
-        // Bare names, no `$` — pi looks the whole value up in the environment,
-        // and a `$` prefix makes it miss and send the literal string as the key.
-        assert_eq!(provider["apiKey"], "EDGEE_API_KEY");
-        assert_eq!(provider["headers"]["x-edgee-api-key"], "EDGEE_API_KEY");
-        assert_eq!(provider["headers"]["x-edgee-session-id"], "EDGEE_SESSION_ID");
+        // `$NAME`, the syntax pi has expanded since 0.79.4. A bare `EDGEE_API_KEY`
+        // is a plain literal there and would be sent verbatim as the credential.
+        assert_eq!(provider["apiKey"], "$EDGEE_API_KEY");
+        assert_eq!(provider["headers"]["x-edgee-api-key"], "$EDGEE_API_KEY");
+        assert_eq!(
+            provider["headers"]["x-edgee-session-id"],
+            "$EDGEE_SESSION_ID"
+        );
+    }
+
+    #[test]
+    fn embeds_debug_log_headers_literally() {
+        // These are not env references: an unset reference resolves to nothing,
+        // and a pubkey/salt pair is derived from the passphrase, not secret.
+        let provider = build_edgee_provider(
+            "https://api.edgee.ai",
+            &[],
+            &util::ModelCatalog::new(),
+            Some(crate::crypto::DebugLogHeaderValues {
+                pubkey: "pubkey-b64".to_string(),
+                salt: "salt-b64".to_string(),
+            }),
+        );
+        assert_eq!(provider["headers"]["x-edgee-debug-pubkey"], "pubkey-b64");
+        assert_eq!(provider["headers"]["x-edgee-debug-salt"], "salt-b64");
     }
 
     #[test]
