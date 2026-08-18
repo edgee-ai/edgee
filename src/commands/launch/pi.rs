@@ -294,9 +294,15 @@ pub async fn run(opts: Options) -> Result<()> {
     // and the session opens on "No models available". Stop before touching the
     // user's config rather than launching into that dead end.
     if models.is_empty() {
+        // Distinguish the two causes, because they look identical from here and
+        // the second one is easy to misread as an auth problem: the gateway may
+        // be unreachable, or up and serving an empty catalog — it proxies
+        // `/v1/models` from the console API, so a dev stack with an unseeded
+        // model table answers 200 with `{"data":[]}` for any key, valid or not.
         anyhow::bail!(
             "The gateway at {gateway_url} returned no models, and Pi needs an explicit model list.\n\
-             Check that the gateway is reachable and your key is valid, then run `edgee launch pi` again."
+             Check that the gateway is reachable and that its model catalog is populated \
+             (`curl {gateway_url}/v1/models`), then run `edgee launch pi` again."
         );
     }
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
