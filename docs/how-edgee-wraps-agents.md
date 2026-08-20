@@ -32,7 +32,7 @@ Every launch target uses exactly one of three transports. Nothing else exists in
 
 | Transport | What Edgee does | Targets | Vendor-documented? |
 | --- | --- | --- | --- |
-| **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush` | **Yes.** Each variable below links to the vendor's own docs |
+| **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
 | **B. Config-file patch** | Temporarily writes a provider block into the app's own config file, then reverts | `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
 | **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `cursor`, `copilot-vscode`, `claude-desktop` | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
 
@@ -203,6 +203,43 @@ config still wins, as Crush intends.
 [Crush README](https://github.com/charmbracelet/crush). Note, however, that Crush has since
 introduced a `crushrc` format and now describes the JSON config as deprecated. That makes this the
 least future-proof of the Transport A integrations, and it should be migrated.
+
+### Kimi Code (`edgee launch kimi`)
+
+Implementation: [`src/commands/launch/kimi.rs`](../src/commands/launch/kimi.rs)
+
+```
+KIMI_MODEL_NAME          = moonshotai/kimi-k2.7-code
+KIMI_MODEL_API_KEY       = <edgee key>
+KIMI_MODEL_BASE_URL      = https://<gateway>          ← no /v1; the SDK appends it
+KIMI_MODEL_PROVIDER_TYPE = anthropic
+KIMI_CODE_CUSTOM_HEADERS = x-edgee-api-key: …\nx-edgee-session-id: …\nx-edgee-repo: …
+```
+
+Kimi Code is the strictest of the CLI agents about credentials, and deliberately so: provider
+`api_key` and `base_url` are read **only** from `config.toml`, and
+[the docs state plainly](https://moonshotai.github.io/kimi-code/en/configuration/env-vars.html) that
+`export KIMI_API_KEY=…` does nothing. The vendor then carves out one exception — the `KIMI_MODEL_*`
+family, "an explicit channel that *does* read credentials from the shell". Setting
+`KIMI_MODEL_NAME` makes the CLI synthesize a provider and a model alias **in memory**, outranking
+`default_model` and evaporating when the process exits.
+
+That makes this the cleanest integration in the catalogue after Claude Code: nothing is written to
+the user's files at all, so there is no temp config to merge (OpenCode, Crush), no additive block to
+maintain (`pi`), and no patch-and-revert window (`codex-desktop`). A bare `kimi` run afterwards is
+byte-for-byte unaffected.
+
+`KIMI_CODE_CUSTOM_HEADERS` carries the gateway routing headers, one `Name: Value` per line — the
+same shape as `ANTHROPIC_CUSTOM_HEADERS`. It was added in Kimi Code 0.20.2 and **is not in the
+vendor's environment-variables reference**; it appears only in that release's notes ("A new
+`KIMI_CODE_CUSTOM_HEADERS` environment variable lets you customize headers on outbound LLM
+requests"). Its behaviour was therefore confirmed on the wire against a loopback server rather than
+taken from documentation. That is a weaker documentation guarantee than the other Transport A
+targets have, and it is the one thing to re-check when Kimi ships a major version.
+
+Like OpenCode and Crush — and unlike Claude Code and Codex — this path does not redirect an agent
+the user already authenticated. The session runs entirely on the Edgee-supplied model, billed
+through Edgee or BYOK credentials; the user's own Kimi login is not involved.
 
 ---
 

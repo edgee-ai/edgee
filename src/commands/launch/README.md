@@ -38,7 +38,7 @@ agent (own key + compression), distinct from `claude` (Claude Code).
 Usually the official CLI of that product:
 
 ```text
-claude | codex | opencode | codebuddy | crush | pi | kilo | copilot | …
+claude | codex | opencode | codebuddy | crush | pi | kimi | kilo | copilot | …
 ```
 
 Reserve the bare product name for the CLI even if the CLI ships later. If only
@@ -90,6 +90,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `codebuddy` | CodeBuddy CLI | `codebuddy` |
 | `crush` | Crush CLI | `crush` |
 | `pi` | Pi CLI | `pi` |
+| `kimi` | Kimi Code CLI | `kimi` |
 
 ### Apps & editors (relay today)
 
@@ -199,6 +200,60 @@ Models are **not** declared with `reasoning: true`: pi maps that to
 `thinking.type=enabled`, which Sonnet 5 rejects in favour of
 `thinking.type=adaptive` plus `output_config.effort`. Revisit once pi emits the
 newer shape or the gateway normalises it.
+
+## `kimi` — the env-only channel Kimi Code leaves open
+
+Kimi Code refuses to read provider credentials from the shell on purpose:
+`api_key` / `base_url` come from `config.toml` (or its `[providers.<n>.env]`
+sub-table), and `export KIMI_API_KEY=…` does nothing. So the lever every other
+CLI target uses is closed here — except for one documented exception, the
+`KIMI_MODEL_*` family, "an explicit channel that *does* read credentials from
+the shell".
+
+Setting `KIMI_MODEL_NAME` makes kimi synthesize a provider **and** a model alias
+in memory, outranking `default_model` in `config.toml` and evaporating with the
+process. Four variables are all this target needs:
+
+```sh
+KIMI_MODEL_NAME=moonshotai/kimi-k2.7-code   # also the enable switch
+KIMI_MODEL_API_KEY=<edgee key>
+KIMI_MODEL_BASE_URL=https://api.edgee.ai    # no /v1 — the SDK appends it
+KIMI_MODEL_PROVIDER_TYPE=anthropic
+```
+
+That makes `kimi` the cleanest CLI target after `claude`: nothing is written to
+the user's files, so there is no additive block to maintain (`pi`) and no
+patch-and-revert dance (`codex-desktop`), and a bare `kimi` run afterwards is
+completely unaffected.
+
+Three details are load-bearing:
+
+- **`base_url` takes no `/v1`.** `KIMI_MODEL_PROVIDER_TYPE=anthropic` selects
+  Kimi's Anthropic Messages implementation, which appends `/v1/messages` itself
+   — the same rule as `ANTHROPIC_BASE_URL` for Claude Code and `baseUrl` for pi.
+- **The Edgee key travels as the provider credential, not as `x-edgee-api-key`.**
+  The gateway resolves a key from `x-api-key` or `Authorization: Bearer`, and
+  answers 401 to `x-edgee-api-key` on its own. `KIMI_MODEL_API_KEY` lands in the
+  former, so it authenticates; there is nothing to add.
+- **`KIMI_MODEL_NAME` is the enable switch, and a missing required variable is
+  fatal.** Kimi fails at startup rather than quietly falling back to Moonshot, so
+  a half-configured launch is loud instead of silently unmetered.
+
+### Session attribution rides `KIMI_CODE_CUSTOM_HEADERS`
+
+`KIMI_MODEL_*` carries no headers of its own, but Kimi Code 0.20.2 added
+`KIMI_CODE_CUSTOM_HEADERS` — one `Name: Value` per line, applied to outbound LLM requests. Same
+shape as `ANTHROPIC_CUSTOM_HEADERS`, so this target sends the full Edgee header set and sessions
+group in the console exactly as they do for Claude Code.
+
+The variable was **not** in the docs site's environment-variables reference at the time of writing —
+only in the 0.20.2 release notes. Verified on the wire against a loopback server: `x-edgee-api-key`,
+`x-edgee-session-id` and `x-edgee-repo` all arrive on `POST /v1/messages?beta=true`, alongside the
+`x-api-key` that `KIMI_MODEL_API_KEY` produces. If a future release drops the variable, the fallback
+is an additive `[providers.edgee]` block with `custom_headers` in the user's `config.toml`, the way
+`pi.rs` writes `models.json` — but note `custom_headers` values take no `$NAME` env references, so
+the key would then sit on disk, and a per-launch session id in a shared file races between
+concurrent launches.
 
 ## Planned targets (same rules)
 
