@@ -75,6 +75,12 @@ pub async fn run(opts: Options) -> Result<()> {
         "-c", &format!("model_providers.edgee-cli.base_url=\"{base_url}\""),
         "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"{repo_entry}{debug_log_entry}}}"),
         "-c", "model_providers.edgee-cli.wire_api=\"responses\"",
+        // Codex only attaches the user's ChatGPT `Authorization: Bearer` token to a
+        // custom provider when this is set. It used to default to on; codex 0.149
+        // flipped it, and every plan-connection request started 401ing gateway-side
+        // because no upstream credential arrived. Harmless when the user isn't
+        // logged in to codex — the header is simply omitted.
+        "-c", "model_providers.edgee-cli.requires_openai_auth=true",
     ]);
     cmd.args(&opts.args);
 
