@@ -166,7 +166,8 @@ fn render_provider_block(
         "[model_providers.{PROVIDER_ID}]\n\
          name = \"EDGEE\"\n\
          base_url = \"{}\"\n\
-         wire_api = \"responses\"\n\n\
+         wire_api = \"responses\"\n\
+         requires_openai_auth = true\n\n\
          [model_providers.{PROVIDER_ID}.http_headers]\n\
          \"x-edgee-api-key\" = \"{}\"\n\
          \"x-edgee-session-id\" = \"{}\"\n",
@@ -464,6 +465,8 @@ mod tests {
         let provider = &doc["model_providers"][PROVIDER_ID];
         assert_eq!(provider["base_url"].as_str(), Some("https://edgee.io/v1"));
         assert_eq!(provider["wire_api"].as_str(), Some("responses"));
+        // Without this codex omits the user's ChatGPT bearer token — see the CLI target.
+        assert_eq!(provider["requires_openai_auth"].as_bool(), Some(true));
         let headers = &provider["http_headers"];
         assert_eq!(headers["x-edgee-api-key"].as_str(), Some("sk-edgee-test"));
         assert_eq!(headers["x-edgee-session-id"].as_str(), Some("session-123"));
