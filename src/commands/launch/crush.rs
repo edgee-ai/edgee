@@ -311,7 +311,8 @@ mod tests {
                     util::ModelMetadata {
                         context: Some(*v),
                         cost: None,
-                            app_subscription_only: false,
+                        reasoning_efforts: Vec::new(),
+                        app_subscription_only: false,
                     },
                 )
             })
@@ -327,7 +328,8 @@ mod tests {
             util::ModelMetadata {
                 context: None,
                 cost: Some(cost),
-                    app_subscription_only: false,
+                reasoning_efforts: Vec::new(),
+                app_subscription_only: false,
             },
         )]
         .into_iter()

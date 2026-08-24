@@ -199,6 +199,23 @@ fn build_edgee_provider(
                     "cache_write": cost.cache_write,
                 });
             }
+            if let Some(efforts) = metadata
+                .map(|m| m.reasoning_efforts.as_slice())
+                .filter(|efforts| !efforts.is_empty())
+            {
+                entry["reasoning"] = Value::Bool(true);
+                entry["variants"] = Value::Object(
+                    efforts
+                        .iter()
+                        .map(|effort| {
+                            (
+                                effort.clone(),
+                                serde_json::json!({ "reasoningEffort": effort }),
+                            )
+                        })
+                        .collect(),
+                );
+            }
             models_map.insert(id.clone(), entry);
         }
         provider["models"] = Value::Object(models_map);
@@ -336,7 +353,8 @@ mod tests {
                     util::ModelMetadata {
                         context: Some(*v),
                         cost: None,
-                            app_subscription_only: false,
+                        reasoning_efforts: Vec::new(),
+                        app_subscription_only: false,
                     },
                 )
             })
@@ -350,7 +368,28 @@ mod tests {
             util::ModelMetadata {
                 context: None,
                 cost: Some(cost),
-                    app_subscription_only: false,
+                reasoning_efforts: Vec::new(),
+                app_subscription_only: false,
+            },
+        )]
+        .into_iter()
+        .collect();
+        build_edgee_provider(
+            "key",
+            "sess",
+            "https://gw.test",
+            &[id.to_string()],
+            &catalog,
+            None,
+        )
+    }
+
+    fn provider_with_reasoning(id: &str, efforts: &[&str]) -> Value {
+        let catalog: util::ModelCatalog = [(
+            id.to_string(),
+            util::ModelMetadata {
+                reasoning_efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
+                ..Default::default()
             },
         )]
         .into_iter()
@@ -377,6 +416,32 @@ mod tests {
             model["limit"]["output"],
             serde_json::json!(OPENCODE_OUTPUT_TOKEN_MAX)
         );
+    }
+
+    #[test]
+    fn declares_reasoning_variants_from_the_catalog() {
+        let provider = provider_with_reasoning(
+            "anthropic/claude-opus-5",
+            &["none", "low", "medium", "high", "xhigh", "max"],
+        );
+        let model = &provider["models"]["anthropic/claude-opus-5"];
+
+        assert_eq!(model["reasoning"], serde_json::json!(true));
+        for effort in ["none", "low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(
+                model["variants"][effort]["reasoningEffort"],
+                serde_json::json!(effort)
+            );
+        }
+        assert_eq!(model["variants"].as_object().map(|v| v.len()), Some(6));
+    }
+
+    #[test]
+    fn omits_reasoning_and_variants_without_catalog_efforts() {
+        let provider = provider_with(&["openai/gpt-4.1"], &[]);
+        let model = &provider["models"]["openai/gpt-4.1"];
+        assert!(model.get("reasoning").is_none());
+        assert!(model.get("variants").is_none());
     }
 
     #[test]

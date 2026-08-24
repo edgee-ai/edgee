@@ -9,6 +9,8 @@ pub struct ModelMetadata {
     pub context: Option<u64>,
     /// Per-million-token rates, in US dollars.
     pub cost: Option<GatewayModelCost>,
+    /// Gateway-normalized reasoning effort values accepted by the model.
+    pub reasoning_efforts: Vec<String>,
     /// Served only through a coding-app subscription (Cursor, GitHub Copilot) —
     /// see [`without_app_subscription_models`].
     pub app_subscription_only: bool,
@@ -48,6 +50,7 @@ pub async fn fetch_model_catalog(creds: &crate::config::Credentials) -> ModelCat
                 ModelMetadata {
                     context: m.context_limit(),
                     cost: m.cost(),
+                    reasoning_efforts: m.reasoning_efforts.clone(),
                     app_subscription_only: m.app_subscription_only(),
                 },
             ))

@@ -242,6 +242,10 @@ pub struct GatewayModel {
     pub author_id: String,
     #[serde(default)]
     pub display_name: String,
+    /// Gateway-normalized reasoning effort values accepted for this model.
+    /// Empty means the catalog exposes no configurable effort knob.
+    #[serde(default)]
+    pub reasoning_efforts: Vec<String>,
     #[serde(default)]
     pub aliases: Vec<String>,
     /// Provider name → that provider's config for this model.
@@ -790,6 +794,17 @@ mod tests {
         assert_eq!(m.catalog_id().as_deref(), Some("anthropic/claude-opus-5"));
         // No author means no gateway-listing id to join on.
         assert!(catalog_model(r#"{"model_id":"m1"}"#).catalog_id().is_none());
+    }
+
+    #[test]
+    fn catalog_model_deserializes_reasoning_efforts() {
+        let model = catalog_model(
+            r#"{"model_id":"claude-opus-5","author_id":"anthropic","reasoning_efforts":["none","low","medium","high","xhigh","max"]}"#,
+        );
+        assert_eq!(
+            model.reasoning_efforts,
+            ["none", "low", "medium", "high", "xhigh", "max"]
+        );
     }
 
     #[test]

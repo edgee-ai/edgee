@@ -259,6 +259,7 @@ mod tests {
                     util::ModelMetadata {
                         context: Some(*v),
                         cost: None,
+                        reasoning_efforts: Vec::new(),
                         app_subscription_only: false,
                     },
                 )
@@ -273,6 +274,7 @@ mod tests {
             util::ModelMetadata {
                 context: None,
                 cost: Some(cost),
+                reasoning_efforts: Vec::new(),
                 app_subscription_only: false,
             },
         )]

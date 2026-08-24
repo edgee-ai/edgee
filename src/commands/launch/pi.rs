@@ -347,6 +347,7 @@ mod tests {
             util::ModelMetadata {
                 context,
                 cost: None,
+                reasoning_efforts: Vec::new(),
                 app_subscription_only: false,
             },
         );
