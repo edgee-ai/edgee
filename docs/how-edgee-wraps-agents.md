@@ -32,8 +32,8 @@ Every launch target uses exactly one of three transports. Nothing else exists in
 
 | Transport | What Edgee does | Targets | Vendor-documented? |
 | --- | --- | --- | --- |
-| **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush` | **Yes.** Each variable below links to the vendor's own docs |
-| **B. Config-file patch** | Temporarily writes a provider block into the app's own config file, then reverts | `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
+| **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
+| **B. Config-file patch** | Writes a provider block into the app's own config file — additive and persistent for `pi`, temporary and reverted for `codex-desktop` | `pi`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
 | **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `cursor`, `copilot-vscode`, `claude-desktop` | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
 
 Transport A covers the products that drive most enterprise coding-agent spend. Transport C is the
@@ -42,8 +42,9 @@ compatibility path for GUI apps that expose no configuration surface at all.
 **Nothing runs as a daemon, a system extension, a kernel module, or an endpoint agent.** The relay
 is a foreground process started by the launch command and bound to loopback; it is never installed
 or registered, and it does not survive the terminal. Edgee never modifies the agent's binary, its
-installed files, or its stored credentials. The one exception is `codex-desktop`'s config file,
-which is reverted about ten seconds later.
+installed files, or its stored credentials. Two config files are the exceptions: `codex-desktop`'s,
+which is reverted about ten seconds later, and `pi`'s `models.json`, which gains one namespaced
+`edgee` provider key and keeps it.
 
 ---
 
@@ -210,9 +211,62 @@ config still wins, as Crush intends.
 introduced a `crushrc` format and now describes the JSON config as deprecated. That makes this the
 least future-proof of the Transport A integrations, and it should be migrated.
 
+### Kimi Code (`edgee launch kimi`)
+
+Implementation: [`src/commands/launch/kimi.rs`](../src/commands/launch/kimi.rs)
+
+```
+KIMI_MODEL_NAME          = moonshotai/kimi-k2.7-code
+KIMI_MODEL_API_KEY       = <edgee key>
+KIMI_MODEL_BASE_URL      = https://<gateway>          ← no /v1; the SDK appends it
+KIMI_MODEL_PROVIDER_TYPE = anthropic
+KIMI_CODE_CUSTOM_HEADERS = x-edgee-api-key: …\nx-edgee-session-id: …\nx-edgee-repo: …
+```
+
+Kimi Code is the strictest of the CLI agents about credentials, and deliberately so: provider
+`api_key` and `base_url` are read **only** from `config.toml`, and
+[the docs state plainly](https://moonshotai.github.io/kimi-code/en/configuration/env-vars.html) that
+`export KIMI_API_KEY=…` does nothing. The vendor then carves out one exception — the `KIMI_MODEL_*`
+family, "an explicit channel that *does* read credentials from the shell". Setting
+`KIMI_MODEL_NAME` makes the CLI synthesize a provider and a model alias **in memory**, outranking
+`default_model` and evaporating when the process exits.
+
+That makes this the cleanest integration in the catalogue after Claude Code: nothing is written to
+the user's files at all, so there is no temp config to merge (OpenCode, Crush), no additive block to
+maintain (`pi`), and no patch-and-revert window (`codex-desktop`). A bare `kimi` run afterwards is
+byte-for-byte unaffected.
+
+`KIMI_CODE_CUSTOM_HEADERS` carries the gateway routing headers, one `Name: Value` per line — the
+same shape as `ANTHROPIC_CUSTOM_HEADERS`. It was added in Kimi Code 0.20.2 and **is not in the
+vendor's environment-variables reference**; it appears only in that release's notes ("A new
+`KIMI_CODE_CUSTOM_HEADERS` environment variable lets you customize headers on outbound LLM
+requests"). Its behaviour was therefore confirmed on the wire against a loopback server rather than
+taken from documentation. That is a weaker documentation guarantee than the other Transport A
+targets have, and it is the one thing to re-check when Kimi ships a major version.
+
+Like OpenCode and Crush — and unlike Claude Code and Codex — this path does not redirect an agent
+the user already authenticated. The session runs entirely on the Edgee-supplied model, billed
+through Edgee or BYOK credentials; the user's own Kimi login is not involved.
+
 ---
 
-## Transport B: config-file patch (`codex-desktop`)
+## Transport B: config-file patch (`pi`, `codex-desktop`)
+
+Two targets write into a config file the user owns, for opposite reasons and with opposite
+lifecycles.
+
+### Pi (`edgee launch pi`)
+
+Implementation: [`src/commands/launch/pi.rs`](../src/commands/launch/pi.rs), whose module docs carry
+the full rationale.
+
+Pi resolves models through `<agent dir>/models.json`, and its only directory override moves the
+whole agent root — `auth.json`, `settings.json`, history — so a private copy would strand the user's
+login. The block therefore goes into the real `models.json`, under a single namespaced `edgee`
+provider key. Because it is **additive** rather than a hijack of an existing key, it needs no
+patch-and-revert dance: nothing else in the file is touched, and the key is simply left in place.
+
+### Codex Desktop (`edgee launch codex-desktop`)
 
 Implementation: [`src/commands/launch/codex_desktop.rs`](../src/commands/launch/codex_desktop.rs).
 Full rationale in
@@ -347,6 +401,84 @@ unchanged.
 
 So the failure mode across all three is **degraded onboarding, not a dead surface**, and the
 migration is a configuration-writing change in the CLI rather than a rebuild.
+
+---
+
+## Delivering org plugins
+
+A second axis, orthogonal to the three transports. A transport decides where the agent's **LLM
+traffic** goes; plugin delivery decides whether Edgee can put an org's **skills, subagents, hooks
+and MCP servers** in front of that agent. A target can score well on one and badly on the other —
+Kimi Code is the cleanest Transport A integration in the catalogue and still cannot take a full
+plugin bundle.
+
+Implementation: `src/commands/util/plugins/`, with the per-agent matrix in `delivery.rs`.
+
+**The rule the design turns on.** Edgee materializes components into a directory **it owns** and
+points the agent at it. It never writes into a user-owned config file, and never into a git working
+tree. A component kind that cannot be redirected for a given agent is reported as *undelivered*
+rather than worked around — no silent half-delivery. That rule is what makes most of the gaps below
+gaps rather than bugs.
+
+| Target | Skills | Subagents | Hooks | MCP | How it lands |
+| --- | :-: | :-: | :-: | :-: | --- |
+| `claude` | ✅ | ✅ | ✅ | ✅ | `claude --plugin-dir` — session-only, all four kinds at once, nothing written to `~/.claude` |
+| `codebuddy` | ✅ | ✅ | ✅ | ✅ | `CODEBUDDY_PLUGIN_DIRS` — the same bundle byte for byte, down to the `${CLAUDE_PLUGIN_ROOT}` aliases |
+| `opencode` | ✅ | ✅ | ❌ | ✅ | config fragments on the redirected document; no `hooks` key exists — its extension point is JS plugins |
+| `codex` | ✅¹ | ❌ | ⏳ | ✅ | skills via a `CODEX_HOME` symlink mirror; MCP via `-c mcp_servers`; no user-defined subagents exist |
+| `crush` | ✅ | ✅ | ⏳ | ✅ | config fragments on the redirected document |
+| `kimi` | ⏳ | ❌ | ❌ | ❌ | not yet wired — see below |
+| `pi` | ⏳ | ⏳ | ⏳ | ⏳ | not yet wired |
+| `cursor`, `copilot-vscode`, `claude-desktop` | ❌ | ❌ | ❌ | ❌ | relay targets — Edgee never spawns the process, so there is no launch to attach a directory to |
+| `codex-desktop` | ❌ | ❌ | ❌ | ❌ | launched, but reads the real Codex config root that Edgee patches only for the handoff and reverts; it cannot use the symlink mirror because `auth.json` holds a single-use rotating token |
+
+¹ Unix only. The mirror is symlinks, Windows needs elevated privileges for those, and copying a
+config root would duplicate the user's credentials — not a trade worth making.
+
+⏳ marks a mechanism that is plausible but unverified. Those stay undelivered on purpose: injecting
+config an agent silently ignores is worse than reporting that nothing was delivered.
+
+### What decides the answer
+
+Two questions, in order:
+
+1. **Does the CLI spawn the process?** If not (`cursor`, `copilot-vscode`, `claude-desktop`), there
+   is no launch to attach anything to and the whole row is `❌`. This is the same boundary Transport
+   C draws, for the same reason.
+2. **Is there a documented way to point the agent at a directory, without editing a file the user
+   owns?** A flag or env var means delivery. Discovery driven only by the user's config file or data
+   root means no delivery — the rule above forbids writing there.
+
+That second question is why Claude Code and CodeBuddy get everything and most others get a subset:
+`--plugin-dir` is a *session-scoped, additive* pointer at an arbitrary directory, and few agents
+ship an equivalent.
+
+### Kimi Code: skills yes, bundle no
+
+Kimi has a real plugin format — a manifest at `kimi.plugin.json` or `.kimi-plugin/plugin.json`, with
+`${KIMI_PLUGIN_ROOT}` substitution inside it, and a dedicated "Plugin Instructions" block in the
+system prompt. It is a close analogue of Claude Code's `.claude-plugin/plugin.json` and
+`${CLAUDE_PLUGIN_ROOT}`. What it lacks is the pointer: plugins are installed from a **marketplace**
+catalog into the user's data root, and there is no `--plugin-dir` equivalent to load one from an
+arbitrary directory for a single session. Under the rule above, that makes the bundle undeliverable
+today.
+
+Skills are a different story. `kimi --skills-dir <dir>` is repeatable and takes an arbitrary
+directory — exactly the shape delivery needs. One caveat decides how it must be used:
+
+> `--skills-dir <dir>` — Load skills from this directory **instead of** auto-discovered user and
+> project directories.
+
+It **replaces** discovery rather than adding to it, unlike Claude Code's additive `--plugin-dir`. So
+delivering Edgee skills naively would hide every skill the user already has. Because the flag is
+repeatable, the fix is to pass the user's own discovered directories alongside the Edgee tree — but
+that means the CLI has to know Kimi's discovery rules, which is a materially larger job than
+appending one flag, and it is why this row is `⏳` rather than `✅`.
+
+Subagents have a near-miss: `--agent-file <path>` is repeatable and loads an agent definition from a
+Markdown file, but it *selects* that agent for the session and cannot be combined with
+`--session` / `--continue`. That is a way to start one agent, not a way to register a set. Hooks and
+MCP servers have no CLI surface at all — both are `config.toml`, which Edgee will not write.
 
 ---
 

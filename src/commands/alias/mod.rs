@@ -34,14 +34,16 @@ const CODEX_ALIAS: AliasSpec = AliasSpec::new("codex", "edgee launch codex --");
 const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch opencode --");
 const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush --");
 const PI_ALIAS: AliasSpec = AliasSpec::new("pi", "edgee launch pi --");
+const KIMI_ALIAS: AliasSpec = AliasSpec::new("kimi", "edgee launch kimi --");
 
-const ALL_ALIASES: [AliasSpec; 6] = [
+const ALL_ALIASES: [AliasSpec; 7] = [
     CLAUDE_ALIAS,
     CODEBUDDY_ALIAS,
     CODEX_ALIAS,
     OPENCODE_ALIAS,
     CRUSH_ALIAS,
     PI_ALIAS,
+    KIMI_ALIAS,
 ];
 
 const PATH_EXPORT_POSIX: &str = "case \":$PATH:\" in\n  *\":$HOME/.edgee/bin:\"*) ;;\n  *) export PATH=\"$HOME/.edgee/bin:$PATH\" ;;\nesac\n";
@@ -55,6 +57,7 @@ pub enum Agent {
     Opencode,
     Crush,
     Pi,
+    Kimi,
     /// Cursor IDE desktop wrapper (requires Cursor installed)
     Cursor,
     /// GitHub Copilot in VS Code desktop wrapper (requires VS Code installed)
@@ -76,6 +79,7 @@ impl Agent {
             Self::Opencode => std::slice::from_ref(&OPENCODE_ALIAS),
             Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
             Self::Pi => std::slice::from_ref(&PI_ALIAS),
+            Self::Kimi => std::slice::from_ref(&KIMI_ALIAS),
             Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop => &[],
             Self::All => &ALL_ALIASES,
         }
@@ -100,11 +104,12 @@ impl Agent {
             Self::Opencode => "opencode",
             Self::Crush => "crush",
             Self::Pi => "pi",
+            Self::Kimi => "kimi",
             Self::Cursor => "cursor",
             Self::CopilotVscode => "copilot-vscode",
             Self::ClaudeDesktop => "claude-desktop",
             Self::All => {
-                "claude, codebuddy, codex, opencode, crush, pi, cursor, copilot-vscode, and claude-desktop"
+                "claude, codebuddy, codex, opencode, crush, pi, kimi, cursor, copilot-vscode, and claude-desktop"
             }
         }
     }

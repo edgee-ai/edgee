@@ -104,6 +104,9 @@ edgee launch crush
 # Pi
 edgee launch pi
 
+# Kimi Code
+edgee launch kimi
+
 # Cursor (desktop app)
 edgee launch cursor
 
@@ -159,7 +162,7 @@ edgee alias remove          # undo
 
 This covers two kinds of targets:
 
-1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`, `pi`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
+1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`, `pi`, `kimi`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
 2. **Apps** (`cursor`, `copilot-vscode`, `claude-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
 
 ### Check savings
@@ -300,6 +303,7 @@ and stays silent otherwise.
 | CodeBuddy (CLI) | `edgee launch codebuddy` | ✅ Supported |
 | Crush (CLI) | `edgee launch crush` | ✅ Supported |
 | Pi (CLI) | `edgee launch pi` | ✅ Supported |
+| Kimi Code (CLI) | `edgee launch kimi` | ✅ Supported |
 | Cursor (app) | `edgee launch cursor` | ✅ Supported |
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
 | Claude Desktop (app) | `edgee launch claude-desktop` | ✅ Supported |
