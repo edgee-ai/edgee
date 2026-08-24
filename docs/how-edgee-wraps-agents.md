@@ -133,18 +133,24 @@ Edgee passes documented `-c` config overrides to the child process:
 -c model_providers.edgee-cli.base_url="https://<gateway>/v1"
 -c model_providers.edgee-cli.http_headers={"x-edgee-api-key"=…,"x-edgee-session-id"=…}
 -c model_providers.edgee-cli.wire_api="responses"
+-c model_providers.edgee-cli.requires_openai_auth=true
 ```
 
-Every key used here — `model_provider`, `model_providers.<id>`, `name`, `base_url`, `wire_api` and
-`http_headers` — appears in OpenAI's
+Every key used here — `model_provider`, `model_providers.<id>`, `name`, `base_url`, `wire_api`,
+`http_headers` and `requires_openai_auth` — appears in OpenAI's
 [config reference](https://learn.chatgpt.com/docs/config-file/config-reference). The `-c` one-off
 override syntax is documented at
 [Advanced config § one-off overrides from the CLI](https://learn.chatgpt.com/docs/config-file/config-advanced#one-off-overrides-from-the-cli).
 `http_headers` exists precisely so that a custom provider can carry gateway routing headers.
 
 Edgee does not touch `~/.codex/auth.json`, does not set `CODEX_ACCESS_TOKEN`, and does not set
-`env_key`. Codex forwards its own credential to the configured `base_url`, and Edgee's key rides in
-a separate header. Same shape as Claude Code: **the agent keeps its identity, Edgee adds its own.**
+`env_key`. `requires_openai_auth` is what makes Codex attach its own ChatGPT credential to a custom
+provider — it is the setting OpenAI documents for reaching OpenAI models through an LLM proxy, and
+it changes only *which credential is sent*, never the destination: requests still go to the
+configured `base_url`. Without it Codex treats the provider as unauthenticated and sends no
+`Authorization` header at all, which the gateway rejects. So Codex forwards its own credential and
+Edgee's key rides in a separate header. Same shape as Claude Code: **the agent keeps its identity,
+Edgee adds its own.**
 
 ### OpenCode (`edgee launch opencode`)
 
