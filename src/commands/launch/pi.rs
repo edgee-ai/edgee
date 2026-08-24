@@ -67,6 +67,34 @@ fn env_ref(name: &str) -> String {
     format!("${name}")
 }
 
+/// Pi's picker uses fixed slot names. The catalog's `none` effort maps to
+/// Pi's disabled `off` slot.
+const PI_THINKING_LEVELS: [(&str, &str); 7] = [
+    ("off", "none"),
+    ("minimal", "minimal"),
+    ("low", "low"),
+    ("medium", "medium"),
+    ("high", "high"),
+    ("xhigh", "xhigh"),
+    ("max", "max"),
+];
+
+fn thinking_level_map(efforts: &[String]) -> Value {
+    Value::Object(
+        PI_THINKING_LEVELS
+            .into_iter()
+            .map(|(pi_level, catalog_effort)| {
+                let value = if efforts.iter().any(|effort| effort == catalog_effort) {
+                    Value::String(catalog_effort.to_string())
+                } else {
+                    Value::Null
+                };
+                (pi_level.to_string(), value)
+            })
+            .collect(),
+    )
+}
+
 /// Output cap declared for every model. The gateway catalog carries a context
 /// window but no per-model output limit, and pi has no "unset" for `maxTokens`
 /// short of omitting it — which makes pi fall back to a conservative built-in
@@ -228,6 +256,19 @@ fn build_edgee_provider(
                         "cacheWrite": cost.cache_write,
                     });
                 }
+                if let Some(efforts) = metadata
+                    .map(|m| m.reasoning_efforts.as_slice())
+                    .filter(|efforts| !efforts.is_empty())
+                {
+                    entry["reasoning"] = Value::Bool(true);
+                    entry["thinkingLevelMap"] = thinking_level_map(efforts);
+                    // This provider always talks to the gateway. Adaptive
+                    // thinking preserves the exact categorical effort here;
+                    // the gateway then translates it for the routed provider.
+                    entry["compat"] = serde_json::json!({
+                        "forceAdaptiveThinking": true,
+                    });
+                }
                 entry
             })
             .collect();
@@ -340,18 +381,26 @@ pub async fn run(opts: Options) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn catalog_with(id: &str, context: Option<u64>) -> util::ModelCatalog {
+    fn catalog_with_efforts(
+        id: &str,
+        context: Option<u64>,
+        efforts: &[&str],
+    ) -> util::ModelCatalog {
         let mut catalog = util::ModelCatalog::new();
         catalog.insert(
             id.to_string(),
             util::ModelMetadata {
                 context,
                 cost: None,
-                reasoning_efforts: Vec::new(),
+                reasoning_efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
                 app_subscription_only: false,
             },
         );
         catalog
+    }
+
+    fn catalog_with(id: &str, context: Option<u64>) -> util::ModelCatalog {
+        catalog_with_efforts(id, context, &[])
     }
 
     #[test]
@@ -414,16 +463,57 @@ mod tests {
     }
 
     #[test]
-    fn never_declares_reasoning() {
-        // Pi sends `thinking.type=enabled` for `reasoning: true`, which Sonnet 5
-        // rejects — it wants `thinking.type=adaptive` plus `output_config.effort`.
-        // The catalog carries no reasoning flag anyway, so the field stays off
-        // and pi's default (false) applies.
+    fn declares_reasoning_levels_from_the_catalog() {
         let models = vec!["anthropic/claude-sonnet-5".to_string()];
-        let catalog = catalog_with("anthropic/claude-sonnet-5", Some(1_000_000));
+        let catalog = catalog_with_efforts(
+            "anthropic/claude-sonnet-5",
+            Some(1_000_000),
+            &["none", "low", "medium", "high", "xhigh", "max"],
+        );
 
         let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
-        assert!(provider["models"][0].get("reasoning").is_none());
+        let model = &provider["models"][0];
+
+        assert_eq!(model["reasoning"], serde_json::json!(true));
+        assert_eq!(model["thinkingLevelMap"]["off"], "none");
+        assert_eq!(model["thinkingLevelMap"]["minimal"], Value::Null);
+        for effort in ["low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(model["thinkingLevelMap"][effort], effort);
+        }
+        assert_eq!(model["compat"]["forceAdaptiveThinking"], true);
+    }
+
+    #[test]
+    fn hides_pi_levels_the_catalog_does_not_support() {
+        let models = vec!["deepseek/deepseek-v4-pro".to_string()];
+        let catalog = catalog_with_efforts(
+            "deepseek/deepseek-v4-pro",
+            None,
+            &["low", "high", "max"],
+        );
+
+        let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
+        let levels = &provider["models"][0]["thinkingLevelMap"];
+
+        assert_eq!(levels["off"], Value::Null);
+        assert_eq!(levels["minimal"], Value::Null);
+        assert_eq!(levels["low"], "low");
+        assert_eq!(levels["medium"], Value::Null);
+        assert_eq!(levels["high"], "high");
+        assert_eq!(levels["xhigh"], Value::Null);
+        assert_eq!(levels["max"], "max");
+    }
+
+    #[test]
+    fn omits_reasoning_fields_without_catalog_efforts() {
+        let models = vec!["openai/gpt-4.1".to_string()];
+        let catalog = catalog_with("openai/gpt-4.1", Some(1_000_000));
+
+        let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
+        let model = &provider["models"][0];
+        assert!(model.get("reasoning").is_none());
+        assert!(model.get("thinkingLevelMap").is_none());
+        assert!(model.get("compat").is_none());
     }
 
     #[test]

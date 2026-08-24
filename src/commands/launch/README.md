@@ -197,10 +197,13 @@ Three details are load-bearing:
   translates that shape for the whole catalog, so non-Anthropic models
   (`zai/…`, `openai/…`) route through it too.
 
-Models are **not** declared with `reasoning: true`: pi maps that to
-`thinking.type=enabled`, which Sonnet 5 rejects in favour of
-`thinking.type=adaptive` plus `output_config.effort`. Revisit once pi emits the
-newer shape or the gateway normalises it.
+Reasoning-capable models are declared with `reasoning: true` and a model-level
+`thinkingLevelMap` generated from the catalog. Unsupported Pi levels are set to
+`null`, so the picker hides and skips them; catalog `none` maps to Pi's `off`
+slot. Because this provider always talks to the gateway rather than directly to
+Anthropic, `compat.forceAdaptiveThinking` is enabled: Pi sends
+`thinking.type=adaptive` plus the exact effort, and the gateway translates that
+canonical control for whichever provider ultimately serves the request.
 
 ## `kimi` — the env-only channel Kimi Code leaves open
 
