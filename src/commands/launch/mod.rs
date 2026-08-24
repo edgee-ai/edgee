@@ -12,6 +12,7 @@ pub mod codex_desktop;
 pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
+pub mod kimi;
 pub mod kilo;
 pub mod opencode;
 pub mod pi;
@@ -39,6 +40,8 @@ enum Command {
     Crush(crush::Options),
     /// Pi CLI
     Pi(pi::Options),
+    /// Kimi Code CLI
+    Kimi(kimi::Options),
     /// Kilo Code CLI
     Kilo(kilo::Options),
     /// Cursor IDE
@@ -69,6 +72,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::OpenCode(o) => opencode::run(o).await,
         Command::Crush(o) => crush::run(o).await,
         Command::Pi(o) => pi::run(o).await,
+        Command::Kimi(o) => kimi::run(o).await,
         Command::Kilo(o) => kilo::run(o).await,
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o).await,

@@ -43,6 +43,7 @@ pub struct Profile {
     pub opencode: Option<ProviderConfig>,
     pub crush: Option<ProviderConfig>,
     pub pi: Option<ProviderConfig>,
+    pub kimi: Option<ProviderConfig>,
     pub kilo: Option<ProviderConfig>,
     pub copilot: Option<ProviderConfig>,
     pub cursor: Option<ProviderConfig>,
@@ -51,7 +52,7 @@ pub struct Profile {
 impl Profile {
     /// The provider config for a canonical provider key (`claude`,
     /// `claude_desktop`, `codebuddy`, `codex`, `codex_desktop`, `opencode`,
-    /// `crush`, `pi`, `kilo`, `copilot`, `cursor`), if present.
+    /// `crush`, `pi`, `kimi`, `kilo`, `copilot`, `cursor`), if present.
     pub fn provider(&self, key: &str) -> Option<&ProviderConfig> {
         match key {
             "claude" => self.claude.as_ref(),
@@ -62,6 +63,7 @@ impl Profile {
             "opencode" => self.opencode.as_ref(),
             "crush" => self.crush.as_ref(),
             "pi" => self.pi.as_ref(),
+            "kimi" => self.kimi.as_ref(),
             "kilo" => self.kilo.as_ref(),
             "copilot" => self.copilot.as_ref(),
             "cursor" => self.cursor.as_ref(),
