@@ -32,7 +32,7 @@ Every launch target uses exactly one of three transports. Nothing else exists in
 
 | Transport | What Edgee does | Targets | Vendor-documented? |
 | --- | --- | --- | --- |
-| **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
+| **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi`, `kilo` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
 | **B. Config-file patch** | Writes a provider block into the app's own config file — additive and persistent for `pi`, temporary and reverted for `codex-desktop` | `pi`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
 | **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `cursor`, `copilot-vscode`, `claude-desktop` | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
 
@@ -247,6 +247,57 @@ targets have, and it is the one thing to re-check when Kimi ships a major versio
 Like OpenCode and Crush — and unlike Claude Code and Codex — this path does not redirect an agent
 the user already authenticated. The session runs entirely on the Edgee-supplied model, billed
 through Edgee or BYOK credentials; the user's own Kimi login is not involved.
+
+### Kilo Code (`edgee launch kilo`)
+
+Implementation: [`src/commands/launch/kilo.rs`](../src/commands/launch/kilo.rs)
+
+```
+KILO_CONFIG_CONTENT = {"$schema":"https://app.kilo.ai/config.json",
+                       "provider":{"edgee":{"npm":"@ai-sdk/openai-compatible",
+                                            "name":"Edgee",
+                                            "options":{"baseURL":"https://<gateway>/v1",
+                                                       "apiKey":"…",
+                                                       "headers":{"x-edgee-api-key":"…",
+                                                                  "x-edgee-session-id":"…"}},
+                                            "models":{…}}}}
+```
+
+That is the whole injection: one environment variable, carrying one `provider.edgee` key.
+
+[`KILO_CONFIG_CONTENT`](https://kilocode.ai/docs/code-with-ai/platforms/cli#environment-variables) is
+documented on Kilo's CLI reference page, which describes it — alongside `KILO_CONFIG` and the global
+config — as *trusted config*, in contrast to a project-level `kilo.json` committed to a repository.
+The [config reference](https://kilocode.ai/docs/code-with-ai/platforms/cli#config-reference)
+documents the `$schema`, the `provider` block, and per-provider `options` including `baseURL` and
+`apiKey`; the machine-readable schema at `https://app.kilo.ai/config.json` covers the `models` map
+with `limit.context` / `limit.output` and `cost`. The one detail taken from the reference embedded in
+the binary rather than the public page is the **exact position** of `KILO_CONFIG_CONTENT` in the
+precedence chain (above project config, below MDM-managed config) — worth re-checking on a major
+version, though the integration only depends on it ranking above the user's own files.
+
+Kilo's CLI is an OpenCode fork, so this could have been `opencode.rs` with the variable renamed —
+merge the user's config in `$TMPDIR`, point `KILO_CONFIG` at it. `KILO_CONFIG_CONTENT` is better on
+two counts. The Edgee key **never touches disk**, where the OpenCode and Crush temp configs embed it
+and rely on cleanup that a crash can skip. And because Kilo deep-merges this payload over the user's
+own configuration, Edgee never has to read, parse, or re-emit their files — it contributes one
+provider and nothing else.
+
+`KILO_CONFIG_DIR` looks like the natural companion for delivering skills and agents, and is not:
+Kilo's embedded documentation calls it "appended to the search list", but the binary resolves
+`config: KILO_CONFIG_DIR ?? <default>`, **replacing** the user's global config root and hiding their
+own commands, agents and skills. Edgee does not use it.
+
+Edgee fills the `models` map from the gateway's `/v1/models` listing and the per-model `cost` rates
+from the Edgee catalog, so Kilo's own cost display stays accurate. The base URL keeps its `/v1`
+because Kilo speaks OpenAI Chat Completions (`POST /v1/chat/completions`) and does not append the
+version segment itself.
+
+Like OpenCode and Crush — and unlike Claude Code and Codex — this path **runs entirely on
+Edgee-supplied credentials**. Edgee appears as an additional provider named "Edgee" that the user
+selects, billed through their Edgee or BYOK credentials. It does not redirect an agent the user
+already authenticated, and no subscription is involved: Kilo's own `kilo auth` login is left
+untouched and unused.
 
 ---
 

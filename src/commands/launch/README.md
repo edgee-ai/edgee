@@ -91,6 +91,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `crush` | Crush CLI | `crush` |
 | `pi` | Pi CLI | `pi` |
 | `kimi` | Kimi Code CLI | `kimi` |
+| `kilo` | Kilo Code CLI | `kilo` |
 
 ### Apps & editors (relay today)
 
@@ -255,12 +256,48 @@ is an additive `[providers.edgee]` block with `custom_headers` in the user's `co
 the key would then sit on disk, and a per-launch session id in a shared file races between
 concurrent launches.
 
+## `kilo` — inline config, nothing written anywhere
+
+The Kilo Code CLI is an OpenCode fork: same config schema, same lowercase tool
+names, same 32k `OUTPUT_TOKEN_MAX` clamp. So the obvious implementation is
+`opencode.rs` with `KILO_CONFIG` swapped in for `OPENCODE_CONFIG`.
+
+Kilo has a better lever. `KILO_CONFIG_CONTENT` takes the config as an **inline
+JSON string** and sits near the top of the precedence chain:
+
+```text
+remote well-known → ~/.config/kilo/kilo.json → KILO_CONFIG → ./kilo.json
+  → .kilo/kilo.json → KILO_CONFIG_CONTENT → managed      (deep-merged, later wins)
+```
+
+Two things follow, neither available to the `$TMPDIR` targets:
+
+- **The key never touches disk.** `opencode` and `crush` write the Edgee key into
+  a temp config and unlink it on exit; a crash in between leaves it on disk. Here
+  it exists only in the child's environment.
+- **Kilo does the merge.** `opencode.rs` has to find and parse the user's
+  `opencode.json`/`.jsonc` itself — that is what its JSONC stripper is for — so it
+  can re-emit their settings alongside ours. `KILO_CONFIG_CONTENT` is merged over
+  whatever the user already has, so this target emits one `provider.edgee` key and
+  reads nothing. Sitting above the project layer also means a repo-local
+  `kilo.json` cannot shadow the Edgee provider.
+
+**`KILO_CONFIG_DIR` is a trap**, and an unusually well-disguised one: the
+configuration reference embedded in the binary calls it "appended to the search
+list", which would make it the natural home for delivered skills and agents. The
+binary resolves `config: KILO_CONFIG_DIR ?? Hc.config` — it **replaces** the
+global config root, hiding the user's own commands, agents and skills. Where the
+docs and the binary disagree, the binary wins.
+
+Like `opencode` and `crush`, and unlike `claude` and `codex`, this target runs
+**entirely on Edgee-supplied credentials** — it does not redirect an agent the
+user already authenticated. `kilo auth` is left alone and unused on this path.
+
 ## Planned targets (same rules)
 
 | Target | Product | Likely provider | Likely transport |
 |---|---|---|---|
 | `copilot` | GitHub Copilot CLI | `copilot` | CLI env |
-| `kilo` | Kilo Code CLI | `kilo` | CLI env |
 | `claude-vscode` | Claude Code in VS Code | `claude` | Relay or native config |
 
 ## Checklist for a new target

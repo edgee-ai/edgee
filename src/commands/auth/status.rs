@@ -44,6 +44,7 @@ const PROVIDERS: &[(&str, &str)] = &[
     ("crush", "Crush"),
     ("pi", "Pi"),
     ("kimi", "Kimi Code"),
+    ("kilo", "Kilo Code"),
 ];
 
 pub async fn run(opts: Options) -> Result<()> {

@@ -13,6 +13,7 @@ pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
 pub mod kimi;
+pub mod kilo;
 pub mod opencode;
 pub mod pi;
 pub(crate) mod util;
@@ -41,6 +42,8 @@ enum Command {
     Pi(pi::Options),
     /// Kimi Code CLI
     Kimi(kimi::Options),
+    /// Kilo Code CLI
+    Kilo(kilo::Options),
     /// Cursor IDE
     #[command(next_help_heading = "Apps & editors")]
     Cursor(cursor::Options),
@@ -70,6 +73,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Crush(o) => crush::run(o).await,
         Command::Pi(o) => pi::run(o).await,
         Command::Kimi(o) => kimi::run(o).await,
+        Command::Kilo(o) => kilo::run(o).await,
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o).await,
         Command::ClaudeDesktop(o) => claude_desktop::run(o).await,
@@ -274,6 +278,39 @@ mod tests {
         for flag in ["-p", "--profile"] {
             assert_eq!(
                 claude_args(&["edgee", "launch", "claude", flag, "my prompt"]),
+                [flag, "my prompt"],
+            );
+        }
+    }
+
+    fn kilo_args(argv: &[&str]) -> Vec<String> {
+        let opts = crate::Options::try_parse_from(argv).expect("parses");
+        assert!(
+            opts.profile.is_none(),
+            "edgee consumed a flag meant for the agent: {argv:?}"
+        );
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::Kilo(c) => c.args,
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
+    // `kilo` declares no flags of its own, so every flag Kilo Code owns reaches
+    // it untouched — including the short ones most likely to collide with a
+    // future edgee flag (`-m/--model`, `-c/--continue`, `-s/--session`).
+    #[test]
+    fn kilo_passes_agent_flags_through_verbatim() {
+        assert_eq!(
+            kilo_args(&["edgee", "launch", "kilo", "-m", "edgee/openai/gpt-5"]),
+            ["-m", "edgee/openai/gpt-5"],
+        );
+        assert_eq!(kilo_args(&["edgee", "launch", "kilo", "-c"]), ["-c"]);
+        for flag in ["-p", "--profile"] {
+            assert_eq!(
+                kilo_args(&["edgee", "launch", "kilo", flag, "my prompt"]),
                 [flag, "my prompt"],
             );
         }

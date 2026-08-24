@@ -35,8 +35,9 @@ const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch openc
 const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush --");
 const PI_ALIAS: AliasSpec = AliasSpec::new("pi", "edgee launch pi --");
 const KIMI_ALIAS: AliasSpec = AliasSpec::new("kimi", "edgee launch kimi --");
+const KILO_ALIAS: AliasSpec = AliasSpec::new("kilo", "edgee launch kilo --");
 
-const ALL_ALIASES: [AliasSpec; 7] = [
+const ALL_ALIASES: [AliasSpec; 8] = [
     CLAUDE_ALIAS,
     CODEBUDDY_ALIAS,
     CODEX_ALIAS,
@@ -44,6 +45,7 @@ const ALL_ALIASES: [AliasSpec; 7] = [
     CRUSH_ALIAS,
     PI_ALIAS,
     KIMI_ALIAS,
+    KILO_ALIAS,
 ];
 
 const PATH_EXPORT_POSIX: &str = "case \":$PATH:\" in\n  *\":$HOME/.edgee/bin:\"*) ;;\n  *) export PATH=\"$HOME/.edgee/bin:$PATH\" ;;\nesac\n";
@@ -58,6 +60,7 @@ pub enum Agent {
     Crush,
     Pi,
     Kimi,
+    Kilo,
     /// Cursor IDE desktop wrapper (requires Cursor installed)
     Cursor,
     /// GitHub Copilot in VS Code desktop wrapper (requires VS Code installed)
@@ -80,6 +83,7 @@ impl Agent {
             Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
             Self::Pi => std::slice::from_ref(&PI_ALIAS),
             Self::Kimi => std::slice::from_ref(&KIMI_ALIAS),
+            Self::Kilo => std::slice::from_ref(&KILO_ALIAS),
             Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop => &[],
             Self::All => &ALL_ALIASES,
         }
@@ -105,11 +109,12 @@ impl Agent {
             Self::Crush => "crush",
             Self::Pi => "pi",
             Self::Kimi => "kimi",
+            Self::Kilo => "kilo",
             Self::Cursor => "cursor",
             Self::CopilotVscode => "copilot-vscode",
             Self::ClaudeDesktop => "claude-desktop",
             Self::All => {
-                "claude, codebuddy, codex, opencode, crush, pi, kimi, cursor, copilot-vscode, and claude-desktop"
+                "claude, codebuddy, codex, opencode, crush, pi, kimi, kilo, cursor, copilot-vscode, and claude-desktop"
             }
         }
     }
