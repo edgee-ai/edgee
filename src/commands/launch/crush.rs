@@ -166,6 +166,13 @@ fn build_edgee_provider(
                     model["cost_per_1m_in_cached"] = serde_json::json!(cost.cache_write);
                     model["cost_per_1m_out_cached"] = serde_json::json!(cost.cache_read);
                 }
+                if let Some(efforts) = metadata
+                    .map(|m| m.reasoning_efforts.as_slice())
+                    .filter(|efforts| !efforts.is_empty())
+                {
+                    model["can_reason"] = Value::Bool(true);
+                    model["reasoning_levels"] = serde_json::json!(efforts);
+                }
                 model
             })
             .collect();
@@ -311,7 +318,8 @@ mod tests {
                     util::ModelMetadata {
                         context: Some(*v),
                         cost: None,
-                            app_subscription_only: false,
+                        reasoning_efforts: Vec::new(),
+                        app_subscription_only: false,
                     },
                 )
             })
@@ -327,7 +335,31 @@ mod tests {
             util::ModelMetadata {
                 context: None,
                 cost: Some(cost),
-                    app_subscription_only: false,
+                reasoning_efforts: Vec::new(),
+                app_subscription_only: false,
+            },
+        )]
+        .into_iter()
+        .collect();
+        let provider = build_edgee_provider(
+            "key",
+            "sess",
+            "https://gw.test",
+            &[id.to_string()],
+            &catalog,
+            None,
+        );
+        provider["models"][0].clone()
+    }
+
+    fn model_with_reasoning(id: &str, efforts: &[&str]) -> Value {
+        let catalog: util::ModelCatalog = [(
+            id.to_string(),
+            util::ModelMetadata {
+                context: None,
+                cost: None,
+                reasoning_efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
+                app_subscription_only: false,
             },
         )]
         .into_iter()
@@ -414,6 +446,30 @@ mod tests {
         ] {
             assert!(models[0].get(field).is_none(), "{field} should be absent");
         }
+    }
+
+    #[test]
+    fn declares_reasoning_levels_from_the_catalog() {
+        let model = model_with_reasoning(
+            "anthropic/claude-opus-5",
+            &["none", "low", "medium", "high", "xhigh", "max"],
+        );
+
+        assert_eq!(model["can_reason"], serde_json::json!(true));
+        assert_eq!(
+            model["reasoning_levels"],
+            serde_json::json!(["none", "low", "medium", "high", "xhigh", "max"])
+        );
+        // The catalog does not provide a default, so leave Crush to choose one.
+        assert!(model.get("default_reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn omits_reasoning_fields_without_catalog_efforts() {
+        let models = models_of(&["openai/gpt-4.1"], &[]);
+        assert!(models[0].get("can_reason").is_none());
+        assert!(models[0].get("reasoning_levels").is_none());
+        assert!(models[0].get("default_reasoning_effort").is_none());
     }
 
     #[test]

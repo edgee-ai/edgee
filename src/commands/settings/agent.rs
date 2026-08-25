@@ -758,6 +758,7 @@ mod tests {
             model_id: "m1".to_string(),
             author_id: String::new(),
             display_name: display.to_string(),
+            reasoning_efforts: Vec::new(),
             aliases: aliases.iter().map(|s| s.to_string()).collect(),
             providers: providers
                 .iter()
