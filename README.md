@@ -312,8 +312,21 @@ and stays silent otherwise.
 | Kilo Code (CLI) | `edgee launch kilo` | ✅ Supported |
 | Cursor (app) | `edgee launch cursor` | ✅ Supported |
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
-| Claude Desktop (app) | `edgee launch claude-desktop` | ✅ Supported |
-| ChatGPT desktop app | `edgee launch codex-desktop` | ✅ Supported |
+| Claude Desktop (Claude Code) | `edgee launch claude-desktop` | ✅ Supported |
+| ChatGPT desktop app (Codex tab) | `edgee launch codex-desktop` | ✅ Supported |
+
+**The two desktop chat apps route their coding surface, not their chat surface.**
+Each ships a coding agent that speaks the vendor's public API — which Edgee routes — and
+a chat client that speaks the vendor's consumer web backend, which it does not:
+
+- `edgee launch claude-desktop` routes **Claude Code**. The app's own chat talks to
+  `claude.ai` directly.
+- `edgee launch codex-desktop` routes the **Codex tab**. The ChatGPT tab is the ChatGPT
+  web client in the app's bundled Chromium and never reaches the embedded Codex backend
+  Edgee configures.
+
+In both cases those chat conversations bill your Claude or ChatGPT plan directly and do
+not appear in your Edgee stats.
 
 Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented in
 [`src/commands/launch/README.md`](src/commands/launch/README.md).

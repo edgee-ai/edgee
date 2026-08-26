@@ -1,8 +1,22 @@
-//! `edgee launch codex-desktop` — the ChatGPT desktop app through Edgee.
+//! `edgee launch codex-desktop` — the ChatGPT desktop app's **Codex tab** through Edgee.
 //!
 //! No relay needed: the app's backend is a bundled `codex app-server` reading
 //! `$CODEX_HOME/config.toml`, which honors the same provider settings
 //! [`super::codex`] passes the CLI as `-c` overrides.
+//!
+//! **Scope: the Codex tab only.** The app's ChatGPT tab is the ChatGPT web client
+//! running in the bundled Chromium; it POSTs `chatgpt.com/backend-api/f/conversation`
+//! from Chromium's own network stack and never enters `codex app-server`, so it never
+//! reads `config.toml` and `model_provider` cannot reach it. Those turns bill OpenAI
+//! directly and are invisible to Edgee. Verified by packet capture (2026-08-26): over
+//! 37 minutes spanning a full ChatGPT-tab exchange the app-server sent the gateway
+//! nothing but its 3-minute `GET /v1/models` poll — no `POST /v1/responses`, and no
+//! `sessions/**/rollout-*.jsonl` written, which app-server does for every conversation
+//! it runs. Routing that tab would need a relay MITM'ing `chatgpt.com` (its wire
+//! format is the ChatGPT thread protocol, not the Responses API, and its turns carry
+//! `sentinel/heartbeat` + `ios/attestation_challenge` anti-automation checks), so it is
+//! deliberately out of scope here. [`print_launch_hint`] says so to the user's face —
+//! silence here reads as "the whole app is covered" and gets reported as a bug.
 //!
 //! Lifecycle: patch `config.toml`, spawn the app, supervise it, revert when it quits.
 //! The patch must outlive the launch: the app-server builds a fresh `Config` **per
@@ -451,11 +465,27 @@ fn print_launch_hint(base_url: &str, session_id: &str) {
     );
     println!("  {} {}", style("gateway:").dim(), style(base_url).cyan());
     println!("  {} {}", style("session:").dim(), session_id);
+    println!("  {} {}", style("routes:").dim(), style("the Codex tab").cyan());
     println!(
         "  {}",
         style("Quit any running ChatGPT app first — the config is only picked up by a").dim()
     );
     println!("  {}", style("freshly started instance.").dim());
+    println!();
+    // Without this the user reasonably reads "launching the app through Edgee" as
+    // covering the whole app, and ChatGPT-tab spend silently bypasses the gateway.
+    println!(
+        "  {}",
+        style("The ChatGPT tab is NOT routed: it talks to OpenAI directly, so those").yellow()
+    );
+    println!(
+        "  {}",
+        style("conversations bill your ChatGPT plan and never reach Edgee — they won't").yellow()
+    );
+    println!(
+        "  {}",
+        style("appear in your stats. Only the Codex tab goes through the gateway.").yellow()
+    );
     println!();
     println!(
         "  {}",
