@@ -127,11 +127,13 @@ edgee launch codex-desktop
 > the Edgee settings on a fresh start, and an already-running one keeps talking
 > straight to OpenAI (the command tells you when this happens).
 >
-> The app reads its config once at startup, so Edgee writes its provider into
-> `~/.codex/config.toml`, launches the app, and **reverts the file about ten seconds
-> later** — then exits. The app keeps the settings in memory for the rest of the
-> session, so you can close the terminal, and your `codex` CLI is unaffected. Your
-> `auth.json` is never read or modified.
+> Edgee writes its provider into `~/.codex/config.toml`, launches the app, and
+> **keeps the file patched until you quit the app**, then restores it. The app
+> re-reads that config every time you open a tab, so **leave the terminal open** —
+> closing it (or Ctrl-C) restores the config, and tabs opened after that talk
+> straight to OpenAI. While it runs, a bare `codex` on the CLI also routes through
+> Edgee but is billed to your desktop key; use `edgee launch codex` to meter it as
+> the CLI. Your `auth.json` is never read or modified.
 
 > **Claude Desktop, one-time trust (macOS).** Claude Desktop (Chromium) checks TLS
 > against the macOS **system** keychain, so the first `edgee launch claude-desktop`

@@ -4,10 +4,18 @@
 //! `$CODEX_HOME/config.toml`, which honors the same provider settings
 //! [`super::codex`] passes the CLI as `-c` overrides.
 //!
-//! Lifecycle: patch `config.toml`, spawn the app detached, wait out
-//! [`CONFIG_HANDOFF_GRACE`], revert, exit. The app caches the config at startup, so
-//! the patch need not outlive the handoff — which keeps the `codex` CLI unaffected
-//! and leaves no window where a crash could strand the patch.
+//! Lifecycle: patch `config.toml`, spawn the app, supervise it, revert when it quits.
+//! The patch must outlive the launch: the app-server builds a fresh `Config` **per
+//! conversation**, re-reading `config.toml` from disk every time a tab is opened. An
+//! earlier version reverted after a fixed grace period on the assumption that the
+//! config was cached at startup — only the first auto-opened conversation went
+//! through Edgee, and every later tab silently billed OpenAI directly. Pinned by
+//! `sessions/**/rollout-*.jsonl`, whose `session_meta.model_provider` records which
+//! provider each conversation resolved.
+//!
+//! The cost is that this command now runs for as long as the app does. A stranded
+//! patch (terminal closed, crash) is undone by the leftover-backup recovery at the
+//! top of [`run`] on the next launch.
 //!
 //! Why not something cleaner (all verified against codex 0.147):
 //! `--profile` would need argv we can't set (no `CODEX_PROFILE` env var, and
@@ -99,47 +107,82 @@ pub async fn run(_opts: Options) -> Result<()> {
         }
     };
 
-    let quick_exit = wait_out_config_handoff(&mut child).await;
+    let outcome = supervise_app(&mut child).await;
+    // Runs on every path, so the patch never outlives the app we patched it for.
     restore_config(&config_path, &backup)?;
 
-    // Single-instance lock: if an instance was already running, ours handed off to it
-    // and exited — and that one loaded the unpatched config, so it bypasses Edgee.
-    if quick_exit {
-        eprintln!(
-            "{}",
-            style(
-                "The ChatGPT desktop app was already running, so this launch handed off to \
-                 the existing instance — which is NOT going through Edgee. Quit it \
-                 completely (Cmd-Q), then re-run `edgee launch codex-desktop`."
-            )
-            .yellow()
-        );
-        std::process::exit(1);
+    match outcome {
+        // Single-instance lock: if an instance was already running, ours handed off to
+        // it and exited — and that one loaded the unpatched config, so it bypasses Edgee.
+        AppOutcome::HandedOff => {
+            eprintln!(
+                "{}",
+                style(
+                    "The ChatGPT desktop app was already running, so this launch handed off to \
+                     the existing instance — which is NOT going through Edgee. Quit it \
+                     completely (Cmd-Q), then re-run `edgee launch codex-desktop`."
+                )
+                .yellow()
+            );
+            std::process::exit(1);
+        }
+        // The app is still up, but new tabs will now read the unpatched config. Say so
+        // rather than exiting silently and letting them bill OpenAI directly.
+        AppOutcome::Interrupted => {
+            eprintln!();
+            eprintln!(
+                "{}",
+                style(
+                    "Stopped. Your codex config is restored, so conversations you open from \
+                     now on will NOT go through Edgee — the tabs already open keep their \
+                     settings. Re-run `edgee launch codex-desktop` after quitting the app \
+                     (Cmd-Q) to route new tabs again."
+                )
+                .yellow()
+            );
+            print_stats_url(&creds, &session_id);
+            std::process::exit(130);
+        }
+        AppOutcome::Exited => {
+            print_session_complete(&creds, &session_id);
+            Ok(())
+        }
     }
-
-    print_handoff_complete(&creds, &session_id);
-
-    Ok(())
 }
-
-/// Window for the app's codex to start and read the patched config. Measured need is
-/// ~2s; if a cold start ever exceeded this the app just talks to OpenAI directly.
-const CONFIG_HANDOFF_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Exit this fast means the app never started — it hit the single-instance lock.
 const HANDOFF_EXIT_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
 
-/// Hold the patch for [`CONFIG_HANDOFF_GRACE`]; true if the app handed off instead of
-/// starting. Polls so that case is caught without waiting out the full grace.
-async fn wait_out_config_handoff(child: &mut tokio::process::Child) -> bool {
+/// How the supervised app ended, and therefore what to tell the user.
+enum AppOutcome {
+    /// Hit the single-instance lock; the running app is not going through Edgee.
+    HandedOff,
+    /// The user quit the app. Clean end of session.
+    Exited,
+    /// Ctrl-C here, with the app still running.
+    Interrupted,
+}
+
+/// Hold the patch for the app's whole lifetime — it re-reads `config.toml` on every
+/// new conversation, so reverting early would silently unroute later tabs.
+///
+/// The app is spawned into its own process group, so a terminal Ctrl-C reaches only
+/// us; we deliberately leave the app running and just revert, rather than killing an
+/// app the user is working in.
+async fn supervise_app(child: &mut tokio::process::Child) -> AppOutcome {
     let started = std::time::Instant::now();
-    while started.elapsed() < CONFIG_HANDOFF_GRACE {
-        if let Ok(Some(status)) = child.try_wait() {
-            return status.success() && started.elapsed() < HANDOFF_EXIT_WINDOW;
+    tokio::select! {
+        status = child.wait() => {
+            let handed_off = matches!(&status, Ok(s) if s.success())
+                && started.elapsed() < HANDOFF_EXIT_WINDOW;
+            if handed_off {
+                AppOutcome::HandedOff
+            } else {
+                AppOutcome::Exited
+            }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        _ = tokio::signal::ctrl_c() => AppOutcome::Interrupted,
     }
-    false
 }
 
 /// Escape a value for a double-quoted TOML basic string.
@@ -414,19 +457,37 @@ fn print_launch_hint(base_url: &str, session_id: &str) {
     );
     println!("  {}", style("freshly started instance.").dim());
     println!();
+    println!(
+        "  {}",
+        style("Keep this terminal open: the app re-reads its config every time you open a")
+            .yellow()
+    );
+    println!(
+        "  {}",
+        style("tab, so closing this restores the config and unroutes new tabs.").yellow()
+    );
+    println!(
+        "  {}",
+        style("While this runs, a bare `codex` on the CLI also routes through Edgee, billed")
+            .dim()
+    );
+    println!(
+        "  {}",
+        style("to your desktop key — use `edgee launch codex` to meter it as the CLI.").dim()
+    );
+    println!();
 }
 
-/// Printed once the app has taken the config and the user's file is back. The app
-/// keeps running; this command is done.
-fn print_handoff_complete(creds: &crate::config::Credentials, session_id: &str) {
+/// Printed once the user has quit the app and their config is back.
+fn print_session_complete(creds: &crate::config::Credentials, session_id: &str) {
     println!(
         "  {}",
-        style("Your codex config has been restored — the app keeps the settings in memory.").dim()
+        style("The ChatGPT desktop app has quit — your codex config is restored.").dim()
     );
-    println!(
-        "  {}",
-        style("You can close this terminal; the app keeps running.").dim()
-    );
+    print_stats_url(creds, session_id);
+}
+
+fn print_stats_url(creds: &crate::config::Credentials, session_id: &str) {
     println!(
         "  {} {}",
         style("Usage & compression stats:").dim(),
@@ -672,6 +733,50 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    fn spawn_sh(script: &str) -> tokio::process::Child {
+        tokio::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    // An instant clean exit is the single-instance handoff — the app never started.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_instant_clean_exit_is_read_as_a_handoff() {
+        let mut child = spawn_sh("exit 0");
+        assert!(matches!(
+            supervise_app(&mut child).await,
+            AppOutcome::HandedOff
+        ));
+    }
+
+    // A failing exit is a launch failure, not a handoff: the app never took the config.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_instant_failing_exit_is_not_a_handoff() {
+        let mut child = spawn_sh("exit 1");
+        assert!(matches!(supervise_app(&mut child).await, AppOutcome::Exited));
+    }
+
+    // The regression this file exists for: supervision must span the app's whole life,
+    // not a fixed grace period, because the config is re-read on every new conversation.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn supervision_lasts_until_the_app_actually_exits() {
+        let started = std::time::Instant::now();
+        let mut child = spawn_sh("sleep 2");
+        assert!(matches!(supervise_app(&mut child).await, AppOutcome::Exited));
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(1900),
+            "returned before the app exited — the patch would be reverted too early"
+        );
     }
 
     // No config before us → none left behind.
