@@ -100,7 +100,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `claude-desktop` | Claude Desktop | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code) |
-| `codex-desktop` | ChatGPT desktop app | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched detached, and the file is reverted ~10s later. See below. |
+| `codex-desktop` | ChatGPT desktop app | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched, and the file is restored when the app quits. See below. |
 
 ### `codex-desktop` — config patch, not relay
 
@@ -126,13 +126,29 @@ Three constraints are load-bearing, each established empirically:
   removes and atomically replaces the file. And auth cannot come from the
   environment — `CODEX_ACCESS_TOKEN` is an agent-identity slot, so it would force
   API-key billing instead of the user's ChatGPT plan.
-- **The app parses `config.toml` once at startup and caches it.** This is what makes
-  the whole thing cheap: the patch only needs to outlive the handoff.
+- **The app re-reads `config.toml` on every new conversation.** The app-server builds
+  a fresh `Config` per conversation rather than caching one at startup, so the patch
+  has to stay in place for as long as the app runs. This was originally implemented
+  the other way — patch, wait ~10s, revert — and only the first auto-opened
+  conversation went through Edgee while every later tab silently billed OpenAI
+  directly. `~/.codex/sessions/**/rollout-*.jsonl` is the ground truth: each file's
+  `session_meta.model_provider` is `edgee-cli` or `openai`, per conversation. Check it
+  before changing this lifecycle again.
 
-So the lifecycle is patch → spawn **detached** → wait ~10s → revert → exit. The
-command returns while the app keeps running on the cached settings, so the user's
-`codex` CLI is unaffected once it returns, the terminal can be closed, and no crash
-window can strand the patch.
+So the lifecycle is patch → spawn → supervise until the app quits → restore. Three
+consequences fall out of holding the patch that long:
+
+- **The command runs as long as the app does.** The terminal must stay open; the
+  launch hint says so.
+- **Ctrl-C restores and exits without killing the app.** Killing an app the user is
+  working in would be worse than degrading to direct OpenAI, so it warns instead that
+  new tabs are no longer routed.
+- **A bare `codex` CLI run is routed too**, on the desktop key. `edgee launch codex`
+  is unaffected — its `-c` overrides win over the config file.
+
+A stranded patch (terminal closed, crash) is undone by the leftover-backup recovery at
+the top of `run()` on the next launch, so the invasive window is bounded even though it
+is no longer short.
 
 The grace period is a timer, not a signal — we cannot observe codex reading the file.
 It polls so the single-instance handoff is caught early. If a cold start ever exceeded
