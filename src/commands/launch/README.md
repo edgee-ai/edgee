@@ -99,8 +99,44 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 |---|---|---|---|
 | `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
-| `claude-desktop` | Claude Desktop | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code) |
-| `codex-desktop` | ChatGPT desktop app | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched, and the file is restored when the app quits. See below. |
+| `claude-desktop` | Claude Desktop (**Claude Code only**) | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code). Routes `api.anthropic.com/v1/messages`; the app's own chat goes to `claude.ai` and is not covered — see below |
+| `codex-desktop` | ChatGPT desktop app (**Codex tab only**) | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched, and the file is restored when the app quits. See below. |
+
+### Desktop chat apps route the coding surface, not the chat surface
+
+Both vendor desktop apps ship two things: a coding agent that speaks the public API,
+and a chat client that speaks the vendor's *consumer web* backend. Edgee routes the
+first and cannot see the second. This is one pattern, not two bugs, and it is worth
+checking for on any future app target.
+
+| Target | Routed | Not routed | Why |
+|---|---|---|---|
+| `claude-desktop` | Claude Code → `api.anthropic.com/v1/messages` | the app's chat → `claude.ai/api/organizations/{org}/chat_conversations/{uuid}/completion` | `claude.ai` is absent from `INFERENCE_HOSTS`, and the System-keychain CA is name-constrained to `anthropic.com` |
+| `codex-desktop` | Codex tab → `config.toml` `model_provider` | ChatGPT tab → `chatgpt.com/backend-api/f/conversation` | the ChatGPT tab never enters `codex app-server`, so no config surface reaches it |
+
+Both verified by packet capture on 2026-08-26. In each case a full chat exchange
+produced **zero** requests on the routed path.
+
+Neither is a host-list edit away from working:
+
+- **`claude-desktop`** would need the CA widened from `anthropic.com` to cover
+  `claude.ai`. That CA is a *persistent, machine-wide* trust root, deliberately
+  constrained so that a leak could vouch for nothing else. `claude.ai` hosts the user's
+  entire Claude web session. Security decision, not configuration.
+- **`codex-desktop`** would need a relay plus gateway support for the ChatGPT thread
+  protocol, and re-originates a session guarded by `sentinel/heartbeat` and device
+  attestation.
+
+What the two chat surfaces report differs, and it matters for what is even worth
+building. Neither reports token counts — Claude Desktop uses the standard Anthropic SSE
+envelope with `usage` stripped out. But Claude's `message_limit` event carries
+authoritative quota `utilization` per 5-hour and 7-day window on every turn, whereas the
+ChatGPT tab exposes only feature quotas (`deep_research`, `image_gen`). If chat routing
+is ever revisited, Claude Desktop is the stronger candidate.
+
+Keep the surface limit in the launch hints (`print_claude_desktop_hint`,
+`codex_desktop::print_launch_hint`). Without it, "launching the app through Edgee" reads
+as covering the whole app — which is exactly how this was first reported as a bug.
 
 ### `codex-desktop` — config patch, not relay
 
@@ -108,6 +144,39 @@ The ChatGPT desktop app embeds Codex (`ChatGPT.app/Contents/Resources/codex`,
 launched as `app-server` over stdio) and honors `base_url` + `http_headers` from a
 `model_providers` entry — the very settings `launch codex` passes as `-c` overrides.
 So this target needs no proxy, no MITM CA and no system-keychain trust.
+
+#### Scope: the Codex tab, not the whole app
+
+The app's **ChatGPT tab is out of reach of this mechanism** and always will be. It is
+the ChatGPT web client running in the app's bundled Chromium: it POSTs
+`chatgpt.com/backend-api/f/conversation` from Chromium's own network stack and never
+enters `codex app-server`, so it never reads `config.toml` and `model_provider` cannot
+route it. Those turns bill OpenAI directly and are invisible to Edgee.
+
+Established by packet capture (2026-08-26, codex 0.147.0 / Codex Desktop
+0.149.0-alpha.4.3). Over 37 minutes spanning a complete ChatGPT-tab exchange, the
+app-server sent the gateway nothing but its 3-minute `GET /v1/models` poll — no
+`POST /v1/responses` — and wrote no `sessions/**/rollout-*.jsonl`, which it does for
+every conversation it actually runs. A Codex-tab turn in the same session produced both,
+with `model_provider = edgee-cli`.
+
+Do not try to fix this with a wider config patch; there is no config surface to patch.
+Routing it would take a relay MITM'ing `chatgpt.com`, and two things make that a
+product decision rather than a port of `claude-desktop`:
+
+- **Different wire format.** `f/conversation` is the ChatGPT thread protocol
+  (`conversation_id` / `parent_message_id`, server-held state), not the Responses API,
+  so it cannot simply be added to `REROUTE_MAP` in `relay/handler.rs` — the gateway
+  would have to speak it and translate both directions.
+- **Anti-automation.** A single ChatGPT-tab turn carries
+  `POST /backend-api/sentinel/heartbeat` and `GET /backend-api/ios/attestation_challenge`.
+  The Codex tab's `/backend-api/codex/responses` path carries neither. Rewriting or
+  re-originating those requests is what that machinery exists to detect, and the
+  exposure lands on the user's ChatGPT account.
+
+`print_launch_hint` states the limitation at launch. Keep it there: without it, "launching
+the ChatGPT desktop app through Edgee" reads as covering the whole app, which is exactly
+how this got reported as a bug.
 
 Three constraints are load-bearing, each established empirically:
 

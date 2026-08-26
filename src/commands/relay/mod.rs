@@ -1166,10 +1166,20 @@ fn print_banner(
 /// passthrough editors, Claude Desktop is a GUI app we spawn ourselves, so we just
 /// tell the user to quit any pre-existing instance first — the proxy env only
 /// reaches a freshly spawned process.
+///
+/// Also states the surface limit: this target routes Claude Code, not the app's own
+/// chat. See [`INFERENCE_HOSTS`] — chat POSTs `claude.ai/api/organizations/{org}/
+/// chat_conversations/{uuid}/completion`, a host the relay never decrypts, so the
+/// silence would otherwise read as "the whole app is covered".
 fn print_claude_desktop_hint() {
     println!(
         "{}",
         style("Launching Claude Desktop (the Claude app) behind the relay.").bold()
+    );
+    println!(
+        "  {} {}",
+        style("routes:").dim(),
+        style("Claude Code").cyan()
     );
     println!(
         "  {}",
@@ -1178,6 +1188,19 @@ fn print_claude_desktop_hint() {
     println!(
         "  {}",
         style("freshly spawned instance. Its traffic then reroutes through the gateway.").dim()
+    );
+    println!();
+    println!(
+        "  {}",
+        style("The app's own chat is NOT routed: it talks to claude.ai directly, so those").yellow()
+    );
+    println!(
+        "  {}",
+        style("conversations bill your Claude plan and never reach Edgee — they won't").yellow()
+    );
+    println!(
+        "  {}",
+        style("appear in your stats. Only Claude Code goes through the gateway.").yellow()
     );
     println!();
 }
