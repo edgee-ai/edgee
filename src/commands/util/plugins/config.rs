@@ -416,8 +416,9 @@ mod tests {
 
         assert!(args
             .contains(&r#"mcp_servers.house__remote.url="https://example.com/mcp""#.to_string()));
-        assert!(args
-            .contains(&r#"mcp_servers.house__remote.http_headers={"X-Token"="t"}"#.to_string()));
+        assert!(
+            args.contains(&r#"mcp_servers.house__remote.http_headers={"X-Token"="t"}"#.to_string())
+        );
     }
 
     /// An unescaped quote or newline makes Codex treat the whole value as a
@@ -429,12 +430,9 @@ mod tests {
             name: "odd".into(),
             transport: "http".into(),
             url: "https://example.com/mcp".into(),
-            headers: [(
-                "X-Odd".to_string(),
-                "say \"hi\"\nthere\u{1b}".to_string(),
-            )]
-            .into_iter()
-            .collect(),
+            headers: [("X-Odd".to_string(), "say \"hi\"\nthere\u{1b}".to_string())]
+                .into_iter()
+                .collect(),
         }];
 
         let args = codex_mcp_args(&[p]);
