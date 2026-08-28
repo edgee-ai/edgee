@@ -5,6 +5,7 @@ use anyhow::Result;
 use console::style;
 
 use super::util;
+use crate::commands::util::plugins;
 
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
@@ -161,6 +162,19 @@ pub async fn run(opts: Options) -> Result<()> {
             &system_prompt(&session_id, repo_origin.as_deref(), &session_url),
         ));
     }
+
+    // Step 6: deliver the org's plugins. `--plugin-dir` loads a directory for
+    // this session only and carries skills, subagents, hooks and MCP servers at
+    // once, so nothing is ever written into the user's own `~/.claude`.
+    //
+    // Best-effort by construction: a failed fetch reuses whatever was
+    // materialized last time, and a total failure delivers nothing. Neither
+    // stops Claude from starting.
+    let plugins = plugins::sync_for_target(&creds, plugins::Target::Claude).await;
+    for dir in &plugins.plugin_dirs {
+        cmd.arg("--plugin-dir").arg(dir);
+    }
+    plugins::report_launch(&plugins);
 
     cmd.args(&opts.args);
 

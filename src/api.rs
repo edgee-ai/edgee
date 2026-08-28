@@ -366,12 +366,174 @@ pub struct KeySettings {
     pub reroutes: Option<Vec<ModelRoute>>,
 }
 
+/// A skill: markdown instructions the assistant loads when the task matches.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct PluginSkill {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Folded into the rendered description — SKILL.md frontmatter has no field
+    /// for it (verified against installed plugins under `~/.claude/plugins`).
+    #[serde(default)]
+    pub when_to_use: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+/// A subagent: a named system prompt the assistant can delegate to.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct PluginSubagent {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default, deserialize_with = "de_collection_lenient")]
+    pub allowed_tools: Vec<String>,
+}
+
+/// A hook: a shell command bound to an assistant lifecycle event.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct PluginHook {
+    #[serde(default)]
+    pub name: String,
+    /// Claude Code's event set (`PreToolUse`, `SessionStart`, …). Kept as a
+    /// String so a new server-side event never breaks a launch.
+    #[serde(default)]
+    pub event: String,
+    /// Tool-name pattern. The server already blanks this on non-tool events.
+    #[serde(default)]
+    pub matcher: String,
+    #[serde(default)]
+    pub command: String,
+    /// Seconds. Zero means the assistant's own default, and is omitted on write.
+    #[serde(default)]
+    pub timeout: u32,
+}
+
+/// A remote MCP server the assistant connects to over HTTP.
+///
+/// There is no stdio counterpart. A stdio server runs as a local child process,
+/// so it presupposes a binary on this machine that the plugin never ships; the
+/// API refuses to store one.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct PluginMcpServer {
+    #[serde(default)]
+    pub name: String,
+    /// Always `http`. Kept so a second transport can appear without a migration.
+    #[serde(default)]
+    pub transport: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default, deserialize_with = "de_collection_lenient")]
+    pub headers: HashMap<String, String>,
+}
+
+/// How many components of each kind a plugin carries.
+///
+/// Sent on every plugin payload, including the metadata view that leaves the
+/// four component vectors empty — so anything that only counts reads this and
+/// never has to know which view it was handed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginComponentCounts {
+    #[serde(default)]
+    pub skill: usize,
+    #[serde(default)]
+    pub subagent: usize,
+    #[serde(default)]
+    pub hook: usize,
+    #[serde(default)]
+    pub mcp: usize,
+}
+
+/// An org plugin (`GET /v1/organizations/{org}/plugins`), already filtered
+/// server-side to what targets the caller.
+///
+/// There is no install state and no per-member opt-in: an assigned plugin lands
+/// on the machine at the next launch. `active` is the whole story.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct Plugin {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub description: String,
+
+    #[serde(default, deserialize_with = "de_collection_lenient")]
+    pub skills: Vec<PluginSkill>,
+    #[serde(default, deserialize_with = "de_collection_lenient")]
+    pub subagents: Vec<PluginSubagent>,
+    #[serde(default, deserialize_with = "de_collection_lenient")]
+    pub hooks: Vec<PluginHook>,
+    #[serde(default, deserialize_with = "de_collection_lenient")]
+    pub mcp_servers: Vec<PluginMcpServer>,
+
+    /// Counts for all four kinds, present even on the metadata view where the
+    /// vectors above arrive empty. Read this rather than `.len()` anywhere the
+    /// payload may not carry the bodies.
+    #[serde(default)]
+    pub component_counts: PluginComponentCounts,
+
+    /// Whether this plugin is in force for this user: the org's assignment covers
+    /// them, so it lands on this machine at the next launch. **The only field
+    /// materialization filters on.**
+    ///
+    /// There is no opt-in — an assigned plugin arrives. Admins receive the whole
+    /// org catalogue, so a false here is how they tell the rows aimed at someone
+    /// else from the ones aimed at them.
+    #[serde(default, deserialize_with = "de_bool_lenient")]
+    pub active: bool,
+    /// Server-set on every write. The change signal for the on-disk cache —
+    /// `version` is author-controlled and can stay put across a content edit.
+    #[serde(default)]
+    pub updated_at: String,
+    /// Bumped by every server-side mutation. This is what the launch-time sync
+    /// compares against the cache to decide whether to re-download the bodies.
+    ///
+    /// Zero means the server did not send one — a plugin stored before the field
+    /// existed. Treat it as "unknown" and always re-fetch, never as a match.
+    #[serde(default)]
+    pub revision: u64,
+}
+
+impl Plugin {
+    /// What the console shows as the plugin's title.
+    pub fn title(&self) -> &str {
+        if self.display_name.is_empty() {
+            &self.name
+        } else {
+            &self.display_name
+        }
+    }
+}
+
 /// Deserializes a nullable/absent bool field as `false` rather than erroring.
 fn de_bool_lenient<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(false))
+}
+
+/// Deserializes a nullable/absent collection as empty rather than erroring.
+///
+/// `#[serde(default)]` alone only covers an *omitted* field; an explicit `null`
+/// still fails. The server sends `[]`/`{}` today, but a launch must never break
+/// on a shape change — same reasoning as `de_bool_lenient`.
+fn de_collection_lenient<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -564,6 +726,48 @@ impl ApiClient {
             .context("Failed to list provider keys")?;
         check_status(&resp, "list provider keys")?;
         resp.json().await.context("Invalid provider keys response")
+    }
+
+    /// Lists the org plugins that target the signed-in user, without the
+    /// component bodies — names, flags, `revision` and `component_counts` only.
+    /// Returns a raw array (no `{ data: [...] }` wrapper), like
+    /// `list_provider_keys`.
+    ///
+    /// Admins receive the whole org catalogue, including plugins that do not
+    /// target them — read `targeted`/`active` rather than assuming membership.
+    ///
+    /// This is the only shape the endpoint has: server-side the components sit in
+    /// a separate row that the list query does not read. Callers must not
+    /// materialize from it — the four component vectors come back empty, and
+    /// writing that to disk would delete every delivered file. Pair it with
+    /// `get_plugin` for the ones whose revision moved.
+    pub async fn list_plugins_metadata(&self, org_id: &str) -> Result<Vec<Plugin>> {
+        let url = format!("{}/v1/organizations/{}/plugins", self.base_url, org_id);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to list plugins")?;
+        check_status(&resp, "list plugins")?;
+        resp.json().await.context("Invalid plugins response")
+    }
+
+    /// One plugin with its component bodies. 404s for a plugin that does not
+    /// target the caller, so a member cannot read another squad's package.
+    pub async fn get_plugin(&self, org_id: &str, plugin_id: &str) -> Result<Plugin> {
+        let url = format!(
+            "{}/v1/organizations/{}/plugins/{}",
+            self.base_url, org_id, plugin_id
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch plugin")?;
+        check_status(&resp, "fetch plugin")?;
+        resp.json().await.context("Invalid plugin response")
     }
 
     /// Whether the org has a paid AI Gateway plan (or active trial), which is what
@@ -965,5 +1169,96 @@ mod tests {
         let with_expiry: ApiKeyItem =
             serde_json::from_str(r#"{"id":"k2","expires_at":"2030-06-15T14:30:00Z"}"#).unwrap();
         assert_eq!(with_expiry.expires_at.year(), 2030);
+    }
+
+    /// One item copied from the Go handler's `PluginItem` output, so the field
+    /// names here are the contract, not a guess.
+    fn plugin_json() -> &'static str {
+        r#"{
+          "object": "plugin",
+          "id": "plg_1",
+          "organization_id": "org_1",
+          "name": "house-conventions",
+          "display_name": "House conventions",
+          "version": "1.2.0",
+          "description": "The conventions this team already follows.",
+          "source": { "kind": "edgee" },
+          "skills": [{
+            "id": "skl_1", "name": "commit-style",
+            "description": "How this team writes commit messages.",
+            "when_to_use": "Writing or amending a commit.",
+            "body": "Use the imperative mood."
+          }],
+          "subagents": [{
+            "id": "sub_1", "name": "reviewer", "description": "Reviews a diff.",
+            "model": "sonnet", "prompt": "Review it.", "allowed_tools": ["Read", "Grep"]
+          }],
+          "hooks": [{
+            "id": "hk_1", "name": "fmt", "event": "PostToolUse",
+            "matcher": "Write|Edit", "command": "./fmt.sh", "timeout": 30
+          }],
+          "mcp_servers": [{
+            "id": "mcp_1", "name": "docs", "transport": "http",
+            "url": "https://example.com/mcp", "headers": { "X-Token": "t" }
+          }],
+          "assignment": { "scope": "org", "squad_ids": [], "member_ids": [] },
+          "editable": true,
+          "active": true,
+          "created_at": "2026-08-01T10:00:00Z",
+          "updated_at": "2026-08-06T12:00:00Z",
+          "created_by": "usr_1"
+        }"#
+    }
+
+    #[test]
+    fn plugin_parses_the_server_shape() {
+        let p: Plugin = serde_json::from_str(plugin_json()).unwrap();
+
+        assert_eq!(p.name, "house-conventions");
+        assert_eq!(p.title(), "House conventions");
+        assert_eq!(p.version, "1.2.0");
+        assert_eq!(p.updated_at, "2026-08-06T12:00:00Z");
+        assert!(p.active);
+
+        assert_eq!(p.skills.len(), 1);
+        assert_eq!(p.skills[0].when_to_use, "Writing or amending a commit.");
+        assert_eq!(p.subagents[0].allowed_tools, vec!["Read", "Grep"]);
+        assert_eq!(p.hooks[0].timeout, 30);
+        assert_eq!(p.mcp_servers[0].transport, "http");
+        assert_eq!(p.mcp_servers[0].url, "https://example.com/mcp");
+    }
+
+    #[test]
+    fn plugin_title_falls_back_to_the_identifier() {
+        let p: Plugin = serde_json::from_str(r#"{"id":"p","name":"house-conventions"}"#).unwrap();
+        assert_eq!(p.title(), "house-conventions");
+    }
+
+    /// Go omits empty collections and can send explicit nulls. Neither may turn
+    /// into a launch-time deserialization failure.
+    #[test]
+    fn plugin_tolerates_missing_and_null_collections() {
+        let bare: Plugin = serde_json::from_str(r#"{"id":"p1"}"#).unwrap();
+        assert!(bare.skills.is_empty() && bare.mcp_servers.is_empty());
+        assert!(!bare.active);
+
+        let nulled: Plugin =
+            serde_json::from_str(r#"{"id":"p2","skills":null,"active":null}"#).unwrap();
+        assert!(nulled.skills.is_empty());
+        assert!(!nulled.active);
+    }
+
+    /// Fields the server no longer sends, and ones it may grow later, must not
+    /// turn into a launch-time failure — this used to carry `mode`, `targeted`
+    /// and `installed_by`.
+    #[test]
+    fn plugin_ignores_fields_it_does_not_know() {
+        let p: Plugin = serde_json::from_str(
+            r#"{"id":"p","mode":"optional","targeted":true,"installed_by":["u1"],"active":true}"#,
+        )
+        .unwrap();
+
+        assert_eq!(p.id, "p");
+        assert!(p.active);
     }
 }
