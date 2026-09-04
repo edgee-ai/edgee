@@ -356,6 +356,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let mut cmd = std::process::Command::new(util::resolve_binary("pi"));
     cmd.env(API_KEY_ENV, api_key);
     cmd.env(SESSION_ID_ENV, &session_id);
+    cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {

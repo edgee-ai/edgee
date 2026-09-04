@@ -241,6 +241,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let mut cmd = std::process::Command::new(util::resolve_binary("kilo"));
     cmd.env("KILO_CONFIG_CONTENT", &config_content);
     cmd.env("EDGEE_SESSION_ID", &session_id);
+    cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {

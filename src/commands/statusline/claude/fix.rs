@@ -335,6 +335,7 @@ mod tests {
             // with an unreachable API so the network probe fails fast and the
             // renderer falls back to the bare marker.
             std::env::set_var("EDGEE_SESSION_ID", "test-session");
+            std::env::set_var("EDGEE_ORG_SLUG", "test-org");
             std::env::set_var("EDGEE_CONSOLE_API_URL", "http://127.0.0.1:1");
             std::env::remove_var("EDGEE_HAS_EXISTING_STATUSLINE");
             std::env::remove_var("EDGEE_STATUSLINE_TIMEOUT_MS");
@@ -381,6 +382,7 @@ mod tests {
             std::env::remove_var("COLUMNS");
             std::env::remove_var("EDGEE_STATUSLINE_SEPARATOR");
             std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::remove_var("EDGEE_ORG_SLUG");
             std::env::remove_var("EDGEE_CONSOLE_API_URL");
         }
     }
