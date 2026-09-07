@@ -393,8 +393,8 @@ TLS termination is decided **per host, at CONNECT time**, before any bytes are d
 api.anthropic.com    api.openai.com    chatgpt.com    cursor.sh
 ```
 
-Two more, `githubcopilot.com` and `api.github.com`, are decrypted **only under the Copilot-in-VS-Code
-relay**. Every other host is **blind-tunnelled**: the bytes pass through opaquely and the app
+`githubcopilot.com` is decrypted **only under the Copilot-in-VS-Code relay**. `api.github.com` remains
+**blind-tunnelled** so Electron can validate GitHub's real certificate during authentication. Every other host is **blind-tunnelled**: the bytes pass through opaquely and the app
 validates the real certificate. That covers telemetry, updates, auth, extension marketplaces and the
 user's own MCP servers. This is a deliberate, tested boundary, not a best effort.
 
@@ -404,13 +404,18 @@ forwarded untouched.
 
 ### The certificate question
 
-The relay generates a local CA, stored `0600` in the user's Edgee config directory. For Cursor and
-VS Code that CA is handed to the child process alone, through `NODE_EXTRA_CA_CERTS`. **Nothing is
-installed in any system trust store**, and the trust disappears when the process exits.
+The relay generates local CAs, stored `0600` in the user's Edgee config directory. For Cursor, the
+CA is handed to the child process alone through `NODE_EXTRA_CA_CERTS`; nothing is installed in the
+system trust store. Copilot-in-VS-Code and Claude Desktop use dedicated, name-constrained CAs that
+are explicitly installed in the macOS **System** keychain because their Electron network stacks do
+not trust `NODE_EXTRA_CA_CERTS` for all requests.
 
-Claude Desktop is the exception, and the one place Edgee touches the OS. Its Chromium net stack
-consults only the macOS **System** keychain, so `edgee launch claude-desktop` asks for `sudo`
-**once** to trust a CA. Four mitigations, all in code:
+Claude Desktop and Copilot-in-VS-Code are the exceptions: both touch the OS trust store. Claude
+Desktop's Chromium net stack consults only the macOS **System** keychain, so
+`edgee launch claude-desktop` asks for `sudo` **once** to trust a CA. The Copilot-VS-Code relay uses
+the same explicit trust lifecycle,
+because VS Code's Electron network stack also checks the macOS system keychain. Four mitigations,
+all in code:
 
 - It is a **separate, dedicated CA** (`Edgee Claude Desktop CA`), never the shared relay CA.
 - It carries an **X.509 name constraint permitting only `anthropic.com`** (RFC 5280), with all IPv4
@@ -420,10 +425,12 @@ consults only the macOS **System** keychain, so `edgee launch claude-desktop` as
   rather than silently shadowed, and stale duplicates are purged.
 - `edgee relay claude-desktop --untrust` removes it, and fails loudly rather than silently if
   removal is denied.
+- The Copilot relay uses a separate `Edgee Copilot CA`, constrained to the known inference domains,
+  and `edgee relay copilot-vscode --untrust` removes it.
 
-It is nonetheless a persistent system trust root installed by a third-party tool. It is defensible,
-scoped, reversible and documented in the README, but expect it to be the single most scrutinised
-item in any security review, and never describe the product as if it did not exist.
+These are nonetheless persistent system trust roots installed by a third-party tool. They are
+scoped, reversible and documented in the README, but expect them to be the single most scrutinised
+item in any security review, and never describe the product as if they did not exist.
 
 ### If the relay breaks: fall back to Transport A
 
