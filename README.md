@@ -145,6 +145,15 @@ edgee launch codex-desktop
 > edgee relay claude-desktop --untrust
 > ```
 
+> **Copilot in VS Code, one-time trust (macOS).** VS Code's Electron network stack
+> checks the Copilot inference host against the macOS **system** keychain. The first
+> `edgee launch copilot-vscode` asks for your admin password once to trust a dedicated,
+> name-constrained Edgee CA. Remove it anytime with:
+>
+> ```bash
+> edgee relay copilot-vscode --untrust
+> ```
+
 Any extra flags after the subcommand are forwarded to the underlying agent:
 
 ```bash

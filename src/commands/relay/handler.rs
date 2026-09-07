@@ -81,14 +81,13 @@ const INFERENCE_HOSTS: &[&str] = &[
 ///   MCP endpoint (`api.githubcopilot.com/mcp/`). Under a non-Copilot relay this
 ///   host only ever carries the GitHub MCP; MITM'ing it makes the MCP fetch fail
 ///   to validate the Edgee CA (`fetch failed`).
-/// - `api.github.com` — Copilot token/model discovery
-///   (`/copilot_internal/v2/token`); also a common MCP/tooling target.
+/// - `api.github.com` — GitHub authentication and Copilot entitlement discovery
+///   are intentionally not intercepted: VS Code's Electron network stack does
+///   not trust `NODE_EXTRA_CA_CERTS`, and those requests do not need rewriting.
 ///
-/// We can't split by path at CONNECT time (only the host is known before TLS
-/// termination), so the split is per relay target instead: Copilot-VS-Code MITMs
-/// them; everyone else blind-tunnels them so their MCP servers reach the real host
-/// with the real certificate.
-const COPILOT_ONLY_HOSTS: &[&str] = &["githubcopilot.com", "api.github.com"];
+/// Copilot-VS-Code MITMs `githubcopilot.com`; everyone else blind-tunnels it so
+/// their MCP servers reach the real host with the real certificate.
+const COPILOT_ONLY_HOSTS: &[&str] = &["githubcopilot.com"];
 
 /// True if `host` matches (exactly or as a dot-suffix subdomain) any entry in
 /// `list`. Case- and trailing-dot-insensitive.
@@ -110,8 +109,8 @@ fn is_copilot_only_host(host: &str) -> bool {
 }
 
 /// Whether a CONNECT tunnel to `host` should be TLS-terminated (MITM'd). Always-on
-/// inference hosts always are; Copilot-only hosts (`githubcopilot.com`,
-/// `api.github.com`) only when `intercept_copilot_hosts` is set (Copilot-VS-Code).
+/// inference hosts always are; Copilot-only hosts (`githubcopilot.com`) only when
+/// `intercept_copilot_hosts` is set (Copilot-VS-Code).
 fn should_intercept_host(host: &str, intercept_copilot_hosts: bool) -> bool {
     is_inference_host(host) || (intercept_copilot_hosts && is_copilot_only_host(host))
 }
@@ -221,8 +220,8 @@ pub struct RelayHandler {
     log_enabled: bool,
     /// Gateway to reroute inference requests to (with auth to inject).
     gateway: Arc<GatewayTarget>,
-    /// Whether to also MITM Copilot-only hosts (`githubcopilot.com`,
-    /// `api.github.com`). Set only for the Copilot-VS-Code relay; other relays
+    /// Whether to also MITM the Copilot-only host (`githubcopilot.com`). Set only
+    /// for the Copilot-VS-Code relay; other relays
     /// blind-tunnel them so their MCP servers reach the real host without hitting
     /// the Edgee CA.
     intercept_copilot_hosts: bool,
@@ -806,7 +805,7 @@ mod tests {
     fn non_inference_hosts_blind_tunneled() {
         for h in [
             "statsig.anthropic.com", // telemetry, still under anthropic.com
-            "github.com",            // only api.github.com is a Copilot-only host
+            "github.com",
             "codeload.github.com",   // git data plane — not a Copilot host
             "sentry.io",
             "example.com",
@@ -820,18 +819,18 @@ mod tests {
 
     #[test]
     fn copilot_hosts_intercepted_only_for_copilot_relay() {
-        // githubcopilot.com (Copilot inference + GitHub's remote MCP) and
-        // api.github.com (token/model discovery) are Copilot-only, NOT always-on.
-        for h in ["api.githubcopilot.com", "api.business.githubcopilot.com", "api.github.com"] {
+        // githubcopilot.com (Copilot inference + GitHub's remote MCP) is
+        // Copilot-only, NOT always-on. GitHub auth stays blind-tunnelled.
+        for h in ["api.githubcopilot.com", "api.business.githubcopilot.com"] {
             assert!(!is_inference_host(h), "{h} must not be always-on");
             assert!(is_copilot_only_host(h), "{h} should be a Copilot-only host");
         }
-        assert!(is_copilot_only_host("API.GitHub.com."));
-        // Copilot-VS-Code (flag true) MITMs them; every other relay blind-tunnels
+        assert!(!is_copilot_only_host("API.GitHub.com."));
+        // Copilot-VS-Code (flag true) MITMs it; every other relay blind-tunnels
         // them so its MCP servers reach the real host with the real certificate.
         assert!(should_intercept_host("api.githubcopilot.com", true));
         assert!(!should_intercept_host("api.githubcopilot.com", false));
-        assert!(should_intercept_host("api.github.com", true));
+        assert!(!should_intercept_host("api.github.com", true));
         assert!(!should_intercept_host("api.github.com", false));
         // Always-on inference hosts are intercepted regardless of the flag.
         assert!(should_intercept_host("api.anthropic.com", false));
@@ -871,4 +870,3 @@ mod tests {
         );
     }
 }
-

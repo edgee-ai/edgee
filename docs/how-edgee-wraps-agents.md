@@ -393,8 +393,8 @@ TLS termination is decided **per host, at CONNECT time**, before any bytes are d
 api.anthropic.com    api.openai.com    chatgpt.com    cursor.sh
 ```
 
-Two more, `githubcopilot.com` and `api.github.com`, are decrypted **only under the Copilot-in-VS-Code
-relay**. Every other host is **blind-tunnelled**: the bytes pass through opaquely and the app
+`githubcopilot.com` is decrypted **only under the Copilot-in-VS-Code relay**. `api.github.com` remains
+**blind-tunnelled** so Electron can validate GitHub's real certificate during authentication. Every other host is **blind-tunnelled**: the bytes pass through opaquely and the app
 validates the real certificate. That covers telemetry, updates, auth, extension marketplaces and the
 user's own MCP servers. This is a deliberate, tested boundary, not a best effort.
 
@@ -410,7 +410,9 @@ installed in any system trust store**, and the trust disappears when the process
 
 Claude Desktop is the exception, and the one place Edgee touches the OS. Its Chromium net stack
 consults only the macOS **System** keychain, so `edgee launch claude-desktop` asks for `sudo`
-**once** to trust a CA. Four mitigations, all in code:
+**once** to trust a CA. The Copilot-VS-Code relay uses the same explicit trust lifecycle,
+because VS Code's Electron network stack also checks the macOS system keychain. Four mitigations,
+all in code:
 
 - It is a **separate, dedicated CA** (`Edgee Claude Desktop CA`), never the shared relay CA.
 - It carries an **X.509 name constraint permitting only `anthropic.com`** (RFC 5280), with all IPv4
@@ -420,6 +422,8 @@ consults only the macOS **System** keychain, so `edgee launch claude-desktop` as
   rather than silently shadowed, and stale duplicates are purged.
 - `edgee relay claude-desktop --untrust` removes it, and fails loudly rather than silently if
   removal is denied.
+- The Copilot relay uses a separate `Edgee Copilot CA`, constrained to the known inference domains,
+  and `edgee relay copilot-vscode --untrust` removes it.
 
 It is nonetheless a persistent system trust root installed by a third-party tool. It is defensible,
 scoped, reversible and documented in the README, but expect it to be the single most scrutinised
