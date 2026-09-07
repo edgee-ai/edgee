@@ -222,6 +222,7 @@ pub async fn run(opts: Options) -> Result<()> {
         None
     };
     let session_id = uuid::Uuid::new_v4().to_string();
+    let org_slug = creds.org_slug.clone().unwrap_or_default();
     let repo = crate::git::detect_origin();
 
     let gateway_url = crate::commands::launch::resolve_gateway_base_url(&creds).await;
@@ -317,7 +318,7 @@ pub async fn run(opts: Options) -> Result<()> {
         // leave the terminal free, so their Ctrl-C really does reach us as SIGINT
         // (TUI agents keep the terminal in raw mode and swallow it themselves).
         let mut interrupt = std::pin::pin!(shutdown_signal());
-        let mut editor = std::pin::pin!(run_agent(&agent, port, &cert_path, &session_id));
+        let mut editor = std::pin::pin!(run_agent(&agent, port, &cert_path, &session_id, &org_slug));
         let exited = tokio::select! {
             res = &mut editor => Some(res?),
             _ = &mut interrupt => None,
@@ -351,7 +352,7 @@ pub async fn run(opts: Options) -> Result<()> {
         // so a persistent trust root can MITM nothing else. Idempotent, so only the
         // first launch prompts (`--untrust` removes it).
         ensure_ca_trusted(&cert_path)?;
-        let mut agent_child = spawn_agent(&agent, port, &cert_path, &session_id)?;
+        let mut agent_child = spawn_agent(&agent, port, &cert_path, &session_id, &org_slug)?;
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
@@ -413,7 +414,7 @@ pub async fn run(opts: Options) -> Result<()> {
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
-        let status = run_agent(&agent, port, &cert_path, &session_id).await?;
+        let status = run_agent(&agent, port, &cert_path, &session_id, &org_slug).await?;
         task.abort();
         if let Some(code) = status.code() {
             std::process::exit(code);
@@ -973,6 +974,7 @@ fn spawn_agent(
     port: u16,
     ca_path: &Path,
     session_id: &str,
+    org_slug: &str,
 ) -> Result<tokio::process::Child> {
     let proxy_url = format!("http://127.0.0.1:{port}");
 
@@ -1049,6 +1051,7 @@ fn spawn_agent(
     cmd.env("NODE_EXTRA_CA_CERTS", ca_path);
     cmd.env("CODEX_CA_CERTIFICATE", ca_path);
     cmd.env("EDGEE_SESSION_ID", session_id);
+    cmd.env("EDGEE_ORG_SLUG", org_slug);
 
     cmd.spawn().with_context(|| {
         // A GUI editor most often fails here because its CLI isn't on PATH.
@@ -1068,8 +1071,11 @@ async fn run_agent(
     port: u16,
     ca_path: &Path,
     session_id: &str,
+    org_slug: &str,
 ) -> Result<std::process::ExitStatus> {
-    Ok(spawn_agent(agent, port, ca_path, session_id)?.wait().await?)
+    Ok(spawn_agent(agent, port, ca_path, session_id, org_slug)?
+        .wait()
+        .await?)
 }
 
 /// Resolve the Claude Desktop executable to launch behind the relay. Claude

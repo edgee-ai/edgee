@@ -110,6 +110,7 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // Set up the environment for Edgee session tracking and console API access.
     cmd.env("EDGEE_SESSION_ID", &session_id);
+    cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
     cmd.env(
         "EDGEE_CONSOLE_API_URL",
         crate::config::console_api_base_url(),

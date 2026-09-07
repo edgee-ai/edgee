@@ -465,6 +465,7 @@ mod tests {
         let _lock = env_lock();
         unsafe {
             std::env::set_var("EDGEE_SESSION_ID", "test-session");
+            std::env::set_var("EDGEE_ORG_SLUG", "test-org");
             std::env::set_var("EDGEE_CONSOLE_API_URL", "http://127.0.0.1:1");
         }
         let line = run_merge("exit 1".to_string(), Vec::new()).await;
@@ -472,6 +473,7 @@ mod tests {
         assert!(!line.contains(" │ "));
         unsafe {
             std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::remove_var("EDGEE_ORG_SLUG");
             std::env::remove_var("EDGEE_CONSOLE_API_URL");
         }
     }
@@ -481,6 +483,7 @@ mod tests {
         let _lock = env_lock();
         unsafe {
             std::env::set_var("EDGEE_SESSION_ID", "test-session");
+            std::env::set_var("EDGEE_ORG_SLUG", "test-org");
             std::env::set_var("EDGEE_CONSOLE_API_URL", "http://127.0.0.1:1");
             std::env::set_var("COLUMNS", "200");
             std::env::set_var("EDGEE_STATUSLINE_SEPARATOR", " | ");
@@ -491,6 +494,7 @@ mod tests {
         assert!(line.contains(" | "));
         unsafe {
             std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::remove_var("EDGEE_ORG_SLUG");
             std::env::remove_var("EDGEE_CONSOLE_API_URL");
         }
     }
@@ -500,6 +504,7 @@ mod tests {
         let _lock = env_lock();
         unsafe {
             std::env::set_var("EDGEE_SESSION_ID", "test-session");
+            std::env::set_var("EDGEE_ORG_SLUG", "test-org");
             std::env::set_var("EDGEE_CONSOLE_API_URL", "http://127.0.0.1:1");
             std::env::set_var("EDGEE_STATUSLINE_TIMEOUT_MS", "100");
         }
@@ -508,6 +513,7 @@ mod tests {
         assert!(line.contains("Edgee"));
         unsafe {
             std::env::remove_var("EDGEE_SESSION_ID");
+            std::env::remove_var("EDGEE_ORG_SLUG");
             std::env::remove_var("EDGEE_CONSOLE_API_URL");
             std::env::remove_var("EDGEE_STATUSLINE_TIMEOUT_MS");
         }

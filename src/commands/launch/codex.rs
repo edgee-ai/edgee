@@ -70,6 +70,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
     let mut cmd = std::process::Command::new(util::resolve_binary("codex"));
     cmd.env("EDGEE_SESSION_ID", &session_id);
+    cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
     cmd.args([
         "-c", "model_provider=\"edgee-cli\"",
         "-c", "model_providers.edgee-cli.name=\"EDGEE\"",
