@@ -26,10 +26,8 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 
 /// Canonical relay targets (same public names as `edgee launch`). See
 /// `src/commands/launch/README.md` for naming rules.
-///
-/// Note: bare `copilot` is reserved for the future Copilot CLI launch target
-/// and is intentionally not a relay alias here.
-const TARGETS: &[&str] = &["claude", "claude-desktop", "codex", "copilot-vscode", "cursor"];
+const TARGETS: &[&str] =
+    &["claude", "claude-desktop", "codex", "copilot-cli", "copilot-vscode", "cursor"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
@@ -40,8 +38,10 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
         "claude-desktop" | "claude_desktop" => Some("claude-desktop"),
         "codex" => Some("codex"),
         "cursor" => Some("cursor"),
+        // GitHub Copilot CLI — relayed (not env-injected) so it keeps using the
+        // user's real GitHub OAuth session; see `is_copilot_cli`.
+        "copilot-cli" => Some("copilot-cli"),
         // GitHub Copilot in VS Code — canonical name is `copilot-vscode`.
-        // `copilot` is reserved for the future Copilot CLI (not an alias here).
         "copilot-vscode" | "vscode-copilot" | "vscode" | "code" => Some("copilot-vscode"),
         _ => None,
     }
@@ -50,6 +50,19 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
 /// True for the GitHub Copilot (VS Code) relay target (launches the `code` binary).
 fn is_copilot_vscode(agent: &str) -> bool {
     agent == "copilot-vscode"
+}
+
+/// True for the GitHub Copilot CLI relay target (launches the `copilot` binary
+/// directly, TUI-style — no `--wait` window to wait on).
+fn is_copilot_cli(agent: &str) -> bool {
+    agent == "copilot-cli"
+}
+
+/// True for any Copilot surface (CLI or VS Code) — both need
+/// [`COPILOT_ONLY_HOSTS`] MITM'd and route through the gateway as a passthrough
+/// provider rather than a pipeline one.
+fn is_copilot(agent: &str) -> bool {
+    is_copilot_cli(agent) || is_copilot_vscode(agent)
 }
 
 /// True for the Cursor relay target (launches the `cursor` binary).
@@ -125,20 +138,21 @@ fn macos_cli_path_hint(agent: &str) -> Option<&'static [&'static str]> {
 /// (e.g. `copilot-vscode` → `copilot`).
 fn key_provider(target: &str) -> &str {
     match target {
-        "copilot-vscode" => "copilot",
+        // Copilot CLI and Copilot-in-VS-Code share one provider key/pipeline —
+        // both are passthrough surfaces of the same GitHub Copilot backend.
+        "copilot-cli" | "copilot-vscode" => "copilot",
         // Claude Desktop is a dedicated backend agent with its own key/compression
         // (coding_assistant `claude_desktop`), so it maps to its own provider slot
         // rather than sharing the `claude` (Claude Code) key.
         "claude-desktop" => "claude_desktop",
         // Future: "claude-vscode" => "claude",
         // Future: "codex-desktop" => "codex",
-        // Future: "copilot" (CLI) => "copilot",
         other => other,
     }
 }
 
 setup_command! {
-    /// Launch/relay target (claude|claude-desktop|codex|copilot-vscode|cursor).
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-vscode|cursor).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
@@ -226,9 +240,10 @@ pub async fn run(opts: Options) -> Result<()> {
     let repo = crate::git::detect_origin();
 
     let gateway_url = crate::commands::launch::resolve_gateway_base_url(&creds).await;
-    // GUI editors have no Edgee provider pipeline; the gateway forwards their
-    // rerouted calls to the editor's own backend, so record the original upstream.
-    let passthrough_to_upstream = is_gui_editor(&agent);
+    // GUI editors and the Copilot CLI have no Edgee provider pipeline; the gateway
+    // forwards their rerouted calls to the real backend (the editor's own, or
+    // GitHub's), so record the original upstream.
+    let passthrough_to_upstream = is_gui_editor(&agent) || is_copilot_cli(&agent);
     let debug_log_headers = crate::commands::launch::util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let gateway = build_gateway_target(
         &gateway_url,
@@ -266,15 +281,10 @@ pub async fn run(opts: Options) -> Result<()> {
         None => Sink::stdout(),
     };
 
-    // Only the Copilot-VS-Code relay needs GitHub's control-plane host
+    // Only the Copilot relays (CLI and VS Code) need GitHub's control-plane host
     // (api.github.com) MITM'd for token/model discovery; other relays blind-tunnel
     // it so their MCP servers can reach GitHub with GitHub's real certificate.
-    let handler = RelayHandler::new(
-        sink,
-        Arc::new(gateway.clone()),
-        log_enabled,
-        is_copilot_vscode(&agent),
-    );
+    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled, is_copilot(&agent));
 
     let proxy = Proxy::builder()
         .with_addr(addr)
@@ -966,6 +976,26 @@ fn cursor_settings_with_http1(current: &str) -> Result<Option<String>, ()> {
     Ok(Some(body))
 }
 
+/// Binary + args to spawn for a non-Claude-Desktop `agent`. GUI editors launch
+/// their own binary (VS Code Copilot → `code`, Cursor → `cursor`); `--wait` keeps
+/// this process alive (and the proxy with it) until the editor window closes,
+/// instead of the launcher forking and returning at once. Everything else (like
+/// claude/codex) is a TUI agent: spawn the binary directly, no `--wait`. Copilot
+/// CLI's launch target is `copilot-cli` (paired with `copilot-vscode`, see
+/// README) but its binary is just `copilot` — the one case where the canonical
+/// target name and the binary name diverge.
+fn spawn_bin_name_and_args(agent: &str) -> (&str, &'static [&'static str]) {
+    if is_copilot_vscode(agent) {
+        ("code", &["--wait"])
+    } else if is_cursor(agent) {
+        ("cursor", &["--wait"])
+    } else if is_copilot_cli(agent) {
+        ("copilot", &[])
+    } else {
+        (agent, &[])
+    }
+}
+
 /// Spawn the named agent wired through the proxy and return the live child handle
 /// (the caller awaits it, and kills it on Ctrl-C). The proxy injects Edgee auth on
 /// reroute, so no base-URL / custom-header env is needed here.
@@ -1002,17 +1032,7 @@ fn spawn_agent(
             .stdin(std::process::Stdio::null());
         c
     } else {
-        // GUI editors launch their own binary (VS Code Copilot → `code`, Cursor →
-        // `cursor`). `--wait` keeps this process alive (and the proxy with it) until
-        // the editor window is closed, instead of the launcher forking and returning
-        // at once.
-        let (bin_name, args): (&str, &[&str]) = if is_copilot_vscode(agent) {
-            ("code", &["--wait"])
-        } else if is_cursor(agent) {
-            ("cursor", &["--wait"])
-        } else {
-            (agent, &[])
-        };
+        let (bin_name, args) = spawn_bin_name_and_args(agent);
         let bin = crate::commands::launch::util::resolve_binary(bin_name);
         let mut c = tokio::process::Command::new(bin);
         c.args(args);
@@ -1319,12 +1339,50 @@ mod tests {
         for a in ["copilot-vscode", "vscode-copilot", "vscode", "code"] {
             assert_eq!(canonicalize_target(a), Some("copilot-vscode"), "{a}");
         }
-        // Bare `copilot` is reserved for the future CLI — not a VS Code alias.
+        // The Copilot CLI is its own canonical target, not a VS Code alias, and
+        // bare `copilot` maps to neither.
+        assert_eq!(canonicalize_target("copilot-cli"), Some("copilot-cli"));
         assert_eq!(canonicalize_target("copilot"), None);
         assert_eq!(canonicalize_target("claude"), Some("claude"));
         assert_eq!(canonicalize_target("codex"), Some("codex"));
         assert_eq!(canonicalize_target("cursor"), Some("cursor"));
         assert_eq!(canonicalize_target("unknown"), None);
+    }
+
+    #[test]
+    fn copilot_cli_is_not_copilot_vscode_and_not_a_gui_editor() {
+        assert!(is_copilot_cli("copilot-cli"));
+        assert!(!is_copilot_cli("copilot-vscode"));
+        assert!(!is_copilot_vscode("copilot-cli"));
+        assert!(!is_gui_editor("copilot-cli"));
+        // Both Copilot surfaces need the Copilot-only hosts MITM'd.
+        assert!(is_copilot("copilot-cli"));
+        assert!(is_copilot("copilot-vscode"));
+        assert!(!is_copilot("claude"));
+        assert!(!is_copilot("cursor"));
+    }
+
+    #[test]
+    fn copilot_cli_reroute_uses_copilot_key() {
+        assert_eq!(key_provider("copilot-cli"), "copilot");
+    }
+
+    #[test]
+    fn copilot_cli_spawns_the_copilot_binary_not_its_own_target_name() {
+        // Regression: the launch target is `copilot-cli` (paired with
+        // `copilot-vscode`), but the installed binary is just `copilot` — spawning
+        // "copilot-cli" as a binary name fails with ENOENT.
+        assert_eq!(spawn_bin_name_and_args("copilot-cli"), ("copilot", &[][..]));
+        // Every other TUI agent still spawns its own name verbatim.
+        assert_eq!(spawn_bin_name_and_args("claude"), ("claude", &[][..]));
+        assert_eq!(spawn_bin_name_and_args("codex"), ("codex", &[][..]));
+    }
+
+    #[test]
+    fn copilot_cli_shares_default_port_with_claude() {
+        // Not a dedicated backend agent (unlike claude-desktop) — same passthrough
+        // provider slot and port group as copilot-vscode/claude/proxy-only.
+        assert_eq!(default_port(key_provider("copilot-cli")), 41100);
     }
 
     #[test]
@@ -1393,7 +1451,7 @@ mod tests {
         }
         assert!(!is_copilot_vscode("claude"));
         assert!(!is_copilot_vscode("codex"));
-        assert!(!is_copilot_vscode("copilot"));
+        assert!(!is_copilot_vscode("copilot-cli"));
     }
 
     #[test]

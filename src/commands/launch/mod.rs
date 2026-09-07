@@ -9,6 +9,7 @@ pub mod claude_desktop;
 pub mod codebuddy;
 pub mod codex;
 pub mod codex_desktop;
+pub mod copilot_cli;
 pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
@@ -44,6 +45,9 @@ enum Command {
     Kimi(kimi::Options),
     /// Kilo Code CLI
     Kilo(kilo::Options),
+    /// GitHub Copilot CLI
+    #[command(name = "copilot-cli")]
+    CopilotCli(copilot_cli::Options),
     /// Cursor IDE
     #[command(next_help_heading = "Apps & editors")]
     Cursor(cursor::Options),
@@ -74,6 +78,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Pi(o) => pi::run(o).await,
         Command::Kimi(o) => kimi::run(o).await,
         Command::Kilo(o) => kilo::run(o).await,
+        Command::CopilotCli(o) => copilot_cli::run(o).await,
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o).await,
         Command::ClaudeDesktop(o) => claude_desktop::run(o).await,

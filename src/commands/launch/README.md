@@ -45,6 +45,10 @@ Reserve the bare product name for the CLI even if the CLI ships later. If only
 an IDE/app surface exists today, use a suffixed name (see below) so the bare
 name stays free.
 
+Exception: `copilot-cli` deliberately breaks this rule — see
+[its section](#copilot-cli--relay-not-env-injection-the-byok-lever-costs-the-user-their-plan)
+for why. Bare `copilot` stays unclaimed rather than pointing at it.
+
 ### 2. Suffixed name = another surface of the same product
 
 Pattern: `<product>-<surface>`
@@ -99,6 +103,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 |---|---|---|---|
 | `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
+| `copilot-cli` | GitHub Copilot CLI | `copilot` | Relays the `copilot` binary directly (TUI, no `--wait`) — deliberately not env-injected; see below |
 | `claude-desktop` | Claude Desktop (**Claude Code only**) | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code). Routes `api.anthropic.com/v1/messages`; the app's own chat goes to `claude.ai` and is not covered — see below |
 | `codex-desktop` | ChatGPT desktop app (**Codex tab only**) | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched, and the file is restored when the app quits. See below. |
 
@@ -381,11 +386,55 @@ Like `opencode` and `crush`, and unlike `claude` and `codex`, this target runs
 **entirely on Edgee-supplied credentials** — it does not redirect an agent the
 user already authenticated. `kilo auth` is left alone and unused on this path.
 
+## `copilot-cli` — relay, not env injection: the BYOK lever costs the user their plan
+
+The obvious lever, `COPILOT_PROVIDER_BASE_URL` (+ `COPILOT_PROVIDER_TYPE` /
+`COPILOT_PROVIDER_API_KEY` / `COPILOT_PROVIDER_HEADERS`), is real and works —
+verified end to end against a loopback mock: it POSTs standard `/v1/messages`
+Anthropic-shaped requests carrying whatever headers `COPILOT_PROVIDER_HEADERS`
+sets. But per `copilot help environment`, setting it **"uses this provider
+instead of GitHub Copilot's model routing. GitHub authentication is not
+required."** That's the same trap as `codex-desktop`'s ChatGPT tab, just in CLI
+form: the env-injection path doesn't meter the user's *paid Copilot seat*, it
+replaces it with a bare BYOK shell pointed at Edgee — architecturally identical
+to `kimi`/`pi`, not to `claude`/`codex`.
+
+So this target relays instead, following `copilot-vscode` (they share the
+`copilot` provider key and both MITM [`COPILOT_ONLY_HOSTS`](handler.rs) —
+`githubcopilot.com` + `api.github.com`). That's also why it's named
+`copilot-cli` rather than bare `copilot`, breaking rule 1's "reserve the bare
+name for the primary CLI": its transport and passthrough semantics pair it with
+`copilot-vscode` as another surface of the same product, not with the
+direct-env-injection CLIs (`claude`, `codex`, `kimi`, …). Bare `copilot` stays
+unclaimed.
+
+Two things made relay viable here, verified directly against the installed
+`@github/copilot` 1.0.83 binary (no real GitHub account available, so the
+verification stops at the transport layer — TLS trust and proxying — not the
+full authenticated request/response cycle):
+
+- **Native (non-BYOK) traffic honors `HTTPS_PROXY`.** With a well-formed but
+  invalid fine-grained PAT (`GITHUB_TOKEN=github_pat_…`), the CLI issued
+  `CONNECT api.github.com:443` straight through a logging proxy before failing
+  on the token check — confirming the standard proxy env is read before GitHub
+  auth is attempted, not bypassed by some hardcoded transport.
+- **It honors `NODE_EXTRA_CA_CERTS`.** A BYOK request pointed at a local HTTPS
+  mock signed by a throwaway CA failed TLS verification until
+  `NODE_EXTRA_CA_CERTS` was set to that CA's cert, then succeeded — the same
+  mechanism `claude`, `copilot-vscode`, and `cursor` already rely on for relay
+  MITM trust (see `spawn_agent`), with no system-keychain install needed (unlike
+  `claude-desktop`'s Chromium net stack).
+
+Net effect: `edgee launch copilot-cli` spawns `copilot` directly (TUI-style, no
+`--wait`, same as `claude`/`codex`) with the relay's proxy env and CA, and its
+real Copilot-billed traffic to `githubcopilot.com`/`api.github.com` reroutes
+through the gateway — preserving the user's actual GitHub Copilot subscription,
+which the BYOK lever cannot do.
+
 ## Planned targets (same rules)
 
 | Target | Product | Likely provider | Likely transport |
 |---|---|---|---|
-| `copilot` | GitHub Copilot CLI | `copilot` | CLI env |
 | `claude-vscode` | Claude Code in VS Code | `claude` | Relay or native config |
 
 ## Checklist for a new target
