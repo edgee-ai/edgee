@@ -116,6 +116,9 @@ edgee launch cursor
 # GitHub Copilot in VS Code
 edgee launch copilot-vscode
 
+# GitHub Copilot CLI
+edgee launch copilot-cli
+
 # Claude Desktop (app)
 edgee launch claude-desktop
 
@@ -134,6 +137,13 @@ edgee launch codex-desktop
 > straight to OpenAI. While it runs, a bare `codex` on the CLI also routes through
 > Edgee but is billed to your desktop key; use `edgee launch codex` to meter it as
 > the CLI. Your `auth.json` is never read or modified.
+
+> **GitHub Copilot CLI.** Unlike the other CLI agents, this one relays rather than
+> injects env vars: Copilot CLI's only BYOK lever (`COPILOT_PROVIDER_BASE_URL`)
+> replaces GitHub's own model routing and skips GitHub auth entirely, so it can't
+> meter your actual paid Copilot seat. `edgee launch copilot-cli` instead spawns
+> `copilot` behind the same relay `copilot-vscode` uses, keeping your real GitHub
+> OAuth session and rerouting its billed traffic through the gateway.
 
 > **Claude Desktop, one-time trust (macOS).** Claude Desktop (Chromium) checks TLS
 > against the macOS **system** keychain, so the first `edgee launch claude-desktop`
@@ -312,6 +322,7 @@ and stays silent otherwise.
 | Kilo Code (CLI) | `edgee launch kilo` | ✅ Supported |
 | Cursor (app) | `edgee launch cursor` | ✅ Supported |
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
+| GitHub Copilot CLI | `edgee launch copilot-cli` | ✅ Supported |
 | Claude Desktop (Claude Code) | `edgee launch claude-desktop` | ✅ Supported |
 | ChatGPT desktop app (Codex tab) | `edgee launch codex-desktop` | ✅ Supported |
 
