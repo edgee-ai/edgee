@@ -174,6 +174,11 @@ setup_command! {
     /// first-run onboarding. For GUI front-ends that drive the relay headlessly.
     #[arg(long)]
     pub non_interactive: bool,
+    /// Extra args to forward to a spawned CLI agent. Set programmatically by
+    /// `edgee launch <cli-agent>` (e.g. `copilot-cli`); never parsed from the
+    /// hidden `edgee relay` command line, whose own flags must stay reachable.
+    #[arg(skip)]
+    pub extra_args: Vec<String>,
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -328,7 +333,7 @@ pub async fn run(opts: Options) -> Result<()> {
         // leave the terminal free, so their Ctrl-C really does reach us as SIGINT
         // (TUI agents keep the terminal in raw mode and swallow it themselves).
         let mut interrupt = std::pin::pin!(shutdown_signal());
-        let mut editor = std::pin::pin!(run_agent(&agent, port, &cert_path, &session_id, &org_slug));
+        let mut editor = std::pin::pin!(run_agent(&agent, port, &cert_path, &session_id, &org_slug, &[]));
         let exited = tokio::select! {
             res = &mut editor => Some(res?),
             _ = &mut interrupt => None,
@@ -362,7 +367,7 @@ pub async fn run(opts: Options) -> Result<()> {
         // so a persistent trust root can MITM nothing else. Idempotent, so only the
         // first launch prompts (`--untrust` removes it).
         ensure_ca_trusted(&cert_path)?;
-        let mut agent_child = spawn_agent(&agent, port, &cert_path, &session_id, &org_slug)?;
+        let mut agent_child = spawn_agent(&agent, port, &cert_path, &session_id, &org_slug, &[])?;
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
@@ -424,7 +429,15 @@ pub async fn run(opts: Options) -> Result<()> {
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
-        let status = run_agent(&agent, port, &cert_path, &session_id, &org_slug).await?;
+        let status = run_agent(
+            &agent,
+            port,
+            &cert_path,
+            &session_id,
+            &org_slug,
+            &opts.extra_args,
+        )
+        .await?;
         task.abort();
         if let Some(code) = status.code() {
             std::process::exit(code);
@@ -437,6 +450,13 @@ pub async fn run(opts: Options) -> Result<()> {
 /// Run the relay for `agent` with default options. Entry point for
 /// `edgee launch <agent> --relay`.
 pub async fn run_for_agent(agent: &str) -> Result<()> {
+    run_for_agent_with_args(agent, &[]).await
+}
+
+/// Run the relay for `agent`, forwarding `extra_args` to the spawned agent's
+/// binary. Used by CLI launch targets that relay (currently `copilot-cli`), so
+/// flags the user passes after the target reach the agent unchanged.
+pub async fn run_for_agent_with_args(agent: &str, extra_args: &[String]) -> Result<()> {
     run(Options {
         agent: Some(agent.to_string()),
         no_launch: false,
@@ -444,6 +464,7 @@ pub async fn run_for_agent(agent: &str) -> Result<()> {
         log_output: None,
         untrust: false,
         non_interactive: false,
+        extra_args: extra_args.to_vec(),
     })
     .await
 }
@@ -1005,6 +1026,7 @@ fn spawn_agent(
     ca_path: &Path,
     session_id: &str,
     org_slug: &str,
+    extra_args: &[String],
 ) -> Result<tokio::process::Child> {
     let proxy_url = format!("http://127.0.0.1:{port}");
 
@@ -1036,6 +1058,12 @@ fn spawn_agent(
         let bin = crate::commands::launch::util::resolve_binary(bin_name);
         let mut c = tokio::process::Command::new(bin);
         c.args(args);
+        // TUI agents relayed from `edgee launch` (currently only `copilot-cli`)
+        // forward the user's flags to the spawned binary. GUI editors never have
+        // extra args — their launch targets parse none — so they stay untouched.
+        if !is_gui_editor(agent) {
+            c.args(extra_args);
+        }
         // Cursor's Electron net module ignores HTTPS_PROXY; --proxy-server routes
         // all HTTPS traffic through the relay so BidiAppend / RunSSE are intercepted.
         // NB: Cursor's AI calls don't use Chromium's net stack — they go through a
@@ -1092,8 +1120,9 @@ async fn run_agent(
     ca_path: &Path,
     session_id: &str,
     org_slug: &str,
+    extra_args: &[String],
 ) -> Result<std::process::ExitStatus> {
-    Ok(spawn_agent(agent, port, ca_path, session_id, org_slug)?
+    Ok(spawn_agent(agent, port, ca_path, session_id, org_slug, extra_args)?
         .wait()
         .await?)
 }
