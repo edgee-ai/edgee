@@ -350,6 +350,41 @@ mod tests {
         );
     }
 
+    fn copilot_cli_args(argv: &[&str]) -> Vec<String> {
+        let opts = crate::Options::try_parse_from(argv).expect("parses");
+        assert!(
+            opts.profile.is_none(),
+            "edgee consumed a flag meant for the agent: {argv:?}"
+        );
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::CopilotCli(c) => c.args,
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
+    // `copilot-cli` relays through the local proxy but the flags after the target
+    // still belong to the agent and must reach the `copilot` binary unchanged —
+    // like the other TUI targets, no edgee flag (nor `-p/--profile`) may swallow
+    // one of theirs.
+    #[test]
+    fn copilot_cli_passes_agent_flags_through_verbatim() {
+        assert_eq!(
+            copilot_cli_args(&["edgee", "launch", "copilot-cli", "--yolo"]),
+            ["--yolo"],
+        );
+        assert_eq!(
+            copilot_cli_args(&["edgee", "launch", "copilot-cli", "-p", "my prompt"]),
+            ["-p", "my prompt"],
+        );
+        assert_eq!(
+            copilot_cli_args(&["edgee", "launch", "copilot-cli", "--", "--yolo"]),
+            ["--yolo"],
+        );
+    }
+
     #[test]
     fn edgee_flags_still_work_ahead_of_the_target() {
         let opts = crate::Options::try_parse_from(["edgee", "-p", "dev", "launch", "claude"])
