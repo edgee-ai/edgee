@@ -194,11 +194,9 @@ fn write_provider(path: &std::path::Path, provider: Value) -> Result<()> {
 
 /// Builds the `providers.edgee` block.
 ///
-/// `api` is `anthropic-messages` and `baseUrl` carries no `/v1` suffix, matching
-/// pi's built-in Anthropic provider (`https://api.anthropic.com`) — pi appends
-/// `/v1/messages` itself, exactly as `ANTHROPIC_BASE_URL` does for Claude Code.
-/// The gateway translates that shape for the whole catalog, so non-Anthropic
-/// models route through it too.
+/// `api` is `openai-completions` and `baseUrl` carries the `/v1` suffix expected
+/// by pi's OpenAI-compatible transport. Pi appends `/chat/completions`, yielding
+/// the gateway's `/v1/chat/completions` endpoint for every catalog model.
 fn build_edgee_provider(
     gateway_url: &str,
     models: &[String],
@@ -224,10 +222,11 @@ fn build_edgee_provider(
         );
     }
 
+    let base_url = format!("{}/v1", gateway_url.trim_end_matches('/'));
     let mut provider = serde_json::json!({
         "name": "Edgee",
-        "baseUrl": gateway_url,
-        "api": "anthropic-messages",
+        "baseUrl": base_url,
+        "api": "openai-completions",
         "apiKey": env_ref(API_KEY_ENV),
         "headers": headers,
     });
@@ -262,12 +261,6 @@ fn build_edgee_provider(
                 {
                     entry["reasoning"] = Value::Bool(true);
                     entry["thinkingLevelMap"] = thinking_level_map(efforts);
-                    // This provider always talks to the gateway. Adaptive
-                    // thinking preserves the exact categorical effort here;
-                    // the gateway then translates it for the routed provider.
-                    entry["compat"] = serde_json::json!({
-                        "forceAdaptiveThinking": true,
-                    });
                 }
                 entry
             })
@@ -437,13 +430,20 @@ mod tests {
     }
 
     #[test]
-    fn base_url_carries_no_v1_suffix() {
-        // Pi appends `/v1/messages` itself, matching its built-in Anthropic
-        // provider. A `/v1` here would produce `/v1/v1/messages`.
+    fn uses_openai_chat_completions_endpoint() {
+        // Pi appends `/chat/completions` to an OpenAI-compatible base URL.
         let provider =
             build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
-        assert_eq!(provider["baseUrl"], "https://api.edgee.ai");
-        assert_eq!(provider["api"], "anthropic-messages");
+        assert_eq!(provider["baseUrl"], "https://api.edgee.ai/v1");
+        assert_eq!(provider["api"], "openai-completions");
+
+        let provider = build_edgee_provider(
+            "https://api.edgee.ai/",
+            &[],
+            &util::ModelCatalog::new(),
+            None,
+        );
+        assert_eq!(provider["baseUrl"], "https://api.edgee.ai/v1");
     }
 
     #[test]
@@ -481,7 +481,7 @@ mod tests {
         for effort in ["low", "medium", "high", "xhigh", "max"] {
             assert_eq!(model["thinkingLevelMap"][effort], effort);
         }
-        assert_eq!(model["compat"]["forceAdaptiveThinking"], true);
+        assert!(model.get("compat").is_none());
     }
 
     #[test]
@@ -567,7 +567,7 @@ mod tests {
         // gateway catalog does not linger in the user's picker forever.
         assert_eq!(
             written["providers"]["edgee"]["baseUrl"],
-            "https://gateway.example.com"
+            "https://gateway.example.com/v1"
         );
         assert!(written["providers"]["edgee"].get("models").is_none());
     }

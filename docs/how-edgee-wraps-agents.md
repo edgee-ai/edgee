@@ -316,6 +316,8 @@ whole agent root — `auth.json`, `settings.json`, history — so a private copy
 login. The block therefore goes into the real `models.json`, under a single namespaced `edgee`
 provider key. Because it is **additive** rather than a hijack of an existing key, it needs no
 patch-and-revert dance: nothing else in the file is touched, and the key is simply left in place.
+The provider uses Pi's `openai-completions` transport with a `/v1` base URL, so Pi sends requests to
+the gateway's `/v1/chat/completions` endpoint.
 
 ### Codex Desktop (`edgee launch codex-desktop`)
 
