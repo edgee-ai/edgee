@@ -33,7 +33,7 @@ Every launch target uses exactly one of three transports. Nothing else exists in
 | Transport | What Edgee does | Targets | Vendor-documented? |
 | --- | --- | --- | --- |
 | **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi`, `kilo` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
-| **B. Config-file patch** | Writes a provider block into the app's own config file — additive and persistent for `pi`, temporary and reverted for `codex-desktop` | `pi`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
+| **B. Config-file patch** | Writes a provider block into the app's own config file — additive and persistent for `pi`/`omp`, temporary and reverted for `codex-desktop` | `pi`, `omp`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
 | **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `cursor`, `copilot-vscode`, `claude-desktop` | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
 
 Transport A covers the products that drive most enterprise coding-agent spend. Transport C is the
@@ -301,7 +301,7 @@ untouched and unused.
 
 ---
 
-## Transport B: config-file patch (`pi`, `codex-desktop`)
+## Transport B: config-file patch (`pi`, `omp`, `codex-desktop`)
 
 Two targets write into a config file the user owns, for opposite reasons and with opposite
 lifecycles.
@@ -318,6 +318,16 @@ provider key. Because it is **additive** rather than a hijack of an existing key
 patch-and-revert dance: nothing else in the file is touched, and the key is simply left in place.
 The provider uses Pi's `openai-completions` transport with a `/v1` base URL, so Pi sends requests to
 the gateway's `/v1/chat/completions` endpoint.
+
+### Oh My Pi (`edgee launch omp`)
+
+Implementation: [`src/commands/launch/omp.rs`](../src/commands/launch/omp.rs), backed by Pi's shared
+provider builder in [`src/commands/launch/pi.rs`](../src/commands/launch/pi.rs).
+
+OMP uses Pi's custom-provider schema. Edgee writes the same additive `providers.edgee` block to
+`~/.omp/agent/models.json`, launches `omp` with credential references supplied through environment
+variables, and reuses the `pi` coding-agent key. Existing OMP providers and credentials remain
+untouched.
 
 ### Codex Desktop (`edgee launch codex-desktop`)
 
@@ -482,6 +492,7 @@ gaps rather than bugs.
 | `crush` | ✅ | ✅ | ⏳ | ✅ | config fragments on the redirected document |
 | `kimi` | ⏳ | ❌ | ❌ | ❌ | not yet wired — see below |
 | `pi` | ⏳ | ⏳ | ⏳ | ⏳ | not yet wired |
+| `omp` | ⏳ | ⏳ | ⏳ | ⏳ | not yet wired |
 | `cursor`, `copilot-vscode`, `claude-desktop` | ❌ | ❌ | ❌ | ❌ | relay targets — Edgee never spawns the process, so there is no launch to attach a directory to |
 | `codex-desktop` | ❌ | ❌ | ❌ | ❌ | launched, but reads the real Codex config root that Edgee patches only for the handoff and reverts; it cannot use the symlink mirror because `auth.json` holds a single-use rotating token |
 

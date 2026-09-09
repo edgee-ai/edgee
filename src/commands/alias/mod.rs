@@ -34,16 +34,18 @@ const CODEX_ALIAS: AliasSpec = AliasSpec::new("codex", "edgee launch codex --");
 const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch opencode --");
 const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush --");
 const PI_ALIAS: AliasSpec = AliasSpec::new("pi", "edgee launch pi --");
+const OMP_ALIAS: AliasSpec = AliasSpec::new("omp", "edgee launch omp --");
 const KIMI_ALIAS: AliasSpec = AliasSpec::new("kimi", "edgee launch kimi --");
 const KILO_ALIAS: AliasSpec = AliasSpec::new("kilo", "edgee launch kilo --");
 
-const ALL_ALIASES: [AliasSpec; 8] = [
+const ALL_ALIASES: [AliasSpec; 9] = [
     CLAUDE_ALIAS,
     CODEBUDDY_ALIAS,
     CODEX_ALIAS,
     OPENCODE_ALIAS,
     CRUSH_ALIAS,
     PI_ALIAS,
+    OMP_ALIAS,
     KIMI_ALIAS,
     KILO_ALIAS,
 ];
@@ -59,6 +61,7 @@ pub enum Agent {
     Opencode,
     Crush,
     Pi,
+    Omp,
     Kimi,
     Kilo,
     /// Cursor IDE desktop wrapper (requires Cursor installed)
@@ -82,6 +85,7 @@ impl Agent {
             Self::Opencode => std::slice::from_ref(&OPENCODE_ALIAS),
             Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
             Self::Pi => std::slice::from_ref(&PI_ALIAS),
+            Self::Omp => std::slice::from_ref(&OMP_ALIAS),
             Self::Kimi => std::slice::from_ref(&KIMI_ALIAS),
             Self::Kilo => std::slice::from_ref(&KILO_ALIAS),
             Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop => &[],
@@ -108,13 +112,14 @@ impl Agent {
             Self::Opencode => "opencode",
             Self::Crush => "crush",
             Self::Pi => "pi",
+            Self::Omp => "omp",
             Self::Kimi => "kimi",
             Self::Kilo => "kilo",
             Self::Cursor => "cursor",
             Self::CopilotVscode => "copilot-vscode",
             Self::ClaudeDesktop => "claude-desktop",
             Self::All => {
-                "claude, codebuddy, codex, opencode, crush, pi, kimi, kilo, cursor, copilot-vscode, and claude-desktop"
+                "claude, codebuddy, codex, opencode, crush, pi, omp, kimi, kilo, cursor, copilot-vscode, and claude-desktop"
             }
         }
     }

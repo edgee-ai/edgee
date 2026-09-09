@@ -38,7 +38,7 @@ agent (own key + compression), distinct from `claude` (Claude Code).
 Usually the official CLI of that product:
 
 ```text
-claude | codex | opencode | codebuddy | crush | pi | kimi | kilo | copilot | …
+claude | codex | opencode | codebuddy | crush | pi | omp | kimi | kilo | copilot | …
 ```
 
 Reserve the bare product name for the CLI even if the CLI ships later. If only
@@ -94,6 +94,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `codebuddy` | CodeBuddy CLI | `codebuddy` |
 | `crush` | Crush CLI | `crush` |
 | `pi` | Pi CLI | `pi` |
+| `omp` | Oh My Pi CLI | `pi` |
 | `kimi` | Kimi Code CLI | `kimi` |
 | `kilo` | Kilo Code CLI | `kilo` |
 
@@ -240,7 +241,7 @@ for the Responses passthrough to fire; a case-sensitive `starts_with("codex")` s
 every desktop request down the keyed pipeline, which authenticates from
 `Authorization` — the app's ChatGPT OAuth JWT — and 401'd.
 
-## `pi` — additive provider in the user's own config
+## `pi` and `omp` — additive provider in each agent's own config
 
 `opencode` and `crush` build a merged config in `$TMPDIR` and point the agent at
 it (`OPENCODE_CONFIG`, `CRUSH_GLOBAL_CONFIG`), so the user's files are never
@@ -252,12 +253,17 @@ discovery. Pointing it at a temp dir launches pi with no history, no logins, no
 settings and none of the user's plugins. `--models` is not an alternative: it
 takes model *patterns* for Ctrl+P cycling, not a config path.
 
-So this target writes into the real `~/.pi/agent/models.json`, under a single
+So `pi` writes into `~/.pi/agent/models.json`, while `omp` writes into
+`~/.omp/agent/models.json`. Both use a single
 `providers.edgee` key. Custom providers merge into pi's built-in catalog by
 `provider + id`, so the block is purely **additive** — nothing the user already
 had is overridden. That is what makes it safe to leave in place, and why there
 is no patch-and-revert dance like `codex-desktop`: this adds a provider rather
 than hijacking one the user depends on.
+
+OMP is Pi-compatible and reuses the `pi` coding-agent key. Sessions therefore
+share Pi's backend attribution and settings rather than provisioning another
+key.
 
 Three details are load-bearing:
 

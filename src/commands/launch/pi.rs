@@ -104,7 +104,7 @@ const PI_OUTPUT_TOKEN_MAX: u64 = 64_000;
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
 pub struct Options {
-    /// Extra args passed through to the pi CLI
+    /// Extra args passed through to the agent CLI
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
@@ -136,6 +136,58 @@ fn agent_dir() -> Option<std::path::PathBuf> {
     home_dir().map(|h| h.join(".pi").join("agent"))
 }
 
+fn omp_agent_dir(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".omp").join("agent")
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CompatibleAgent {
+    Pi,
+    Omp,
+}
+
+impl CompatibleAgent {
+    fn binary(self) -> &'static str {
+        match self {
+            Self::Pi => "pi",
+            Self::Omp => "omp",
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Pi => "Pi",
+            Self::Omp => "OMP",
+        }
+    }
+
+    fn launch_command(self) -> &'static str {
+        match self {
+            Self::Pi => "edgee launch pi",
+            Self::Omp => "edgee launch omp",
+        }
+    }
+
+    fn models_path(self) -> Option<std::path::PathBuf> {
+        let dir = match self {
+            Self::Pi => agent_dir()?,
+            Self::Omp => omp_agent_dir(&home_dir()?),
+        };
+        Some(dir.join("models.json"))
+    }
+
+    fn install_error(self) -> &'static str {
+        match self {
+            Self::Pi => {
+                "Pi is not installed. Install it with `npm install -g @mariozechner/pi-coding-agent`"
+            }
+            Self::Omp => {
+                "OMP is not installed. Install it from https://github.com/can1357/oh-my-pi"
+            }
+        }
+    }
+}
+
 /// Reads the user's `models.json`, or an empty document when absent. A file we
 /// cannot parse is *not* overwritten — see [`write_provider`].
 fn read_models_json(path: &std::path::Path) -> Result<Option<Value>> {
@@ -159,14 +211,14 @@ fn read_models_json(path: &std::path::Path) -> Result<Option<Value>> {
 fn write_provider(path: &std::path::Path, provider: Value) -> Result<()> {
     let Some(mut config) = read_models_json(path)? else {
         anyhow::bail!(
-            "{} exists but is not valid JSON.\nFix or remove it, then run `edgee launch pi` again.",
+            "{} exists but is not valid JSON.\nFix or remove it, then launch the agent again.",
             path.display()
         )
     };
 
     if !config.is_object() {
         anyhow::bail!(
-            "{} does not contain a JSON object.\nFix or remove it, then run `edgee launch pi` again.",
+            "{} does not contain a JSON object.\nFix or remove it, then launch the agent again.",
             path.display()
         )
     }
@@ -272,6 +324,10 @@ fn build_edgee_provider(
 }
 
 pub async fn run(opts: Options) -> Result<()> {
+    run_compatible(opts, CompatibleAgent::Pi).await
+}
+
+pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -282,8 +338,8 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 1b: ensure an org is selected (handles partial state after aborted login)
     crate::commands::auth::login::ensure_org_selected().await?;
 
-    // Step 2: ensure we have a live api_key for Pi. Re-provisions if the cached
-    // key was deleted in the console; re-runs onboarding for a fresh key.
+    // Step 2: ensure we have a live Pi api_key. OMP deliberately shares this
+    // key. Re-provisions if the cached key was deleted in the console.
     let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("pi")
         .await?
         .created;
@@ -334,19 +390,23 @@ pub async fn run(opts: Options) -> Result<()> {
         // `/v1/models` from the console API, so a dev stack with an unseeded
         // model table answers 200 with `{"data":[]}` for any key, valid or not.
         anyhow::bail!(
-            "The gateway at {gateway_url} returned no models, and Pi needs an explicit model list.\n\
+            "The gateway at {gateway_url} returned no models, and {} needs an explicit model list.\n\
              Check that the gateway is reachable and that its model catalog is populated \
-             (`curl {gateway_url}/v1/models`), then run `edgee launch pi` again."
+             (`curl {gateway_url}/v1/models`), then run `{}` again.",
+            agent.display_name(),
+            agent.launch_command()
         );
     }
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let provider = build_edgee_provider(&gateway_url, &models, &catalog, debug_log_headers);
 
-    let agent_dir = agent_dir().context("Could not determine your home directory")?;
-    write_provider(&agent_dir.join("models.json"), provider)?;
+    let models_path = agent
+        .models_path()
+        .context("Could not determine your home directory")?;
+    write_provider(&models_path, provider)?;
 
-    // Step 5: launch pi with the values its config refers to by name
-    let mut cmd = std::process::Command::new(util::resolve_binary("pi"));
+    // Step 5: launch the agent with the values its config refers to by name
+    let mut cmd = std::process::Command::new(util::resolve_binary(agent.binary()));
     cmd.env(API_KEY_ENV, api_key);
     cmd.env(SESSION_ID_ENV, &session_id);
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
@@ -354,15 +414,13 @@ pub async fn run(opts: Options) -> Result<()> {
 
     let status = cmd.status().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!(
-                "Pi is not installed. Install it with `npm install -g @mariozechner/pi-coding-agent`"
-            )
+            anyhow::anyhow!(agent.install_error())
         } else {
             anyhow::anyhow!(e)
         }
     })?;
 
-    super::print_session_stats(&creds, &session_id, "Pi").await;
+    super::print_session_stats(&creds, &session_id, agent.display_name()).await;
 
     if let Some(code) = status.code() {
         std::process::exit(code);
@@ -597,5 +655,13 @@ mod tests {
 
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written["providers"]["edgee"]["name"], "Edgee");
+    }
+
+    #[test]
+    fn omp_models_path_uses_omp_agent_dir() {
+        assert_eq!(
+            omp_agent_dir(std::path::Path::new("/home/user")).join("models.json"),
+            std::path::PathBuf::from("/home/user/.omp/agent/models.json")
+        );
     }
 }
