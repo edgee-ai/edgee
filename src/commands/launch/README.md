@@ -241,6 +241,18 @@ for the Responses passthrough to fire; a case-sensitive `starts_with("codex")` s
 every desktop request down the keyed pipeline, which authenticates from
 `Authorization` — the app's ChatGPT OAuth JWT — and 401'd.
 
+## `opencode` — Edgee provider or existing subscription
+
+`edgee launch opencode` adds Edgee as a provider in a temporary merged config.
+OpenCode sends those requests directly to the gateway using the Edgee key.
+
+The hidden `edgee relay opencode` path serves a different use case: it launches
+OpenCode with the user's config unchanged and proxies supported inference traffic
+through Edgee in passthrough mode. Existing provider credentials remain attached
+to the request, including a GitHub Copilot token selected through OpenCode. The
+relay uses the `opencode` Edgee key for agent attribution and also intercepts the
+Copilot inference and token-discovery hosts.
+
 ## `pi` and `omp` — additive provider in each agent's own config
 
 `opencode` and `crush` build a merged config in `$TMPDIR` and point the agent at

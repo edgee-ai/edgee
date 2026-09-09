@@ -27,7 +27,7 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 /// Canonical relay targets (same public names as `edgee launch`). See
 /// `src/commands/launch/README.md` for naming rules.
 const TARGETS: &[&str] =
-    &["claude", "claude-desktop", "codex", "copilot-cli", "copilot-vscode", "cursor"];
+    &["claude", "claude-desktop", "codex", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
@@ -38,6 +38,9 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
         "claude-desktop" | "claude_desktop" => Some("claude-desktop"),
         "codex" => Some("codex"),
         "cursor" => Some("cursor"),
+        // OpenCode — relayed without replacing the provider selected in the
+        // user's config, so subscription-backed credentials remain in use.
+        "opencode" => Some("opencode"),
         // GitHub Copilot CLI — relayed (not env-injected) so it keeps using the
         // user's real GitHub OAuth session; see `is_copilot_cli`.
         "copilot-cli" => Some("copilot-cli"),
@@ -58,11 +61,17 @@ fn is_copilot_cli(agent: &str) -> bool {
     agent == "copilot-cli"
 }
 
-/// True for any Copilot surface (CLI or VS Code) — both need
-/// [`COPILOT_ONLY_HOSTS`] MITM'd and route through the gateway as a passthrough
-/// provider rather than a pipeline one.
-fn is_copilot(agent: &str) -> bool {
-    is_copilot_cli(agent) || is_copilot_vscode(agent)
+/// True for OpenCode running with its existing provider configuration. It is a
+/// generic passthrough target and may use GitHub Copilot, so its relay must also
+/// intercept the Copilot-only hosts.
+fn is_opencode(agent: &str) -> bool {
+    agent == "opencode"
+}
+
+/// Whether this relay target can produce GitHub Copilot traffic. OpenCode is
+/// included because Copilot may be selected in the user's existing config.
+fn intercepts_copilot_hosts(agent: &str) -> bool {
+    is_copilot_cli(agent) || is_copilot_vscode(agent) || is_opencode(agent)
 }
 
 /// True for the Cursor relay target (launches the `cursor` binary).
@@ -81,6 +90,12 @@ fn is_claude_desktop(agent: &str) -> bool {
 /// rather than routing through an Edgee provider pipeline.
 fn is_gui_editor(agent: &str) -> bool {
     is_copilot_vscode(agent) || is_cursor(agent)
+}
+
+/// Whether requests retain the agent's existing provider credentials and must
+/// be forwarded to their original upstream by the gateway.
+fn uses_upstream_credentials(agent: &str) -> bool {
+    is_gui_editor(agent) || is_copilot_cli(agent) || is_opencode(agent)
 }
 
 /// Display name of the GUI editor behind a relay target, for user-facing messages.
@@ -152,7 +167,7 @@ fn key_provider(target: &str) -> &str {
 }
 
 setup_command! {
-    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-vscode|cursor).
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-vscode|cursor|opencode).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
@@ -160,7 +175,8 @@ setup_command! {
     #[arg(long)]
     pub no_launch: bool,
     /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200,
-    /// cursor 41300, claude-desktop 41400) so multiple relays can run side by side.
+    /// cursor 41300, claude-desktop 41400, opencode 41500) so multiple relays can
+    /// run side by side.
     #[arg(long)]
     pub port: Option<u16>,
     /// Write relayed-traffic logs to this file (appended). If unset, logging is off.
@@ -245,10 +261,10 @@ pub async fn run(opts: Options) -> Result<()> {
     let repo = crate::git::detect_origin();
 
     let gateway_url = crate::commands::launch::resolve_gateway_base_url(&creds).await;
-    // GUI editors and the Copilot CLI have no Edgee provider pipeline; the gateway
-    // forwards their rerouted calls to the real backend (the editor's own, or
-    // GitHub's), so record the original upstream.
-    let passthrough_to_upstream = is_gui_editor(&agent) || is_copilot_cli(&agent);
+    // GUI editors, the Copilot CLI, and relayed OpenCode keep using their existing
+    // provider credentials. The gateway forwards their rerouted calls to that real
+    // backend, so record the original upstream.
+    let passthrough_to_upstream = uses_upstream_credentials(&agent);
     let debug_log_headers = crate::commands::launch::util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let gateway = build_gateway_target(
         &gateway_url,
@@ -286,10 +302,15 @@ pub async fn run(opts: Options) -> Result<()> {
         None => Sink::stdout(),
     };
 
-    // Only the Copilot relays (CLI and VS Code) need GitHub's control-plane host
-    // (api.github.com) MITM'd for token/model discovery; other relays blind-tunnel
-    // it so their MCP servers can reach GitHub with GitHub's real certificate.
-    let handler = RelayHandler::new(sink, Arc::new(gateway.clone()), log_enabled, is_copilot(&agent));
+    // Copilot surfaces and OpenCode (which may use Copilot as its provider) need
+    // GitHub's control-plane host MITM'd for token/model discovery. Other relays
+    // blind-tunnel it so their MCP servers see GitHub's real certificate.
+    let handler = RelayHandler::new(
+        sink,
+        Arc::new(gateway.clone()),
+        log_enabled,
+        intercepts_copilot_hosts(&agent),
+    );
 
     let proxy = Proxy::builder()
         .with_addr(addr)
@@ -476,6 +497,7 @@ fn default_port(provider: &str) -> u16 {
         "codex" => 41200,
         "cursor" => 41300,
         "claude_desktop" => 41400,
+        "opencode" => 41500,
         _ => 41100, // claude / copilot / proxy-only
     }
 }
@@ -1375,6 +1397,7 @@ mod tests {
         assert_eq!(canonicalize_target("claude"), Some("claude"));
         assert_eq!(canonicalize_target("codex"), Some("codex"));
         assert_eq!(canonicalize_target("cursor"), Some("cursor"));
+        assert_eq!(canonicalize_target("opencode"), Some("opencode"));
         assert_eq!(canonicalize_target("unknown"), None);
     }
 
@@ -1385,10 +1408,20 @@ mod tests {
         assert!(!is_copilot_vscode("copilot-cli"));
         assert!(!is_gui_editor("copilot-cli"));
         // Both Copilot surfaces need the Copilot-only hosts MITM'd.
-        assert!(is_copilot("copilot-cli"));
-        assert!(is_copilot("copilot-vscode"));
-        assert!(!is_copilot("claude"));
-        assert!(!is_copilot("cursor"));
+        assert!(intercepts_copilot_hosts("copilot-cli"));
+        assert!(intercepts_copilot_hosts("copilot-vscode"));
+        assert!(!intercepts_copilot_hosts("claude"));
+        assert!(!intercepts_copilot_hosts("cursor"));
+        // OpenCode may use Copilot through its own provider configuration.
+        assert!(intercepts_copilot_hosts("opencode"));
+    }
+
+    #[test]
+    fn opencode_relay_uses_its_own_key_and_binary() {
+        assert!(is_opencode("opencode"));
+        assert!(uses_upstream_credentials("opencode"));
+        assert_eq!(key_provider("opencode"), "opencode");
+        assert_eq!(spawn_bin_name_and_args("opencode"), ("opencode", &[][..]));
     }
 
     #[test]
@@ -1545,6 +1578,7 @@ mod tests {
         assert_eq!(default_port("codex"), 41200);
         assert_eq!(default_port("cursor"), 41300);
         assert_eq!(default_port("claude_desktop"), 41400);
+        assert_eq!(default_port("opencode"), 41500);
     }
 
     #[test]
@@ -1593,4 +1627,3 @@ mod tests {
         assert_eq!(cursor_settings_with_http1(jsonc), Err(()));
     }
 }
-
