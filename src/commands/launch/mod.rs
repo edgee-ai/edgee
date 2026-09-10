@@ -16,6 +16,7 @@ pub mod copilot_vscode;
 pub mod kimi;
 pub mod kilo;
 pub mod opencode;
+pub mod omp;
 pub mod pi;
 pub(crate) mod util;
 
@@ -41,6 +42,8 @@ enum Command {
     Crush(crush::Options),
     /// Pi CLI
     Pi(pi::Options),
+    /// Oh My Pi CLI
+    Omp(omp::Options),
     /// Kimi Code CLI
     Kimi(kimi::Options),
     /// Kilo Code CLI
@@ -76,6 +79,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::OpenCode(o) => opencode::run(o).await,
         Command::Crush(o) => crush::run(o).await,
         Command::Pi(o) => pi::run(o).await,
+        Command::Omp(o) => omp::run(o).await,
         Command::Kimi(o) => kimi::run(o).await,
         Command::Kilo(o) => kilo::run(o).await,
         Command::CopilotCli(o) => copilot_cli::run(o).await,
@@ -303,6 +307,17 @@ mod tests {
         }
     }
 
+    fn omp_args(argv: &[&str]) -> Vec<String> {
+        let opts = crate::Options::try_parse_from(argv).expect("parses");
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::Omp(c) => c.args,
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
     // `kilo` declares no flags of its own, so every flag Kilo Code owns reaches
     // it untouched — including the short ones most likely to collide with a
     // future edgee flag (`-m/--model`, `-c/--continue`, `-s/--session`).
@@ -319,6 +334,14 @@ mod tests {
                 [flag, "my prompt"],
             );
         }
+    }
+
+    #[test]
+    fn omp_passes_agent_flags_through_verbatim() {
+        assert_eq!(
+            omp_args(&["edgee", "launch", "omp", "--model", "openai/gpt-5", "-p"]),
+            ["--model", "openai/gpt-5", "-p"]
+        );
     }
 
     // Both at once: edgee's `-p` ahead of the target and the agent's own `-p`
