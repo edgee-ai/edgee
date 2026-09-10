@@ -759,6 +759,7 @@ mod tests {
             author_id: String::new(),
             display_name: display.to_string(),
             reasoning_efforts: Vec::new(),
+            input_modalities: Vec::new(),
             aliases: aliases.iter().map(|s| s.to_string()).collect(),
             providers: providers
                 .iter()

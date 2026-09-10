@@ -340,9 +340,7 @@ mod tests {
                     k.to_string(),
                     util::ModelMetadata {
                         context: Some(*v),
-                        cost: None,
-                        reasoning_efforts: Vec::new(),
-                        app_subscription_only: false,
+                        ..Default::default()
                     },
                 )
             })
@@ -356,10 +354,8 @@ mod tests {
         let catalog: util::ModelCatalog = [(
             id.to_string(),
             util::ModelMetadata {
-                context: None,
                 cost: Some(cost),
-                reasoning_efforts: Vec::new(),
-                app_subscription_only: false,
+                ..Default::default()
             },
         )]
         .into_iter()
@@ -379,10 +375,8 @@ mod tests {
         let catalog: util::ModelCatalog = [(
             id.to_string(),
             util::ModelMetadata {
-                context: None,
-                cost: None,
                 reasoning_efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
-                app_subscription_only: false,
+                ..Default::default()
             },
         )]
         .into_iter()
