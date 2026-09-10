@@ -47,6 +47,11 @@ struct StatsJson {
     recent: Vec<SessionBrief>,
 }
 
+/// Nano-USD (integer, additive-safe) to dollars.
+fn nano_usd_to_dollars(nano: u64) -> f64 {
+    nano as f64 / 1_000_000_000.0
+}
+
 #[derive(Serialize)]
 struct Totals {
     requests: u64,
@@ -54,6 +59,7 @@ struct Totals {
     input_tokens: u64,
     output_tokens: u64,
     cached_input_tokens: u64,
+    cost_usd: f64,
     token_cost_savings: u64,
     uncompressed_tools_tokens: u64,
     compressed_tools_tokens: u64,
@@ -71,6 +77,7 @@ struct SessionBrief {
     input_tokens: u64,
     output_tokens: u64,
     errors: u64,
+    cost_usd: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     compression_pct: Option<u64>,
     logs_url: String,
@@ -93,6 +100,7 @@ fn compute_totals(logs: &[util::SessionLogEntry]) -> Totals {
         input_tokens: logs.iter().map(|e| e.stats.total_input_tokens).sum(),
         output_tokens: logs.iter().map(|e| e.stats.total_output_tokens).sum(),
         cached_input_tokens: logs.iter().map(|e| e.stats.total_cached_input_tokens).sum(),
+        cost_usd: nano_usd_to_dollars(logs.iter().map(|e| e.stats.total_cost).sum()),
         token_cost_savings: logs.iter().map(|e| e.stats.total_token_cost_savings).sum(),
         uncompressed_tools_tokens: uncompressed,
         compressed_tools_tokens: compressed,
@@ -113,6 +121,7 @@ fn build_stats_json(logs: &[util::SessionLogEntry], limit: Option<usize>) -> Sta
             input_tokens: e.stats.total_input_tokens,
             output_tokens: e.stats.total_output_tokens,
             errors: e.stats.total_errors,
+            cost_usd: nano_usd_to_dollars(e.stats.total_cost),
             compression_pct: compression_pct(
                 e.stats.total_uncompressed_tools_tokens,
                 e.stats.total_compressed_tools_tokens,
@@ -149,6 +158,7 @@ fn stats_json_from_summary(
             input_tokens: summary.input_tokens,
             output_tokens: summary.output_tokens,
             cached_input_tokens: summary.cached_input_tokens,
+            cost_usd: nano_usd_to_dollars(summary.total_cost),
             token_cost_savings: summary.token_cost_savings,
             uncompressed_tools_tokens: summary.uncompressed_tools_tokens,
             compressed_tools_tokens: summary.compressed_tools_tokens,
@@ -345,6 +355,7 @@ mod tests {
             "input_tokens",
             "output_tokens",
             "cached_input_tokens",
+            "cost_usd",
             "token_cost_savings",
             "uncompressed_tools_tokens",
             "compressed_tools_tokens",
@@ -361,6 +372,7 @@ mod tests {
             input_tokens: 2,
             output_tokens: 3,
             errors: 0,
+            cost_usd: 0.05,
             compression_pct: Some(10),
             logs_url: "https://x".into(),
         };
@@ -374,6 +386,7 @@ mod tests {
             "input_tokens",
             "output_tokens",
             "errors",
+            "cost_usd",
             "compression_pct",
             "logs_url",
         ] {
@@ -392,6 +405,7 @@ mod tests {
                 "input_tokens": 189000,
                 "cached_input_tokens": 3300000,
                 "output_tokens": 34000,
+                "total_cost": 1250000000,
                 "token_cost_savings": 42,
                 "uncompressed_tools_tokens": 100,
                 "compressed_tools_tokens": 60
@@ -414,6 +428,7 @@ mod tests {
         assert_eq!(v["totals"]["requests"], 241);
         assert_eq!(v["totals"]["errors"], 3);
         assert_eq!(v["totals"]["cached_input_tokens"], 3_300_000u64);
+        assert_eq!(v["totals"]["cost_usd"], 1.25);
         assert_eq!(v["totals"]["compression_pct"], 40); // (100-60)/100
         assert_eq!(v["recent"].as_array().unwrap().len(), 0);
     }
