@@ -73,8 +73,8 @@ const INFERENCE_HOSTS: &[&str] = &[
     "cursor.sh",
 ];
 
-/// Hosts MITM'd **only** by the Copilot relays (CLI and VS Code). They're the sole
-/// reason Copilot works, but every other relay (claude, codex, cursor) has no
+/// Hosts MITM'd **only** by Copilot-capable relays (Copilot CLI, VS Code, and
+/// OpenCode). They're required for Copilot, but other relays have no
 /// business decrypting them — and doing so breaks unrelated traffic to the same
 /// hosts:
 ///
@@ -86,9 +86,9 @@ const INFERENCE_HOSTS: &[&str] = &[
 ///   (`/copilot_internal/v2/token`); also a common MCP/tooling target.
 ///
 /// We can't split by path at CONNECT time (only the host is known before TLS
-/// termination), so the split is per relay target instead: the Copilot relays MITM
-/// them; everyone else blind-tunnels them so their MCP servers reach the real host
-/// with the real certificate.
+/// termination), so the split is per relay target instead: Copilot-capable relays
+/// MITM them; everyone else blind-tunnels them so their MCP servers reach the real
+/// host with the real certificate.
 const COPILOT_ONLY_HOSTS: &[&str] = &["githubcopilot.com", "api.github.com"];
 
 /// True if `host` matches (exactly or as a dot-suffix subdomain) any entry in
@@ -112,8 +112,8 @@ fn is_copilot_only_host(host: &str) -> bool {
 
 /// Whether a CONNECT tunnel to `host` should be TLS-terminated (MITM'd). Always-on
 /// inference hosts always are; Copilot-only hosts (`githubcopilot.com`,
-/// `api.github.com`) only when `intercept_copilot_hosts` is set (Copilot CLI or
-/// VS Code).
+/// `api.github.com`) only when `intercept_copilot_hosts` is set (Copilot CLI,
+/// VS Code, or OpenCode).
 fn should_intercept_host(host: &str, intercept_copilot_hosts: bool) -> bool {
     is_inference_host(host) || (intercept_copilot_hosts && is_copilot_only_host(host))
 }
@@ -224,9 +224,9 @@ pub struct RelayHandler {
     /// Gateway to reroute inference requests to (with auth to inject).
     gateway: Arc<GatewayTarget>,
     /// Whether to also MITM Copilot-only hosts (`githubcopilot.com`,
-    /// `api.github.com`). Set only for the Copilot relays (CLI and VS Code); other
-    /// relays blind-tunnel them so their MCP servers reach the real host without
-    /// hitting the Edgee CA.
+    /// `api.github.com`). Set for Copilot-capable relays (Copilot CLI, VS Code,
+    /// and OpenCode); other relays blind-tunnel them so their MCP servers reach
+    /// the real host without hitting the Edgee CA.
     intercept_copilot_hosts: bool,
     /// Shared monotonic counter allocating one id per logged request.
     /// hudsucker clones the handler per request, so this `Arc` is shared while
@@ -873,4 +873,3 @@ mod tests {
         );
     }
 }
-
