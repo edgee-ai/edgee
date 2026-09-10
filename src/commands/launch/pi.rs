@@ -52,6 +52,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::util;
+use crate::commands::util::plugins;
 
 /// Provider key under `providers` in `models.json`. Everything this command
 /// writes lives under it; nothing else in the file is touched.
@@ -185,6 +186,28 @@ impl CompatibleAgent {
                 "OMP is not installed. Install it from https://github.com/can1357/oh-my-pi"
             }
         }
+    }
+
+    fn plugin_target(self) -> plugins::Target {
+        match self {
+            Self::Pi => plugins::Target::Pi,
+            Self::Omp => plugins::Target::Omp,
+        }
+    }
+}
+
+fn plugin_args(agent: CompatibleAgent, report: &plugins::sync::SyncReport) -> Vec<String> {
+    match agent {
+        CompatibleAgent::Pi => report
+            .skills_root
+            .iter()
+            .flat_map(|path| ["--skill".to_string(), path.to_string_lossy().into_owned()])
+            .collect(),
+        CompatibleAgent::Omp => report
+            .plugin_dirs
+            .iter()
+            .map(|path| format!("--plugin-dir={}", path.to_string_lossy()))
+            .collect(),
     }
 }
 
@@ -406,11 +429,14 @@ pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Res
     write_provider(&models_path, provider)?;
 
     // Step 5: launch the agent with the values its config refers to by name
+    let plugin_report = plugins::sync_for_target(&creds, agent.plugin_target()).await;
     let mut cmd = std::process::Command::new(util::resolve_binary(agent.binary()));
     cmd.env(API_KEY_ENV, api_key);
     cmd.env(SESSION_ID_ENV, &session_id);
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
+    cmd.args(plugin_args(agent, &plugin_report));
     cmd.args(&opts.args);
+    plugins::report_launch(&plugin_report);
 
     let status = cmd.status().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -432,6 +458,30 @@ pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_flags_match_agent_parsers_and_capabilities() {
+        let report = plugins::sync::SyncReport {
+            skills_root: Some(std::path::PathBuf::from("/tmp/edgee/pi/skills")),
+            plugin_dirs: vec![
+                std::path::PathBuf::from("/tmp/edgee/omp/alpha"),
+                std::path::PathBuf::from("/tmp/edgee/omp/beta"),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            plugin_args(CompatibleAgent::Pi, &report),
+            ["--skill", "/tmp/edgee/pi/skills"]
+        );
+        assert_eq!(
+            plugin_args(CompatibleAgent::Omp, &report),
+            [
+                "--plugin-dir=/tmp/edgee/omp/alpha",
+                "--plugin-dir=/tmp/edgee/omp/beta"
+            ]
+        );
+    }
 
     fn catalog_with_efforts(
         id: &str,

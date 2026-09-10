@@ -19,6 +19,8 @@ pub enum Target {
     Opencode,
     Crush,
     Codebuddy,
+    Pi,
+    Omp,
 }
 
 impl Target {
@@ -29,6 +31,8 @@ impl Target {
             Target::Opencode => "opencode",
             Target::Crush => "crush",
             Target::Codebuddy => "codebuddy",
+            Target::Pi => "pi",
+            Target::Omp => "omp",
         }
     }
 
@@ -42,17 +46,19 @@ impl Target {
     /// share a bundle byte for byte; everything else reads a flat skills root.
     pub fn layout(self) -> Layout {
         match self {
-            Target::Claude | Target::Codebuddy => Layout::Bundle,
-            Target::Codex | Target::Opencode | Target::Crush => Layout::Flat,
+            Target::Claude | Target::Codebuddy | Target::Omp => Layout::Bundle,
+            Target::Codex | Target::Opencode | Target::Crush | Target::Pi => Layout::Flat,
         }
     }
 
-    pub const ALL: [Target; 5] = [
+    pub const ALL: [Target; 7] = [
         Target::Claude,
         Target::Codex,
         Target::Opencode,
         Target::Crush,
         Target::Codebuddy,
+        Target::Pi,
+        Target::Omp,
     ];
 }
 
@@ -122,6 +128,10 @@ const PLUGIN_DIRS_ENV: Delivery = Delivery::Delivered {
     mechanism: "CODEBUDDY_PLUGIN_DIRS",
 };
 
+const OMP_PLUGIN_DIR: Delivery = Delivery::Delivered {
+    mechanism: "omp --plugin-dir",
+};
+
 const fn config_key(mechanism: &'static str) -> Delivery {
     Delivery::Delivered { mechanism }
 }
@@ -141,9 +151,11 @@ const UNVERIFIED: Delivery = Delivery::Unsupported {
 /// nothing is written to `~/.claude`).
 ///
 /// CodeBuddy takes the same bundle via `CODEBUDDY_PLUGIN_DIRS`, documented as
-/// the env-var form of `--plugin-dir`. Crush and OpenCode are configured by a
+/// the env-var form of `--plugin-dir`. OMP also consumes that bundle through its
+/// repeatable `--plugin-dir` flag. Crush and OpenCode are configured by a
 /// document instead, and the CLI already clones-and-redirects that document, so
-/// the fragments in `config.rs` ride the same mechanism.
+/// the fragments in `config.rs` ride the same mechanism. Pi accepts skills by
+/// path but has no declarative configuration for the other component kinds.
 ///
 /// Remaining `UNVERIFIED` entries stay undelivered until their mechanism is
 /// confirmed — injecting config an agent silently ignores is worse than
@@ -196,6 +208,30 @@ pub fn delivery(target: Target, kind: Kind) -> Delivery {
         // --plugin-dir" and consumes the same bundle format, so it takes the
         // identical tree Claude gets.
         Target::Codebuddy => PLUGIN_DIRS_ENV,
+
+        // Pi's repeatable --skill flag accepts a file or directory outside its
+        // config root. Its other extensibility lives in executable JavaScript
+        // extensions, not declarative subagent, hook, or MCP configuration, so
+        // Edgee cannot translate those component kinds without changing their
+        // semantics.
+        Target::Pi => match kind {
+            Kind::Skills => config_key("pi --skill"),
+            Kind::Subagents => Delivery::Unsupported {
+                reason: "Pi has no configuration for user-defined subagents",
+            },
+            Kind::Hooks => Delivery::Unsupported {
+                reason:
+                    "Pi hooks require JavaScript extensions; declarative hooks are not supported",
+            },
+            Kind::McpServers => Delivery::Unsupported {
+                reason: "Pi has no built-in MCP configuration; MCP requires an extension",
+            },
+        },
+
+        // OMP accepts Claude-compatible plugin bundles from arbitrary paths.
+        // One repeatable flag loads every component kind for the session and
+        // leaves the user's plugin installation untouched.
+        Target::Omp => OMP_PLUGIN_DIR,
 
         // Crush's own schema (charm.land/crush.json) carries `options.skills_paths`,
         // a top-level `hooks` map and an `mcp` map — all injected into the config
@@ -252,6 +288,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn omp_delivers_every_kind() {
+        for kind in Kind::ALL {
+            assert!(
+                delivery(Target::Omp, kind).is_delivered(),
+                "omp should deliver {}",
+                kind.label()
+            );
+        }
+    }
+
     /// A structural absence should read differently from "we haven't got to it",
     /// because one of them will never change.
     #[test]
@@ -263,6 +310,10 @@ mod tests {
         match delivery(Target::Codex, Kind::Subagents) {
             Delivery::Unsupported { reason } => assert!(reason.contains("subagents")),
             other => panic!("expected Codex subagents to be unsupported, got {other:?}"),
+        }
+        match delivery(Target::Pi, Kind::McpServers) {
+            Delivery::Unsupported { reason } => assert!(reason.contains("requires an extension")),
+            other => panic!("expected Pi MCP servers to be unsupported, got {other:?}"),
         }
     }
 
