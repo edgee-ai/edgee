@@ -281,11 +281,10 @@ Three details are load-bearing:
   returns empty on any failure (an unreachable gateway, e.g. a dev profile
   pointing at a `localhost` port with nothing on it), so launch bails before
   writing rather than leaving a dead provider in the user's config.
-- **`baseUrl` takes no `/v1`, and `api` is `anthropic-messages`.** Pi's built-in
-  Anthropic provider is `https://api.anthropic.com` and pi appends
-  `/v1/messages`, exactly like `ANTHROPIC_BASE_URL` for Claude Code. The gateway
-  translates that shape for the whole catalog, so non-Anthropic models
-  (`zai/…`, `openai/…`) route through it too.
+- **`baseUrl` includes `/v1`, and `api` is `openai-completions`.** Pi appends
+  `/chat/completions`, so requests use the gateway's
+  `/v1/chat/completions` endpoint for every catalog model. The gateway handles
+  translation to the routed provider.
 
 Reasoning-capable models are declared with `reasoning: true` and a model-level
 `thinkingLevelMap` generated from the catalog. Unsupported Pi levels are set to
