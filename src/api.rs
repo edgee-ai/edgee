@@ -435,8 +435,27 @@ pub struct PluginMcpServer {
     pub transport: String,
     #[serde(default)]
     pub url: String,
+    #[serde(default)]
+    pub auth: PluginMcpAuth,
     #[serde(default, deserialize_with = "de_collection_lenient")]
     pub headers: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct PluginMcpAuth {
+    #[serde(default, rename = "type")]
+    pub kind: String,
+}
+
+impl PluginMcpServer {
+    /// Missing auth preserves legacy header behavior. Explicit none and OAuth
+    /// never emit stale headers into assistant configuration.
+    pub fn effective_headers(&self) -> Option<&HashMap<String, String>> {
+        match self.auth.kind.as_str() {
+            "none" | "oauth" => None,
+            _ => (!self.headers.is_empty()).then_some(&self.headers),
+        }
+    }
 }
 
 /// How many components of each kind a plugin carries.
@@ -1212,7 +1231,8 @@ mod tests {
           }],
           "mcp_servers": [{
             "id": "mcp_1", "name": "docs", "transport": "http",
-            "url": "https://example.com/mcp", "headers": { "X-Token": "t" }
+            "url": "https://example.com/mcp", "auth": { "type": "headers" },
+            "headers": { "X-Token": "t" }
           }],
           "assignment": { "scope": "org", "squad_ids": [], "member_ids": [] },
           "editable": true,
@@ -1239,6 +1259,7 @@ mod tests {
         assert_eq!(p.hooks[0].timeout, 30);
         assert_eq!(p.mcp_servers[0].transport, "http");
         assert_eq!(p.mcp_servers[0].url, "https://example.com/mcp");
+        assert_eq!(p.mcp_servers[0].auth.kind, "headers");
     }
 
     #[test]
