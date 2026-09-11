@@ -18,6 +18,7 @@ const CACHE_MAX_AGE_SECS: u64 = 8;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 const PURPLE: &str = "\x1b[38;5;128m";
+const YELLOW: &str = "\x1b[33m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
@@ -35,6 +36,14 @@ struct SessionSummary {
     total_reasoning_output_tokens: u64,
     #[serde(default)]
     total_cost: u64,
+    #[serde(default)]
+    total_requests: u64,
+    #[serde(default)]
+    total_fallback_requests: u64,
+    #[serde(default)]
+    last_request_is_fallback: bool,
+    #[serde(default)]
+    last_request_model: String,
 }
 
 /// Run as the `edgee statusline` subcommand without `--wrap`.
@@ -119,6 +128,10 @@ async fn fetch_or_cache(session_id: &str, org_slug: &str) -> Option<SessionSumma
             "total_output_tokens": stats.total_output_tokens,
             "total_reasoning_output_tokens": stats.total_reasoning_output_tokens,
             "total_cost": stats.total_cost,
+            "total_requests": stats.total_requests,
+            "total_fallback_requests": stats.total_fallback_requests,
+            "last_request_is_fallback": stats.last_request_is_fallback,
+            "last_request_model": stats.last_request_model,
         })) {
             let _ = fs::write(&cache_file, json);
         }
@@ -161,15 +174,31 @@ fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
         return format!("{prefix}{PURPLE}三 Edgee{RESET}");
     };
 
-    format!(
-        "{prefix}{PURPLE}三 Edgee{RESET}  {DIM}in {}  cache-read {}  cache-write {}  out {}  reasoning {}  ${:.4}{RESET}",
+    let mut line = format!(
+        "{prefix}{PURPLE}三 Edgee{RESET}  {DIM}in {}  cache-read {}  cache-write {}  out {}  reasoning {}  ${:.4}  {} reqs{RESET}",
         format_tokens(stats.total_input_tokens),
         format_tokens(stats.total_cached_input_tokens),
         format_tokens(stats.total_cache_creation_input_tokens),
         format_tokens(stats.total_output_tokens),
         format_tokens(stats.total_reasoning_output_tokens),
         stats.total_cost as f64 / 1_000_000_000.0,
-    )
+        stats.total_requests,
+    );
+
+    if stats.last_request_is_fallback {
+        line.push_str(&format!(
+            "  {YELLOW}⚠ fallback: {}{RESET}",
+            stats.last_request_model
+        ));
+        if stats.total_fallback_requests > 1 {
+            line.push_str(&format!(
+                " {DIM}({} this session){RESET}",
+                stats.total_fallback_requests
+            ));
+        }
+    }
+
+    line
 }
 
 fn format_tokens(tokens: u64) -> String {
@@ -207,6 +236,8 @@ mod tests {
             total_output_tokens: 678,
             total_reasoning_output_tokens: 90,
             total_cost: 12_345_678,
+            total_requests: 12,
+            ..Default::default()
         };
         let s = format_line("", Some(&stats));
         assert!(s.contains("in 1,234"));
@@ -215,8 +246,8 @@ mod tests {
         assert!(s.contains("out 678"));
         assert!(s.contains("reasoning 90"));
         assert!(s.contains("$0.0123"));
+        assert!(s.contains("12 reqs"));
         assert!(!s.contains("compression"));
-        assert!(!s.contains("reqs"));
         assert!(!s.contains("fallback"));
     }
 
@@ -229,6 +260,23 @@ mod tests {
         assert!(s.contains("out 0"));
         assert!(s.contains("reasoning 0"));
         assert!(s.contains("$0.0000"));
+        assert!(s.contains("0 reqs"));
+    }
+
+    #[test]
+    fn format_with_fallback_warning() {
+        let stats = SessionSummary {
+            total_requests: 5,
+            total_fallback_requests: 3,
+            last_request_is_fallback: true,
+            last_request_model: "claude-sonnet-5".to_string(),
+            ..Default::default()
+        };
+        let s = format_line("", Some(&stats));
+        assert!(s.contains("5 reqs"));
+        assert!(s.contains("⚠ fallback: claude-sonnet-5"));
+        assert!(s.contains("3 this session"));
+        assert!(!s.contains("compression"));
     }
 
     #[test]
