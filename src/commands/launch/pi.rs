@@ -316,6 +316,16 @@ fn build_edgee_provider(
                 // works without a provider prefix.
                 let mut entry = serde_json::json!({ "id": id, "name": id });
                 let metadata = catalog.get(id);
+                if let Some(input) = metadata.map(|m| {
+                    m.input_modalities
+                        .iter()
+                        .filter(|modality| matches!(modality.as_str(), "text" | "image"))
+                        .collect::<Vec<_>>()
+                }) {
+                    if !input.is_empty() {
+                        entry["input"] = serde_json::json!(input);
+                    }
+                }
                 if let Some(context) = metadata.and_then(|m| m.context) {
                     entry["contextWindow"] = serde_json::json!(context);
                     entry["maxTokens"] = serde_json::json!(PI_OUTPUT_TOKEN_MAX);
@@ -495,6 +505,7 @@ mod tests {
                 context,
                 cost: None,
                 reasoning_efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
+                input_modalities: Vec::new(),
                 app_subscription_only: false,
             },
         );
@@ -503,6 +514,29 @@ mod tests {
 
     fn catalog_with(id: &str, context: Option<u64>) -> util::ModelCatalog {
         catalog_with_efforts(id, context, &[])
+    }
+
+    #[test]
+    fn declares_input_modalities_from_the_catalog() {
+        let models = vec!["anthropic/claude-opus-5".to_string()];
+        let catalog: util::ModelCatalog = [(
+            "anthropic/claude-opus-5".to_string(),
+            util::ModelMetadata {
+                input_modalities: ["text", "image", "audio", "video", "pdf"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                ..Default::default()
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
+        assert_eq!(
+            provider["models"][0]["input"],
+            serde_json::json!(["text", "image"])
+        );
     }
 
     #[test]

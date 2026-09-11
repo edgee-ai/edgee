@@ -11,6 +11,8 @@ pub struct ModelMetadata {
     pub cost: Option<GatewayModelCost>,
     /// Gateway-normalized reasoning effort values accepted by the model.
     pub reasoning_efforts: Vec<String>,
+    /// Input content types accepted by the model.
+    pub input_modalities: Vec<String>,
     /// Served only through a coding-app subscription (Cursor, GitHub Copilot) —
     /// see [`without_app_subscription_models`].
     pub app_subscription_only: bool,
@@ -51,6 +53,7 @@ pub async fn fetch_model_catalog(creds: &crate::config::Credentials) -> ModelCat
                     context: m.context_limit(),
                     cost: m.cost(),
                     reasoning_efforts: m.reasoning_efforts.clone(),
+                    input_modalities: m.input_modalities.clone(),
                     app_subscription_only: m.app_subscription_only(),
                 },
             ))

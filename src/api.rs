@@ -249,6 +249,9 @@ pub struct GatewayModel {
     /// Empty means the catalog exposes no configurable effort knob.
     #[serde(default)]
     pub reasoning_efforts: Vec<String>,
+    /// Input content types accepted by the model.
+    #[serde(default)]
+    pub input_modalities: Vec<String>,
     #[serde(default)]
     pub aliases: Vec<String>,
     /// Provider name → that provider's config for this model.
@@ -1012,6 +1015,13 @@ mod tests {
             model.reasoning_efforts,
             ["none", "low", "medium", "high", "xhigh", "max"]
         );
+    }
+
+    #[test]
+    fn catalog_model_deserializes_input_modalities() {
+        let model =
+            catalog_model(r#"{"model_id":"claude-opus-5","input_modalities":["text","image"]}"#);
+        assert_eq!(model.input_modalities, ["text", "image"]);
     }
 
     #[test]

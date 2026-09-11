@@ -176,6 +176,12 @@ fn build_edgee_provider(
         for id in models {
             let mut entry = serde_json::json!({ "name": id });
             let metadata = catalog.get(id);
+            if let Some(input) = metadata
+                .map(|m| m.input_modalities.as_slice())
+                .filter(|input| !input.is_empty())
+            {
+                entry["modalities"] = serde_json::json!({ "input": input });
+            }
             // Only declare `limit` when the catalog gave us a real context window;
             // a fabricated one is worse than letting OpenCode fall back to 0.
             if let Some(context) = metadata.and_then(|m| m.context) {
@@ -369,9 +375,7 @@ mod tests {
                     k.to_string(),
                     util::ModelMetadata {
                         context: Some(*v),
-                        cost: None,
-                        reasoning_efforts: Vec::new(),
-                        app_subscription_only: false,
+                        ..Default::default()
                     },
                 )
             })
@@ -383,10 +387,8 @@ mod tests {
         let catalog: util::ModelCatalog = [(
             id.to_string(),
             util::ModelMetadata {
-                context: None,
                 cost: Some(cost),
-                reasoning_efforts: Vec::new(),
-                app_subscription_only: false,
+                ..Default::default()
             },
         )]
         .into_iter()
@@ -419,6 +421,32 @@ mod tests {
             &catalog,
             None,
         )
+    }
+
+    #[test]
+    fn declares_input_modalities_from_the_catalog() {
+        let catalog: util::ModelCatalog = [(
+            "anthropic/claude-opus-5".to_string(),
+            util::ModelMetadata {
+                input_modalities: vec!["text".to_string(), "image".to_string()],
+                ..Default::default()
+            },
+        )]
+        .into_iter()
+        .collect();
+        let provider = build_edgee_provider(
+            "key",
+            "sess",
+            "https://gw.test",
+            &["anthropic/claude-opus-5".to_string()],
+            &catalog,
+            None,
+        );
+
+        assert_eq!(
+            provider["models"]["anthropic/claude-opus-5"]["modalities"]["input"],
+            serde_json::json!(["text", "image"])
+        );
     }
 
     #[test]
