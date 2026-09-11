@@ -51,7 +51,11 @@ const ALL_ALIASES: [AliasSpec; 9] = [
 ];
 
 const PATH_EXPORT_POSIX: &str = "case \":$PATH:\" in\n  *\":$HOME/.edgee/bin:\"*) ;;\n  *) export PATH=\"$HOME/.edgee/bin:$PATH\" ;;\nesac\n";
-const PATH_EXPORT_FISH: &str = "fish_add_path -p \"$HOME/.edgee/bin\"\n";
+// `-P` prepends $PATH here, at the block's position; the default $fish_user_paths is folded
+// into $PATH before config.fish runs, so later PATH prepends in it shadow the shims. `-m`
+// moves an already-present entry to the front — without it the call is a no-op once the
+// directory is anywhere on PATH.
+const PATH_EXPORT_FISH: &str = "fish_add_path -m -P \"$HOME/.edgee/bin\"\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum Agent {
@@ -647,7 +651,7 @@ mod tests {
         assert!(!posix.contains("alias "));
 
         let fish = render_path_export_block(ShellSyntax::Fish);
-        assert!(fish.contains("fish_add_path -p \"$HOME/.edgee/bin\""));
+        assert!(fish.contains("fish_add_path -m -P \"$HOME/.edgee/bin\""));
         assert!(!fish.contains("alias "));
     }
 
