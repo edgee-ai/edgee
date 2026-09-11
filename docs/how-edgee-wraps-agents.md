@@ -313,19 +313,20 @@ the full rationale.
 
 Pi resolves models through `<agent dir>/models.json`, and its only directory override moves the
 whole agent root — `auth.json`, `settings.json`, history — so a private copy would strand the user's
-login. The block therefore goes into the real `models.json`, under a single namespaced `edgee`
-provider key. Because it is **additive** rather than a hijack of an existing key, it needs no
-patch-and-revert dance: nothing else in the file is touched, and the key is simply left in place.
-The provider uses Pi's `openai-completions` transport with a `/v1` base URL, so Pi sends requests to
-the gateway's `/v1/chat/completions` endpoint.
+login. The blocks therefore go into the real `models.json`, under the namespaced `edgee` and
+`edgee-anthropic` provider keys. Because they are **additive** rather than a hijack of existing keys,
+they need no patch-and-revert dance: nothing else in the file is touched. Anthropic models use Pi's
+native `anthropic-messages` transport and `/v1/messages`, preserving Pi's prompt-cache behavior.
+All other models use `openai-completions` and `/v1/chat/completions`. The gateway can reroute from
+either ingress protocol.
 
 ### Oh My Pi (`edgee launch omp`)
 
 Implementation: [`src/commands/launch/omp.rs`](../src/commands/launch/omp.rs), backed by Pi's shared
 provider builder in [`src/commands/launch/pi.rs`](../src/commands/launch/pi.rs).
 
-OMP uses Pi's custom-provider schema. Edgee writes the same additive `providers.edgee` block to
-`~/.omp/agent/models.json`, launches `omp` with credential references supplied through environment
+OMP uses Pi's custom-provider schema. Edgee writes the same additive provider blocks to
+`~/.omp/agent/models.yml`, launches `omp` with credential references supplied through environment
 variables, and reuses the `pi` coding-agent key. Existing OMP providers and credentials remain
 untouched.
 

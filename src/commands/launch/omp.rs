@@ -2,8 +2,8 @@
 //!
 //! OMP is a Pi fork with the same custom-provider schema and `$NAME` config
 //! references. It therefore reuses Pi's launcher and Pi coding-agent key, but
-//! writes the additive Edgee provider to OMP's own
-//! `~/.omp/agent/models.json`.
+//! writes the additive Edgee providers to OMP's own
+//! `~/.omp/agent/models.yml`.
 
 use anyhow::Result;
 

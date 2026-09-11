@@ -266,12 +266,13 @@ settings and none of the user's plugins. `--models` is not an alternative: it
 takes model *patterns* for Ctrl+P cycling, not a config path.
 
 So `pi` writes into `~/.pi/agent/models.json`, while `omp` writes into
-`~/.omp/agent/models.json`. Both use a single
-`providers.edgee` key. Custom providers merge into pi's built-in catalog by
-`provider + id`, so the block is purely **additive** — nothing the user already
-had is overridden. That is what makes it safe to leave in place, and why there
-is no patch-and-revert dance like `codex-desktop`: this adds a provider rather
-than hijacking one the user depends on.
+`~/.omp/agent/models.yml`. Both use two managed keys: `providers.edgee` for
+Chat Completions and `providers.edgee-anthropic` for Anthropic Messages. Custom
+providers merge into pi's built-in catalog by `provider + id`, so the block is
+purely **additive** — nothing the user already had is overridden. That is what
+makes it safe to leave in place, and why there is no patch-and-revert dance like
+`codex-desktop`: this adds a provider rather than hijacking one the user depends
+on.
 
 OMP is Pi-compatible and reuses the `pi` coding-agent key. Sessions therefore
 share Pi's backend attribution and settings rather than provisioning another
@@ -299,18 +300,19 @@ Three details are load-bearing:
   returns empty on any failure (an unreachable gateway, e.g. a dev profile
   pointing at a `localhost` port with nothing on it), so launch bails before
   writing rather than leaving a dead provider in the user's config.
-- **`baseUrl` includes `/v1`, and `api` is `openai-completions`.** Pi appends
-  `/chat/completions`, so requests use the gateway's
-  `/v1/chat/completions` endpoint for every catalog model. The gateway handles
-  translation to the routed provider.
+- **The catalog is split by ingress protocol.** Models whose IDs start with
+  `anthropic/` use `api = "anthropic-messages"` with the gateway root as their
+  base URL, so Pi appends `/v1/messages` and applies its native prompt caching.
+  Every other model uses `api = "openai-completions"` with a `/v1` base URL, so
+  Pi appends `/chat/completions`. Gateway reroutes still work from either
+  ingress.
 
 Reasoning-capable models are declared with `reasoning: true` and a model-level
 `thinkingLevelMap` generated from the catalog. Unsupported Pi levels are set to
 `null`, so the picker hides and skips them; catalog `none` maps to Pi's `off`
-slot. Because this provider always talks to the gateway rather than directly to
-Anthropic, `compat.forceAdaptiveThinking` is enabled: Pi sends
-`thinking.type=adaptive` plus the exact effort, and the gateway translates that
-canonical control for whichever provider ultimately serves the request.
+slot. On the Anthropic provider, `compat.forceAdaptiveThinking` is enabled: Pi
+sends `thinking.type=adaptive` plus the exact effort, and the gateway translates
+that canonical control for whichever provider ultimately serves the request.
 
 ## `kimi` — the env-only channel Kimi Code leaves open
 
