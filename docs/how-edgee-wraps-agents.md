@@ -491,8 +491,8 @@ gaps rather than bugs.
 | `codex` | ✅¹ | ❌ | ⏳ | ✅ | skills via a `CODEX_HOME` symlink mirror; MCP via `-c mcp_servers`; no user-defined subagents exist |
 | `crush` | ✅ | ✅ | ⏳ | ✅ | config fragments on the redirected document |
 | `kimi` | ⏳ | ❌ | ❌ | ❌ | not yet wired — see below |
-| `pi` | ⏳ | ⏳ | ⏳ | ⏳ | not yet wired |
-| `omp` | ⏳ | ⏳ | ⏳ | ⏳ | not yet wired |
+| `pi` | ✅ | ❌ | ❌ | ❌ | repeatable `--skill`; other kinds require extension code or have no configuration surface |
+| `omp` | ✅ | ✅ | ✅ | ✅ | Claude-compatible bundle via repeatable `--plugin-dir` |
 | `cursor`, `copilot-vscode`, `claude-desktop` | ❌ | ❌ | ❌ | ❌ | relay targets — Edgee never spawns the process, so there is no launch to attach a directory to |
 | `codex-desktop` | ❌ | ❌ | ❌ | ❌ | launched, but reads the real Codex config root that Edgee patches only for the handoff and reverts; it cannot use the symlink mirror because `auth.json` holds a single-use rotating token |
 
