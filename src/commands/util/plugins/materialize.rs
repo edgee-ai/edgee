@@ -321,14 +321,14 @@ fn mcp_json(servers: &[PluginMcpServer]) -> Option<String> {
         if server.transport != "http" {
             continue;
         }
-        map.insert(
-            server.name.clone(),
-            serde_json::json!({
-                "type": "http",
-                "url": server.url,
-                "headers": server.headers,
-            }),
-        );
+        let mut entry = serde_json::json!({
+            "type": "http",
+            "url": server.url,
+        });
+        if let Some(headers) = server.effective_headers() {
+            entry["headers"] = serde_json::json!(headers);
+        }
+        map.insert(server.name.clone(), entry);
     }
 
     if map.is_empty() {

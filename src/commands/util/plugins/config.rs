@@ -45,11 +45,14 @@ fn crush_mcp_entry(server: &PluginMcpServer) -> Option<Value> {
     if server.name.is_empty() || server.url.is_empty() || server.transport != "http" {
         return None;
     }
-    Some(json!({
+    let mut entry = json!({
         "type": "http",
         "url": server.url,
-        "headers": server.headers,
-    }))
+    });
+    if let Some(headers) = server.effective_headers() {
+        entry["headers"] = json!(headers);
+    }
+    Some(entry)
 }
 
 /// Crush `hooks`: `{ "<Event>": [ { name, matcher, command, timeout } ] }`.
@@ -105,12 +108,14 @@ pub fn opencode_mcp(plugins: &[Plugin]) -> Option<Value> {
             if server.name.is_empty() || server.url.is_empty() || server.transport != "http" {
                 continue;
             }
-            let entry = json!({
+            let mut entry = json!({
                 "type": "remote",
                 "url": server.url,
-                "headers": server.headers,
                 "enabled": true,
             });
+            if let Some(headers) = server.effective_headers() {
+                entry["headers"] = json!(headers);
+            }
             out.insert(qualified(plugin, &server.name), entry);
         }
     }
@@ -160,11 +165,8 @@ pub fn codex_mcp_args(plugins: &[Plugin]) -> Vec<String> {
             }
             let key = format!("mcp_servers.{}", qualified(plugin, &server.name));
             args.push(format!("{key}.url={}", toml_string(&server.url)));
-            if !server.headers.is_empty() {
-                args.push(format!(
-                    "{key}.http_headers={}",
-                    toml_table(&server.headers)
-                ));
+            if let Some(headers) = server.effective_headers() {
+                args.push(format!("{key}.http_headers={}", toml_table(headers)));
             }
         }
     }
@@ -421,6 +423,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn oauth_never_emits_stale_static_headers() {
+        let mut p = plugin("house", true);
+        let mut server = http("remote");
+        server.auth.kind = "oauth".into();
+        server.headers = [("Authorization".to_string(), "Bearer stale".to_string())]
+            .into_iter()
+            .collect();
+        p.mcp_servers = vec![server];
+
+        let args = codex_mcp_args(&[p]);
+
+        assert_eq!(args.len(), 1);
+        assert!(args[0].contains(".url="));
+    }
+
     /// An unescaped quote or newline makes Codex treat the whole value as a
     /// literal string, so the override silently does the wrong thing.
     #[test]
@@ -433,6 +451,7 @@ mod tests {
             headers: [("X-Odd".to_string(), "say \"hi\"\nthere\u{1b}".to_string())]
                 .into_iter()
                 .collect(),
+            ..Default::default()
         }];
 
         let args = codex_mcp_args(&[p]);
