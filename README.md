@@ -240,8 +240,9 @@ routed through Edgee, more of your spend under policy, more of your usage visibl
 ## Statusline
 
 When you run `edgee launch claude`, Claude Code shows a live statusline with the current session's
-token usage and compression savings. **No setup required:** the first launch auto-installs the
-integration into `~/.claude/settings.json`, and subsequent launches reuse it.
+five token categories (input, cache read, cache write, output, and reasoning) and cost. **No setup
+required:** the first launch auto-installs the integration into `~/.claude/settings.json`, and
+subsequent launches reuse it.
 
 ### Manage it
 

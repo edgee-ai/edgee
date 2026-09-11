@@ -18,25 +18,23 @@ const CACHE_MAX_AGE_SECS: u64 = 8;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 const PURPLE: &str = "\x1b[38;5;128m";
-const BOLD_PURPLE: &str = "\x1b[1;38;5;128m";
-const YELLOW: &str = "\x1b[33m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
 #[derive(Debug, Default, Deserialize)]
 struct SessionSummary {
     #[serde(default)]
-    total_uncompressed_tools_tokens: u64,
+    total_input_tokens: u64,
     #[serde(default)]
-    total_compressed_tools_tokens: u64,
+    total_cached_input_tokens: u64,
     #[serde(default)]
-    total_requests: u64,
+    total_cache_creation_input_tokens: u64,
     #[serde(default)]
-    total_fallback_requests: u64,
+    total_output_tokens: u64,
     #[serde(default)]
-    last_request_is_fallback: bool,
+    total_reasoning_output_tokens: u64,
     #[serde(default)]
-    last_request_model: String,
+    total_cost: u64,
 }
 
 /// Run as the `edgee statusline` subcommand without `--wrap`.
@@ -115,12 +113,12 @@ async fn fetch_or_cache(session_id: &str, org_slug: &str) -> Option<SessionSumma
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(json) = serde_json::to_vec(&serde_json::json!({
-            "total_uncompressed_tools_tokens": stats.total_uncompressed_tools_tokens,
-            "total_compressed_tools_tokens": stats.total_compressed_tools_tokens,
-            "total_requests": stats.total_requests,
-            "total_fallback_requests": stats.total_fallback_requests,
-            "last_request_is_fallback": stats.last_request_is_fallback,
-            "last_request_model": stats.last_request_model,
+            "total_input_tokens": stats.total_input_tokens,
+            "total_cached_input_tokens": stats.total_cached_input_tokens,
+            "total_cache_creation_input_tokens": stats.total_cache_creation_input_tokens,
+            "total_output_tokens": stats.total_output_tokens,
+            "total_reasoning_output_tokens": stats.total_reasoning_output_tokens,
+            "total_cost": stats.total_cost,
         })) {
             let _ = fs::write(&cache_file, json);
         }
@@ -163,39 +161,29 @@ fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
         return format!("{prefix}{PURPLE}三 Edgee{RESET}");
     };
 
-    let before = stats.total_uncompressed_tools_tokens;
-    let after = stats.total_compressed_tools_tokens;
-    let requests = stats.total_requests;
+    format!(
+        "{prefix}{PURPLE}三 Edgee{RESET}  {DIM}in {}  cache-read {}  cache-write {}  out {}  reasoning {}  ${:.4}{RESET}",
+        format_tokens(stats.total_input_tokens),
+        format_tokens(stats.total_cached_input_tokens),
+        format_tokens(stats.total_cache_creation_input_tokens),
+        format_tokens(stats.total_output_tokens),
+        format_tokens(stats.total_reasoning_output_tokens),
+        stats.total_cost as f64 / 1_000_000_000.0,
+    )
+}
 
-    let mut line = if before > 0 && after < before {
-        let pct = (before - after) * 100 / before;
-        let filled = (pct as usize) / 10;
-        let mut bar = String::new();
-        for _ in 0..filled.min(10) {
-            bar.push('█');
-        }
-        for _ in filled.min(10)..10 {
-            bar.push('░');
-        }
-        format!(
-            "{prefix}{PURPLE}三 Edgee{RESET}  {PURPLE}{bar}{RESET} {BOLD_PURPLE}{pct}%{RESET} tool compression  {DIM}{requests} reqs{RESET}"
-        )
-    } else if requests > 0 {
-        format!("{prefix}{PURPLE}三 Edgee{RESET}  {DIM}{requests} reqs{RESET}")
-    } else {
-        format!("{prefix}{PURPLE}三 Edgee{RESET}")
-    };
+fn format_tokens(tokens: u64) -> String {
+    let digits = tokens.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
 
-    if stats.last_request_is_fallback {
-        let model = &stats.last_request_model;
-        let count = stats.total_fallback_requests;
-        line.push_str(&format!("  {YELLOW}⚠ fallback: {model}{RESET}"));
-        if count > 1 {
-            line.push_str(&format!(" {DIM}({count} this session){RESET}"));
+    for (index, digit) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            formatted.push(',');
         }
+        formatted.push(digit);
     }
 
-    line
+    formatted.chars().rev().collect()
 }
 
 #[cfg(test)]
@@ -211,54 +199,36 @@ mod tests {
     }
 
     #[test]
-    fn format_no_compression_with_requests() {
+    fn format_includes_all_token_types_and_cost() {
         let stats = SessionSummary {
-            total_uncompressed_tools_tokens: 0,
-            total_compressed_tools_tokens: 0,
-            total_requests: 12,
-            ..Default::default()
+            total_input_tokens: 1_234,
+            total_cached_input_tokens: 2_345,
+            total_cache_creation_input_tokens: 345,
+            total_output_tokens: 678,
+            total_reasoning_output_tokens: 90,
+            total_cost: 12_345_678,
         };
         let s = format_line("", Some(&stats));
-        assert!(s.contains("12 reqs"));
+        assert!(s.contains("in 1,234"));
+        assert!(s.contains("cache-read 2,345"));
+        assert!(s.contains("cache-write 345"));
+        assert!(s.contains("out 678"));
+        assert!(s.contains("reasoning 90"));
+        assert!(s.contains("$0.0123"));
         assert!(!s.contains("compression"));
-    }
-
-    #[test]
-    fn format_with_compression() {
-        let stats = SessionSummary {
-            total_uncompressed_tools_tokens: 1000,
-            total_compressed_tools_tokens: 600,
-            total_requests: 7,
-            ..Default::default()
-        };
-        let s = format_line("", Some(&stats));
-        assert!(s.contains("40%"));
-        assert!(s.contains("compression"));
-        assert!(s.contains("7 reqs"));
-    }
-
-    #[test]
-    fn format_with_fallback() {
-        let stats = SessionSummary {
-            total_requests: 5,
-            last_request_is_fallback: true,
-            last_request_model: "claude-sonnet-5".to_string(),
-            total_fallback_requests: 3,
-            ..Default::default()
-        };
-        let s = format_line("", Some(&stats));
-        assert!(s.contains("⚠ fallback: claude-sonnet-5"));
-        assert!(s.contains("3 this session"));
-    }
-
-    #[test]
-    fn format_without_fallback_omits_indicator() {
-        let stats = SessionSummary {
-            total_requests: 5,
-            ..Default::default()
-        };
-        let s = format_line("", Some(&stats));
+        assert!(!s.contains("reqs"));
         assert!(!s.contains("fallback"));
+    }
+
+    #[test]
+    fn format_keeps_zero_value_token_types_visible() {
+        let s = format_line("", Some(&SessionSummary::default()));
+        assert!(s.contains("in 0"));
+        assert!(s.contains("cache-read 0"));
+        assert!(s.contains("cache-write 0"));
+        assert!(s.contains("out 0"));
+        assert!(s.contains("reasoning 0"));
+        assert!(s.contains("$0.0000"));
     }
 
     #[test]
