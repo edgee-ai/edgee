@@ -18,18 +18,20 @@
 //! plugins. There is no narrower lever: `--models` takes model *patterns* for
 //! Ctrl+P cycling, not a config path.
 //!
-//! So the provider block is written into the real `models.json` under a single
-//! namespaced key. This needs no patch-and-revert dance (unlike
-//! `codex_desktop.rs`) precisely because it is additive rather than a hijack of
-//! a provider the user already relies on.
+//! So two provider blocks are written into the real `models.json` under
+//! namespaced keys: one uses Anthropic Messages for Claude models, the other
+//! uses Chat Completions for everything else. This needs no patch-and-revert
+//! dance (unlike `codex_desktop.rs`) precisely because it is additive rather
+//! than a hijack of a provider the user already relies on.
 //!
 //! ## No credential at rest
 //!
-//! Pi resolves `apiKey` and header values through `resolveConfigValue`, which
-//! expands `$NAME` / `${NAME}` references against the environment. So the block
-//! stores *references* — `$EDGEE_API_KEY`, `$EDGEE_SESSION_ID` — and `run`
-//! supplies the values at spawn time. The Edgee key is never written to disk,
-//! unlike the OpenCode and Crush temp configs, which embed it.
+//! Pi and OMP both resolve `apiKey` and header values against the environment,
+//! but use different reference syntax: Pi expands `$NAME`, while OMP treats a
+//! bare `NAME` as an environment-variable lookup. The generated block stores
+//! the appropriate references and `run` supplies their values at spawn time.
+//! The Edgee key is never written to disk, unlike the OpenCode and Crush temp
+//! configs, which embed it.
 //!
 //! **This requires pi 0.79.4 or newer**, and the version boundary is a trap
 //! worth knowing about. Before 0.79.4 the whole value was the variable name
@@ -54,19 +56,15 @@ use serde_json::Value;
 use super::util;
 use crate::commands::util::plugins;
 
-/// Provider key under `providers` in `models.json`. Everything this command
-/// writes lives under it; nothing else in the file is touched.
+/// Provider keys under `providers` in `models.json`. Everything this command
+/// writes lives under them; nothing else in the file is touched.
 const PROVIDER_KEY: &str = "edgee";
+const ANTHROPIC_PROVIDER_KEY: &str = "edgee-anthropic";
 
-/// Env vars whose values `run` supplies at spawn time. The config embeds them
-/// as `$NAME` references (see [`env_ref`]), never their values.
+/// Env vars whose values `run` supplies at spawn time. The config embeds
+/// agent-specific references (see [`CompatibleAgent::env_ref`]), never values.
 const API_KEY_ENV: &str = "EDGEE_API_KEY";
 const SESSION_ID_ENV: &str = "EDGEE_SESSION_ID";
-
-/// Renders an env var name as the `$NAME` reference pi expands at request time.
-fn env_ref(name: &str) -> String {
-    format!("${name}")
-}
 
 /// Pi's picker uses fixed slot names. The catalog's `none` effort maps to
 /// Pi's disabled `off` slot.
@@ -148,6 +146,16 @@ pub(crate) enum CompatibleAgent {
 }
 
 impl CompatibleAgent {
+    /// Renders the environment reference syntax understood by each agent.
+    /// Pi 0.79.4+ requires `$NAME`; OMP looks up the complete string as the
+    /// environment-variable name, so its reference must be bare `NAME`.
+    fn env_ref(self, name: &str) -> String {
+        match self {
+            Self::Pi => format!("${name}"),
+            Self::Omp => name.to_string(),
+        }
+    }
+
     fn binary(self) -> &'static str {
         match self {
             Self::Pi => "pi",
@@ -174,7 +182,10 @@ impl CompatibleAgent {
             Self::Pi => agent_dir()?,
             Self::Omp => omp_agent_dir(&home_dir()?),
         };
-        Some(dir.join("models.json"))
+        Some(dir.join(match self {
+            Self::Pi => "models.json",
+            Self::Omp => "models.yml",
+        }))
     }
 
     fn install_error(self) -> &'static str {
@@ -211,9 +222,9 @@ fn plugin_args(agent: CompatibleAgent, report: &plugins::sync::SyncReport) -> Ve
     }
 }
 
-/// Reads the user's `models.json`, or an empty document when absent. A file we
-/// cannot parse is *not* overwritten — see [`write_provider`].
-fn read_models_json(path: &std::path::Path) -> Result<Option<Value>> {
+/// Reads the agent's model config, or an empty document when absent. A file we
+/// cannot parse is *not* overwritten — see [`write_providers`].
+fn read_models_config(path: &std::path::Path) -> Result<Option<Value>> {
     if !path.exists() {
         return Ok(Some(serde_json::json!({ "providers": {} })));
     }
@@ -223,19 +234,30 @@ fn read_models_json(path: &std::path::Path) -> Result<Option<Value>> {
     if content.trim().is_empty() {
         return Ok(Some(serde_json::json!({ "providers": {} })));
     }
-    Ok(serde_json::from_str(&content).ok())
+    let parsed = if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
+        serde_yaml::from_str(&content).ok()
+    } else {
+        serde_json::from_str(&content).ok()
+    };
+    Ok(parsed)
 }
 
-/// Inserts the Edgee provider into `models.json`, preserving every other key.
+/// Replaces Edgee's providers in the agent's model config, preserving every
+/// other key. Pi uses JSON; OMP uses YAML.
 ///
-/// Bails rather than clobbering when the existing file does not parse: pi
+/// Bails rather than clobbering when the existing file does not parse. Pi
 /// tolerates comments in `models.json` (`stripJsonComments`), and a user's
 /// annotated config is not ours to silently rewrite into canonical JSON.
-fn write_provider(path: &std::path::Path, provider: Value) -> Result<()> {
-    let Some(mut config) = read_models_json(path)? else {
+fn write_providers(path: &std::path::Path, replacements: &[(&str, Value)]) -> Result<()> {
+    let Some(mut config) = read_models_config(path)? else {
+        let format = if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
+            "YAML"
+        } else {
+            "JSON"
+        };
         anyhow::bail!(
-            "{} exists but is not valid JSON.\nFix or remove it, then launch the agent again.",
-            path.display()
+            "{} exists but is not valid {format}.\nFix or remove it, then launch the agent again.",
+            path.display(),
         )
     };
 
@@ -253,35 +275,54 @@ fn write_provider(path: &std::path::Path, provider: Value) -> Result<()> {
     if !providers.is_object() {
         *providers = Value::Object(serde_json::Map::new());
     }
-    providers
-        .as_object_mut()
-        .expect("just ensured object")
-        .insert(PROVIDER_KEY.to_string(), provider);
+    let providers = providers.as_object_mut().expect("just ensured object");
+    // Remove both managed keys first so a catalog family that disappears does
+    // not leave stale models in Pi's picker.
+    providers.remove(PROVIDER_KEY);
+    providers.remove(ANTHROPIC_PROVIDER_KEY);
+    for (key, provider) in replacements {
+        providers.insert((*key).to_string(), provider.clone());
+    }
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
-    let rendered = serde_json::to_string_pretty(&config)?;
+    let rendered = if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
+        serde_yaml::to_string(&config)?
+    } else {
+        serde_json::to_string_pretty(&config)?
+    };
     std::fs::write(path, format!("{rendered}\n"))
         .with_context(|| format!("Failed to write {}", path.display()))
 }
 
-/// Builds the `providers.edgee` block.
-///
-/// `api` is `openai-completions` and `baseUrl` carries the `/v1` suffix expected
-/// by pi's OpenAI-compatible transport. Pi appends `/chat/completions`, yielding
-/// the gateway's `/v1/chat/completions` endpoint for every catalog model.
-fn build_edgee_provider(
+#[derive(Clone, Copy)]
+enum PiTransport {
+    ChatCompletions,
+    AnthropicMessages,
+}
+
+/// Builds one of the two Edgee provider blocks. Anthropic models use Pi's
+/// native Messages transport so its normal prompt-cache behavior is retained;
+/// all other models use Chat Completions.
+fn build_provider(
+    agent: CompatibleAgent,
     gateway_url: &str,
     models: &[String],
     catalog: &util::ModelCatalog,
     debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
+    transport: PiTransport,
 ) -> Value {
     let mut headers = serde_json::json!({
-        "x-edgee-api-key": env_ref(API_KEY_ENV),
-        "x-edgee-session-id": env_ref(SESSION_ID_ENV),
+        "x-edgee-api-key": agent.env_ref(API_KEY_ENV),
+        "x-edgee-session-id": agent.env_ref(SESSION_ID_ENV),
     });
+    if matches!(agent, CompatibleAgent::Omp)
+        && matches!(transport, PiTransport::AnthropicMessages)
+    {
+        headers["User-Agent"] = Value::String("omp".to_string());
+    }
     // Unlike the key and session id, these are embedded literally: they derive
     // from the profile passphrase and so are stable across launches, and a
     // public key plus salt is not a secret. Env-var indirection would only add
@@ -297,12 +338,26 @@ fn build_edgee_provider(
         );
     }
 
-    let base_url = format!("{}/v1", gateway_url.trim_end_matches('/'));
+    let gateway_url = gateway_url.trim_end_matches('/');
+    let (name, base_url, api) = match transport {
+        PiTransport::ChatCompletions => (
+            "Edgee",
+            format!("{gateway_url}/v1"),
+            "openai-completions",
+        ),
+        // Pi appends `/v1/messages` for this transport, matching its built-in
+        // Anthropic provider. Including `/v1` here would duplicate the segment.
+        PiTransport::AnthropicMessages => (
+            "Edgee (Anthropic)",
+            gateway_url.to_string(),
+            "anthropic-messages",
+        ),
+    };
     let mut provider = serde_json::json!({
-        "name": "Edgee",
+        "name": name,
         "baseUrl": base_url,
-        "api": "openai-completions",
-        "apiKey": env_ref(API_KEY_ENV),
+        "api": api,
+        "apiKey": agent.env_ref(API_KEY_ENV),
         "headers": headers,
     });
 
@@ -346,6 +401,24 @@ fn build_edgee_provider(
                 {
                     entry["reasoning"] = Value::Bool(true);
                     entry["thinkingLevelMap"] = thinking_level_map(efforts);
+                    if matches!(transport, PiTransport::AnthropicMessages) {
+                        // The gateway accepts Pi's adaptive control and maps it
+                        // to the ultimately selected Claude provider.
+                        entry["compat"] = serde_json::json!({
+                            "forceAdaptiveThinking": true,
+                        });
+                    }
+                }
+                if matches!(agent, CompatibleAgent::Omp)
+                    && matches!(transport, PiTransport::AnthropicMessages)
+                {
+                    // OMP's Anthropic transport deliberately speaks Claude Code's
+                    // OAuth wire protocol. Keep its working bearer auth, but retain
+                    // OMP's identity so the gateway uses the normal Messages path
+                    // and the prompt has no volatile Claude Code `cch` block.
+                    entry["compat"]["allowAnthropicHeaderOverrides"] = Value::Bool(true);
+                    entry["compat"]["disableStrictTools"] = Value::Bool(true);
+                    entry["compat"]["injectClaudeCodeInstruction"] = Value::Bool(false);
                 }
                 entry
             })
@@ -354,6 +427,72 @@ fn build_edgee_provider(
     }
 
     provider
+}
+
+#[cfg(test)]
+fn build_edgee_provider(
+    gateway_url: &str,
+    models: &[String],
+    catalog: &util::ModelCatalog,
+    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
+) -> Value {
+    build_edgee_provider_for(
+        CompatibleAgent::Pi,
+        gateway_url,
+        models,
+        catalog,
+        debug_log_headers,
+    )
+}
+
+fn build_edgee_provider_for(
+    agent: CompatibleAgent,
+    gateway_url: &str,
+    models: &[String],
+    catalog: &util::ModelCatalog,
+    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
+) -> Value {
+    build_provider(
+        agent,
+        gateway_url,
+        models,
+        catalog,
+        debug_log_headers,
+        PiTransport::ChatCompletions,
+    )
+}
+
+#[cfg(test)]
+fn build_anthropic_provider(
+    gateway_url: &str,
+    models: &[String],
+    catalog: &util::ModelCatalog,
+    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
+) -> Value {
+    build_anthropic_provider_for(
+        CompatibleAgent::Pi,
+        gateway_url,
+        models,
+        catalog,
+        debug_log_headers,
+    )
+}
+
+fn build_anthropic_provider_for(
+    agent: CompatibleAgent,
+    gateway_url: &str,
+    models: &[String],
+    catalog: &util::ModelCatalog,
+    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
+) -> Value {
+    build_provider(
+        agent,
+        gateway_url,
+        models,
+        catalog,
+        debug_log_headers,
+        PiTransport::AnthropicMessages,
+    )
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -430,13 +569,40 @@ pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Res
             agent.launch_command()
         );
     }
+    let (anthropic_models, other_models): (Vec<_>, Vec<_>) = models
+        .into_iter()
+        .partition(|id| id.starts_with("anthropic/"));
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
-    let provider = build_edgee_provider(&gateway_url, &models, &catalog, debug_log_headers);
+    let mut providers = Vec::with_capacity(2);
+    if !other_models.is_empty() {
+        providers.push((
+            PROVIDER_KEY,
+            build_edgee_provider_for(
+                agent,
+                &gateway_url,
+                &other_models,
+                &catalog,
+                debug_log_headers.clone(),
+            ),
+        ));
+    }
+    if !anthropic_models.is_empty() {
+        providers.push((
+            ANTHROPIC_PROVIDER_KEY,
+            build_anthropic_provider_for(
+                agent,
+                &gateway_url,
+                &anthropic_models,
+                &catalog,
+                debug_log_headers,
+            ),
+        ));
+    }
 
     let models_path = agent
         .models_path()
         .context("Could not determine your home directory")?;
-    write_provider(&models_path, provider)?;
+    write_providers(&models_path, &providers)?;
 
     // Step 5: launch the agent with the values its config refers to by name
     let plugin_report = plugins::sync_for_target(&creds, agent.plugin_target()).await;
@@ -555,6 +721,24 @@ mod tests {
     }
 
     #[test]
+    fn omp_uses_bare_env_names_as_references() {
+        let provider = build_edgee_provider_for(
+            CompatibleAgent::Omp,
+            "https://api.edgee.ai",
+            &[],
+            &util::ModelCatalog::new(),
+            None,
+        );
+
+        assert_eq!(provider["apiKey"], "EDGEE_API_KEY");
+        assert_eq!(provider["headers"]["x-edgee-api-key"], "EDGEE_API_KEY");
+        assert_eq!(
+            provider["headers"]["x-edgee-session-id"],
+            "EDGEE_SESSION_ID"
+        );
+    }
+
+    #[test]
     fn embeds_debug_log_headers_literally() {
         // These are not env references: an unset reference resolves to nothing,
         // and a pubkey/salt pair is derived from the passphrase, not secret.
@@ -586,6 +770,20 @@ mod tests {
             None,
         );
         assert_eq!(provider["baseUrl"], "https://api.edgee.ai/v1");
+    }
+
+    #[test]
+    fn anthropic_models_use_the_native_messages_endpoint() {
+        let provider = build_anthropic_provider(
+            "https://api.edgee.ai/",
+            &["anthropic/claude-sonnet-5".to_string()],
+            &util::ModelCatalog::new(),
+            None,
+        );
+
+        assert_eq!(provider["baseUrl"], "https://api.edgee.ai");
+        assert_eq!(provider["api"], "anthropic-messages");
+        assert_eq!(provider["models"][0]["id"], "anthropic/claude-sonnet-5");
     }
 
     #[test]
@@ -624,6 +822,47 @@ mod tests {
             assert_eq!(model["thinkingLevelMap"][effort], effort);
         }
         assert!(model.get("compat").is_none());
+    }
+
+    #[test]
+    fn anthropic_reasoning_uses_adaptive_thinking() {
+        let models = vec!["anthropic/claude-sonnet-5".to_string()];
+        let catalog = catalog_with_efforts(
+            "anthropic/claude-sonnet-5",
+            Some(1_000_000),
+            &["none", "low", "medium", "high", "xhigh", "max"],
+        );
+        let provider = build_anthropic_provider("https://api.edgee.ai", &models, &catalog, None);
+
+        assert_eq!(
+            provider["models"][0]["compat"]["forceAdaptiveThinking"],
+            true
+        );
+    }
+
+    #[test]
+    fn omp_anthropic_models_keep_the_omp_identity() {
+        let provider = build_anthropic_provider_for(
+            CompatibleAgent::Omp,
+            "https://api.edgee.ai",
+            &["anthropic/claude-sonnet-5".to_string()],
+            &util::ModelCatalog::new(),
+            None,
+        );
+
+        assert_eq!(provider["headers"]["User-Agent"], "omp");
+        assert_eq!(
+            provider["models"][0]["compat"]["allowAnthropicHeaderOverrides"],
+            true
+        );
+        assert_eq!(
+            provider["models"][0]["compat"]["disableStrictTools"],
+            true
+        );
+        assert_eq!(
+            provider["models"][0]["compat"]["injectClaudeCodeInstruction"],
+            false
+        );
     }
 
     #[test]
@@ -671,7 +910,7 @@ mod tests {
 
         let provider =
             build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
-        write_provider(&path, provider).unwrap();
+        write_providers(&path, &[(PROVIDER_KEY, provider)]).unwrap();
 
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         // The user's own provider survives untouched...
@@ -685,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn replaces_only_its_own_provider_on_relaunch() {
+    fn replaces_only_its_own_providers_on_relaunch() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("models.json");
 
@@ -695,14 +934,27 @@ mod tests {
             &catalog_with("anthropic/claude-sonnet-5", Some(1_000_000)),
             None,
         );
-        write_provider(&path, first).unwrap();
+        let anthropic = build_anthropic_provider(
+            "https://api.edgee.ai",
+            &["anthropic/claude-sonnet-5".to_string()],
+            &catalog_with("anthropic/claude-sonnet-5", Some(1_000_000)),
+            None,
+        );
+        write_providers(
+            &path,
+            &[
+                (PROVIDER_KEY, first),
+                (ANTHROPIC_PROVIDER_KEY, anthropic),
+            ],
+        )
+        .unwrap();
         let second = build_edgee_provider(
             "https://gateway.example.com",
             &[],
             &util::ModelCatalog::new(),
             None,
         );
-        write_provider(&path, second).unwrap();
+        write_providers(&path, &[(PROVIDER_KEY, second)]).unwrap();
 
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         // Rewritten wholesale rather than merged, so a model dropped from the
@@ -712,6 +964,7 @@ mod tests {
             "https://gateway.example.com/v1"
         );
         assert!(written["providers"]["edgee"].get("models").is_none());
+        assert!(written["providers"].get(ANTHROPIC_PROVIDER_KEY).is_none());
     }
 
     #[test]
@@ -723,7 +976,7 @@ mod tests {
 
         let provider =
             build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
-        assert!(write_provider(&path, provider).is_err());
+        assert!(write_providers(&path, &[(PROVIDER_KEY, provider)]).is_err());
         // The user's file is left exactly as it was.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
@@ -735,7 +988,7 @@ mod tests {
 
         let provider =
             build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
-        write_provider(&path, provider).unwrap();
+        write_providers(&path, &[(PROVIDER_KEY, provider)]).unwrap();
 
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written["providers"]["edgee"]["name"], "Edgee");
@@ -744,8 +997,33 @@ mod tests {
     #[test]
     fn omp_models_path_uses_omp_agent_dir() {
         assert_eq!(
-            omp_agent_dir(std::path::Path::new("/home/user")).join("models.json"),
-            std::path::PathBuf::from("/home/user/.omp/agent/models.json")
+            CompatibleAgent::Omp.models_path().map(|path| path.file_name().unwrap().to_owned()),
+            Some(std::ffi::OsString::from("models.yml"))
+        );
+    }
+
+    #[test]
+    fn omp_yaml_preserves_unrelated_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models.yml");
+        std::fs::write(
+            &path,
+            "providers:\n  local:\n    api: openai-completions\n    baseUrl: http://localhost:8080/v1\n",
+        )
+        .unwrap();
+
+        let provider =
+            build_edgee_provider("https://stg.edgee.io", &[], &util::ModelCatalog::new(), None);
+        write_providers(&path, &[(PROVIDER_KEY, provider)]).unwrap();
+
+        let written: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            written["providers"]["local"]["baseUrl"],
+            "http://localhost:8080/v1"
+        );
+        assert_eq!(
+            written["providers"]["edgee"]["baseUrl"],
+            "https://stg.edgee.io/v1"
         );
     }
 }
