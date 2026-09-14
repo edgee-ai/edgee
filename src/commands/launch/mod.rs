@@ -11,6 +11,7 @@ pub mod codex;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;
+pub mod intellij;
 pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
@@ -58,6 +59,9 @@ enum Command {
     /// GitHub Copilot in VS Code
     #[command(name = "copilot-vscode", alias = "vscode-copilot")]
     CopilotVscode(copilot_vscode::Options),
+    /// GitHub Copilot in IntelliJ IDEA
+    #[command(name = "intellij")]
+    Intellij(intellij::Options),
     /// GitHub Copilot desktop app (macOS)
     #[command(name = "copilot-desktop")]
     CopilotDesktop(copilot_desktop::Options),
@@ -87,6 +91,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Kimi(o) => kimi::run(o).await,
         Command::Kilo(o) => kilo::run(o).await,
         Command::CopilotCli(o) => copilot_cli::run(o).await,
+        Command::Intellij(o) => intellij::run(o).await,
         Command::CopilotDesktop(o) => copilot_desktop::run(o).await,
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o).await,
@@ -376,6 +381,24 @@ mod tests {
             claude_args(&["edgee", "launch", "claude", "--", "-p", "my prompt"]),
             ["-p", "my prompt"],
         );
+    }
+
+    #[test]
+    fn intellij_preserves_project_paths_and_flags() {
+        for argv in [
+            vec!["edgee", "launch", "intellij", "-p", "my project", "--help"],
+            vec!["edgee", "launch", "intellij", "--", "-p", "my project", "--help"],
+        ] {
+            let opts = crate::Options::try_parse_from(argv).expect("parses");
+            assert!(opts.profile.is_none());
+            match opts.command {
+                crate::commands::Command::Launch(launch) => match launch.command {
+                    Command::Intellij(c) => assert_eq!(c.args, ["-p", "my project", "--help"]),
+                    other => panic!("wrong target: {other:?}"),
+                },
+                other => panic!("wrong command: {other:?}"),
+            }
+        }
     }
 
     #[test]

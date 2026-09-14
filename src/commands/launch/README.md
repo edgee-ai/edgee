@@ -75,6 +75,10 @@ Avoid ambiguous host-only names like bare `vscode` as a **canonical** target —
 VS Code can host Copilot, Claude Code, etc. Prefer `copilot-vscode`, and later
 `claude-vscode`, not a single `vscode` catch-all.
 
+Exception: `intellij` is the chosen public target for IntelliJ IDEA. It currently
+routes the GitHub Copilot plugin, shares the `copilot` provider key, and does not
+imply support for other AI plugins in the IDE.
+
 ### 4. Aliases are optional discoverability only
 
 Aliases may exist for muscle memory (`vscode-copilot` → `copilot-vscode`) but the
@@ -103,6 +107,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | Target | Product | Provider key | Notes |
 |---|---|---|---|
 | `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
+| `intellij` | GitHub Copilot in IntelliJ IDEA | `copilot` | Direct IDE launch with proxy env + Node CA; live-session validation pending |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + Node CA, no system trust |
 | `copilot-cli` | GitHub Copilot CLI | `copilot` | Relays the `copilot` binary directly (TUI, no `--wait`) — deliberately not env-injected; see below |
@@ -506,3 +511,29 @@ the app before stopping the relay. Quit an existing app first to avoid singleton
 Remote/cloud runtimes do not inherit local proxy settings. Plugin delivery remains
 unverified for all four component kinds and is reported as unsupported. Windows/Linux
 app paths and transport remain unverified; this launch target currently supports macOS only.
+
+## `intellij` — GitHub Copilot in IntelliJ IDEA
+
+Quit IntelliJ IDEA completely, then run `edgee launch intellij /path/to/project`.
+The GitHub Copilot plugin must be installed and signed in. The launch shares
+Copilot credentials, settings and usage attribution with the other Copilot targets.
+It uses a separate local port (41700) so it can run alongside them.
+
+The IDE executable inherits proxy environment variables and `NODE_EXTRA_CA_CERTS`,
+which [GitHub documents for Copilot](https://docs.github.com/en/copilot/concepts/network-settings).
+An explicit IDE HTTP Proxy setting takes precedence; select **No proxy** in the
+IDE to let Copilot use the launch environment. Certificate verification remains
+enabled. No IDE configuration files or system trust stores are changed.
+
+Standard macOS application bundles are detected in `/Applications` and
+`~/Applications`; elsewhere the launcher must be on PATH (`idea` / `idea.sh` on
+Linux, `idea64.exe` / `idea.exe` on Windows). For Toolbox or custom installations,
+set `EDGEE_INTELLIJ_BINARY` to the executable path (on macOS, the app bundle's
+`Contents/MacOS/idea`, not the `.app` directory).
+
+`edgee alias intellij` installs a desktop wrapper when the IDE is detected.
+Keep the launch command running for the session and quit the IDE before stopping
+Edgee. A launcher can hand off to an existing IDE and exit, so Edgee keeps serving
+until Ctrl-C. Live Copilot traffic still needs validation with an installed IDE;
+this target is experimental until then. Other AI plugins and remote/cloud agent
+sessions are outside this target's supported scope.
