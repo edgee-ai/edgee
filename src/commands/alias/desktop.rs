@@ -53,7 +53,14 @@ pub const COPILOT_DESKTOP_APP: AppSpec = AppSpec {
     launch_target: "copilot-desktop",
 };
 
-pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, COPILOT_VSCODE_APP, CLAUDE_DESKTOP_APP, COPILOT_DESKTOP_APP];
+pub const INTELLIJ_APP: AppSpec = AppSpec {
+    id: "intellij",
+    display_name: "IntelliJ IDEA Copilot (Edgee)",
+    host_label: "IntelliJ IDEA",
+    launch_target: "intellij",
+};
+
+pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, INTELLIJ_APP, COPILOT_VSCODE_APP, CLAUDE_DESKTOP_APP, COPILOT_DESKTOP_APP];
 
 #[derive(Clone, Copy)]
 pub enum Action {
@@ -200,6 +207,7 @@ pub fn target_app_installed(app: &AppSpec) -> bool {
         "cursor" => cursor_installed(),
         "copilot-vscode" => vscode_installed(),
         "claude-desktop" => claude_desktop_installed(),
+        "intellij" => crate::commands::launch::intellij::binary().is_ok(),
         "copilot-desktop" => crate::commands::launch::copilot_desktop::binary().is_ok(),
         _ => false,
     }

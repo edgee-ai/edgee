@@ -27,7 +27,7 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 /// Canonical relay targets (same public names as `edgee launch`). See
 /// `src/commands/launch/README.md` for naming rules.
 const TARGETS: &[&str] =
-    &["claude", "claude-desktop", "codex", "copilot-desktop", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
+    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
@@ -45,6 +45,7 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
         // user's real GitHub OAuth session; see `is_copilot_cli`.
         "copilot-cli" => Some("copilot-cli"),
         "copilot-desktop" => Some("copilot-desktop"),
+        "intellij" => Some("intellij"),
         // GitHub Copilot in VS Code — canonical name is `copilot-vscode`.
         "copilot-vscode" | "vscode-copilot" | "vscode" | "code" => Some("copilot-vscode"),
         _ => None,
@@ -54,6 +55,11 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
 /// True for the GitHub Copilot (VS Code) relay target (launches the `code` binary).
 fn is_copilot_vscode(agent: &str) -> bool {
     agent == "copilot-vscode"
+}
+
+/// True for IntelliJ IDEA hosting the GitHub Copilot plugin.
+fn is_intellij(agent: &str) -> bool {
+    agent == "intellij"
 }
 
 /// True for the standalone GitHub Copilot app.
@@ -76,7 +82,7 @@ fn is_opencode(agent: &str) -> bool {
 /// Whether this relay target can produce GitHub Copilot traffic. OpenCode is
 /// included because Copilot may be selected in the user's existing config.
 fn intercepts_copilot_hosts(agent: &str) -> bool {
-    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_copilot_vscode(agent) || is_opencode(agent)
+    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_intellij(agent) || is_copilot_vscode(agent) || is_opencode(agent)
 }
 
 /// True for the Cursor relay target (launches the `cursor` binary).
@@ -94,7 +100,7 @@ fn is_claude_desktop(agent: &str) -> bool {
 /// announce per-request), and the gateway forwards to the editor's own backend
 /// rather than routing through an Edgee provider pipeline.
 fn is_gui_editor(agent: &str) -> bool {
-    is_copilot_vscode(agent) || is_cursor(agent)
+    is_copilot_vscode(agent) || is_intellij(agent) || is_cursor(agent)
 }
 
 /// Whether requests retain the agent's existing provider credentials and must
@@ -108,6 +114,8 @@ fn uses_upstream_credentials(agent: &str) -> bool {
 fn editor_app_name(agent: &str) -> &'static str {
     if is_cursor(agent) {
         "Cursor"
+    } else if is_intellij(agent) {
+        "IntelliJ IDEA"
     } else {
         "VS Code"
     }
@@ -159,7 +167,7 @@ fn macos_cli_path_hint(agent: &str) -> Option<&'static [&'static str]> {
 fn key_provider(target: &str) -> &str {
     match target {
         // Copilot surfaces share one provider key and retain GitHub credentials.
-        "copilot-cli" | "copilot-vscode" | "copilot-desktop" => "copilot",
+        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" => "copilot",
         // Claude Desktop is a dedicated backend agent with its own key/compression
         // (coding_assistant `claude_desktop`), so it maps to its own provider slot
         // rather than sharing the `claude` (Claude Code) key.
@@ -171,7 +179,7 @@ fn key_provider(target: &str) -> &str {
 }
 
 setup_command! {
-    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|copilot-vscode|cursor|opencode).
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|copilot-vscode|cursor|opencode).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
@@ -179,7 +187,7 @@ setup_command! {
     #[arg(long)]
     pub no_launch: bool,
     /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200,
-    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600) so multiple relays can
+    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700) so multiple relays can
     /// run side by side.
     #[arg(long)]
     pub port: Option<u16>,
@@ -289,7 +297,7 @@ pub async fn run(opts: Options) -> Result<()> {
     };
     let ca = build_ca(&cert_pem, &key_pem)?;
     let port = opts.port.unwrap_or_else(|| {
-        if is_copilot_desktop(&agent) { 41600 } else { default_port(&provider) }
+        if is_copilot_desktop(&agent) { 41600 } else if is_intellij(&agent) { 41700 } else { default_port(&provider) }
     });
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
@@ -360,7 +368,7 @@ pub async fn run(opts: Options) -> Result<()> {
         // leave the terminal free, so their Ctrl-C really does reach us as SIGINT
         // (TUI agents keep the terminal in raw mode and swallow it themselves).
         let mut interrupt = std::pin::pin!(shutdown_signal());
-        let mut editor = std::pin::pin!(run_agent(&agent, port, &cert_path, &session_id, &org_slug, &[]));
+        let mut editor = std::pin::pin!(run_agent(&agent, port, &cert_path, &session_id, &org_slug, &opts.extra_args));
         let exited = tokio::select! {
             res = &mut editor => Some(res?),
             _ = &mut interrupt => None,
@@ -1071,7 +1079,11 @@ fn spawn_agent(
     // NODE_EXTRA_CA_CERTS *and* the --ignore-certificate-errors* switches when
     // passed via argv), so the relay CA must be trusted in the keychain — handled
     // in the System keychain by `ensure_ca_trusted` in `run`.
-    let mut cmd = if is_copilot_desktop(agent) {
+    let mut cmd = if is_intellij(agent) {
+        let mut c = tokio::process::Command::new(crate::commands::launch::intellij::binary()?);
+        c.args(extra_args).stdin(std::process::Stdio::null());
+        c
+    } else if is_copilot_desktop(agent) {
         let mut c = tokio::process::Command::new(crate::commands::launch::copilot_desktop::binary()?);
         c.args(extra_args)
             .stdin(std::process::Stdio::null())
@@ -1301,6 +1313,14 @@ fn print_claude_desktop_hint() {
 
 fn print_gui_editor_hint(agent: &str) {
     let app = editor_app_name(agent);
+    if is_intellij(agent) {
+        println!("Launching IntelliJ IDEA with Copilot through Edgee.");
+        println!("Quit all IntelliJ IDEA windows first so Copilot receives the connection settings.");
+        println!("Install and sign in to the GitHub Copilot plugin. Usage is grouped under Copilot.");
+        println!("IDE HTTP Proxy settings override the launch environment; use No proxy there to use Edgee.");
+        println!("Keep this command running, and quit IntelliJ IDEA before stopping it with Ctrl-C.");
+        return;
+    }
     let (cli, launch, feature) = if is_cursor(agent) {
         ("cursor", "cursor --wait", "Cursor AI")
     } else {
@@ -1344,7 +1364,7 @@ fn print_relay_still_serving(addr: &SocketAddr, agent: &str) {
     println!(
         "{}",
         style(format!(
-            "{app} window closed — relay still serving on http://{addr}"
+            "{app} launcher exited — relay still serving on http://{addr}"
         ))
         .bold()
     );
@@ -1381,6 +1401,17 @@ fn print_external_help(addr: &SocketAddr, cert_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intellij_uses_copilot_subscription_and_editor_lifecycle() {
+        assert_eq!(canonicalize_target("intellij"), Some("intellij"));
+        assert_eq!(key_provider("intellij"), "copilot");
+        assert!(uses_upstream_credentials("intellij"));
+        assert!(intercepts_copilot_hosts("intellij"));
+        assert!(is_gui_editor("intellij"));
+        assert_eq!(editor_app_name("intellij"), "IntelliJ IDEA");
+        assert!(!is_copilot_vscode("intellij"));
+    }
 
     #[test]
     fn copilot_desktop_preserves_subscription_and_intercepts_copilot_hosts() {
