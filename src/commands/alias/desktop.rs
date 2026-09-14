@@ -322,15 +322,7 @@ fn windows_cursor_exe() -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn windows_claude_exe() -> Option<PathBuf> {
-    // Mirror the launch-side resolver in `commands::relay` so detection and launch
-    // agree: per-user (LOCALAPPDATA) and machine-wide (PROGRAMFILES) installs both.
-    let candidates = [
-        std::env::var_os("LOCALAPPDATA")
-            .map(|a| PathBuf::from(a).join("AnthropicClaude").join("claude.exe")),
-        std::env::var_os("PROGRAMFILES")
-            .map(|a| PathBuf::from(a).join("Claude").join("claude.exe")),
-    ];
-    candidates.into_iter().flatten().find(|p| p.is_file())
+    crate::commands::launch::claude_desktop::windows_binary()
 }
 
 #[cfg(target_os = "windows")]

@@ -21,6 +21,9 @@
 //! Structurally identical to [`super::codex_desktop`]: both vendors' chat clients talk
 //! to the consumer web backend rather than the API host the gateway knows.
 
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
+
 use anyhow::Result;
 
 #[derive(Debug, clap::Parser)]
@@ -28,4 +31,60 @@ pub struct Options {}
 
 pub async fn run(_opts: Options) -> Result<()> {
     crate::commands::relay::run_for_agent("claude-desktop").await
+}
+
+/// Shared by the relay launcher and desktop-alias detection.
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_binary() -> Option<PathBuf> {
+    let candidates = [
+        std::env::var_os("LOCALAPPDATA")
+            .map(|a| PathBuf::from(a).join("AnthropicClaude").join("claude.exe")),
+        std::env::var_os("PROGRAMFILES")
+            .map(|a| PathBuf::from(a).join("Claude").join("claude.exe")),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|p| p.is_file())
+        .or_else(windows_msix_binary)
+}
+
+/// Ask Windows for the current user's registered package and its manifest's
+/// executable, avoiding hardcoded versions or enumerating protected WindowsApps.
+/// This only resolves the path; the relay still launches the executable directly.
+#[cfg(target_os = "windows")]
+fn windows_msix_binary() -> Option<PathBuf> {
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Get-AppxPackage -Name Claude | Sort-Object -Property Version -Descending | ForEach-Object {
+    $package = $_
+    $manifest = Get-AppxPackageManifest -Package $package.PackageFullName
+    foreach ($app in $manifest.Package.Applications.Application) {
+        $executable = [string]$app.Executable
+        if ($executable -and [System.IO.Path]::GetFileName($executable) -ieq 'claude.exe') {
+            Join-Path -Path $package.InstallLocation -ChildPath $executable
+        }
+    }
+}
+"#,
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
 }

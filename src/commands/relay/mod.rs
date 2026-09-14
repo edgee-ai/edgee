@@ -1168,17 +1168,7 @@ fn claude_desktop_binary() -> Result<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        let candidates = [
-            std::env::var_os("LOCALAPPDATA")
-                .map(|a| PathBuf::from(a).join("AnthropicClaude").join("claude.exe")),
-            std::env::var_os("PROGRAMFILES")
-                .map(|a| PathBuf::from(a).join("Claude").join("claude.exe")),
-        ];
-        candidates
-            .into_iter()
-            .flatten()
-            .find(|p| p.exists())
-            .ok_or_else(|| {
+        crate::commands::launch::claude_desktop::windows_binary().ok_or_else(|| {
                 anyhow::anyhow!(
                     "Claude Desktop not found. Install it from https://claude.ai/download."
                 )
