@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use console::style;
 
-use desktop::{AppSpec, ALL_APPS, CLAUDE_DESKTOP_APP, COPILOT_VSCODE_APP, CURSOR_APP};
+use desktop::{AppSpec, ALL_APPS, CLAUDE_DESKTOP_APP, COPILOT_DESKTOP_APP, COPILOT_VSCODE_APP, CURSOR_APP};
 
 const MARKER_START: &str = "# >>> edgee launch aliases >>>";
 const MARKER_END: &str = "# <<< edgee launch aliases <<<";
@@ -76,6 +76,8 @@ pub enum Agent {
     /// Claude Desktop app wrapper (requires Claude Desktop installed)
     #[value(name = "claude-desktop")]
     ClaudeDesktop,
+    #[value(name = "copilot-desktop")]
+    CopilotDesktop,
     All,
 }
 
@@ -92,7 +94,7 @@ impl Agent {
             Self::Omp => std::slice::from_ref(&OMP_ALIAS),
             Self::Kimi => std::slice::from_ref(&KIMI_ALIAS),
             Self::Kilo => std::slice::from_ref(&KILO_ALIAS),
-            Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop => &[],
+            Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop | Self::CopilotDesktop => &[],
             Self::All => &ALL_ALIASES,
         }
     }
@@ -103,6 +105,7 @@ impl Agent {
             Self::Cursor => std::slice::from_ref(&CURSOR_APP),
             Self::CopilotVscode => std::slice::from_ref(&COPILOT_VSCODE_APP),
             Self::ClaudeDesktop => std::slice::from_ref(&CLAUDE_DESKTOP_APP),
+            Self::CopilotDesktop => std::slice::from_ref(&COPILOT_DESKTOP_APP),
             Self::All => ALL_APPS,
             _ => &[],
         }
@@ -122,8 +125,9 @@ impl Agent {
             Self::Cursor => "cursor",
             Self::CopilotVscode => "copilot-vscode",
             Self::ClaudeDesktop => "claude-desktop",
+            Self::CopilotDesktop => "copilot-desktop",
             Self::All => {
-                "claude, codebuddy, codex, opencode, crush, pi, omp, kimi, kilo, cursor, copilot-vscode, and claude-desktop"
+                "claude, codebuddy, codex, opencode, crush, pi, omp, kimi, kilo, cursor, copilot-vscode, copilot-desktop, and claude-desktop"
             }
         }
     }

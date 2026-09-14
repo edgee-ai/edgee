@@ -10,6 +10,7 @@ pub mod codebuddy;
 pub mod codex;
 pub mod codex_desktop;
 pub mod copilot_cli;
+pub mod copilot_desktop;
 pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
@@ -57,6 +58,9 @@ enum Command {
     /// GitHub Copilot in VS Code
     #[command(name = "copilot-vscode", alias = "vscode-copilot")]
     CopilotVscode(copilot_vscode::Options),
+    /// GitHub Copilot desktop app (macOS)
+    #[command(name = "copilot-desktop")]
+    CopilotDesktop(copilot_desktop::Options),
     /// Claude Desktop app
     #[command(name = "claude-desktop")]
     ClaudeDesktop(claude_desktop::Options),
@@ -83,6 +87,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Kimi(o) => kimi::run(o).await,
         Command::Kilo(o) => kilo::run(o).await,
         Command::CopilotCli(o) => copilot_cli::run(o).await,
+        Command::CopilotDesktop(o) => copilot_desktop::run(o).await,
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o).await,
         Command::ClaudeDesktop(o) => claude_desktop::run(o).await,
@@ -371,6 +376,21 @@ mod tests {
             claude_args(&["edgee", "launch", "claude", "--", "-p", "my prompt"]),
             ["-p", "my prompt"],
         );
+    }
+
+    #[test]
+    fn copilot_desktop_preserves_app_arguments() {
+        let opts = crate::Options::try_parse_from([
+            "edgee", "launch", "copilot-desktop", "-p", "project", "--help",
+        ]).expect("parses");
+        assert!(opts.profile.is_none());
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::CopilotDesktop(c) => assert_eq!(c.args, ["-p", "project", "--help"]),
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong command: {other:?}"),
+        }
     }
 
     fn copilot_cli_args(argv: &[&str]) -> Vec<String> {

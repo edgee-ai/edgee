@@ -34,7 +34,7 @@ Every launch target uses exactly one of three transports. Nothing else exists in
 | --- | --- | --- | --- |
 | **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi`, `kilo` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
 | **B. Config-file patch** | Writes a provider block into the app's own config file — additive and persistent for `pi`/`omp`, temporary and reverted for `codex-desktop` | `pi`, `omp`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
-| **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `cursor`, `copilot-vscode`, `claude-desktop` | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
+| **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop` | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
 
 Transport A covers the products that drive most enterprise coding-agent spend. Transport C is the
 compatibility path for GUI apps that expose no configuration surface at all.
@@ -686,3 +686,36 @@ Three structural mitigations are already in the codebase. Every target degrades 
 endpoint rather than failing closed. The launch catalogue is deliberately wide, so no single vendor
 decision removes the product. And `src/commands/launch/README.md` treats target names as long-lived
 public API, so integrations can be swapped underneath without breaking user aliases.
+
+### GitHub Copilot app (`edgee launch copilot-desktop`)
+
+[Launch module](../src/commands/launch/copilot_desktop.rs). macOS local sessions only.
+The app binary is launched directly with:
+
+```text
+HTTPS_PROXY=http://127.0.0.1:41600
+HTTP_PROXY=http://127.0.0.1:41600
+https_proxy=http://127.0.0.1:41600
+http_proxy=http://127.0.0.1:41600
+NO_PROXY=localhost,127.0.0.1,::1 (plus existing exclusions)
+no_proxy=<same exclusions>
+NODE_EXTRA_CA_CERTS=~/.local/share/edgee/ca/edgee-ca.pem
+```
+
+This redirects an agent the user already authenticated with GitHub Copilot. It preserves
+subscription credentials and shares the `copilot` key with the CLI and VS Code.
+The bundled runtime inherits the proxy and CA; no system certificate installation is needed.
+App exit stops the relay, and Ctrl-C closes the app before stopping the relay.
+
+[GitHub app](https://github.com/features/ai/github-app) documents subscription and BYOK
+options. The app's inheritance of proxy variables is an observed behavior, not a published
+app configuration contract: verified with 1.1.20 / bundled CLI 1.0.84-5 on 2026-09-14,
+including native `/responses`, a successful `bash` tool call and follow-up model response.
+[Node documents NODE_EXTRA_CA_CERTS](https://nodejs.org/api/cli.html#node_extra_ca_certsfile).
+The shipped app ignores `COPILOT_CLI_PATH`; BYOK would replace subscription billing.
+
+| Target | Skills | Subagents | Hooks | MCP servers |
+| --- | --- | --- | --- | --- |
+| `copilot-desktop` | Unsupported: delivery unverified | Unsupported: delivery unverified | Unsupported: delivery unverified | Unsupported: delivery unverified |
+
+Remote/cloud sessions and Windows/Linux desktop launching remain outside this integration.
