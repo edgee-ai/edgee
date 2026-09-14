@@ -104,6 +104,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 |---|---|---|---|
 | `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
+| `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + Node CA, no system trust |
 | `copilot-cli` | GitHub Copilot CLI | `copilot` | Relays the `copilot` binary directly (TUI, no `--wait`) — deliberately not env-injected; see below |
 | `claude-desktop` | Claude Desktop (**Claude Code only**) | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code). Routes `api.anthropic.com/v1/messages`; the app's own chat goes to `claude.ai` and is not covered — see below |
 | `codex-desktop` | ChatGPT desktop app (**Codex tab only**) | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched, and the file is restored when the app quits. See below. |
@@ -488,3 +489,20 @@ which the BYOK lever cannot do.
 - One subcommand with many surface flags (`--desktop`, `--vscode`, `--cli`).
 - Forcing launch target name == provider key when multiple surfaces share billing/pipeline.
 - Taking the bare product name for a non-CLI surface when a CLI is planned (`copilot` for VS Code).
+
+## `copilot-desktop` — local app sessions through the Copilot relay
+
+macOS app 1.1.20 ships Copilot CLI 1.0.84-5. Launch
+`GitHub Copilot.app/Contents/MacOS/github` directly so proxy env and
+`NODE_EXTRA_CA_CERTS` reach that runtime. Native `/responses` traffic and a `bash`
+tool round trip were verified on 2026-09-14. The released app explicitly ignores
+`COPILOT_CLI_PATH`; BYOK replaces the user's subscription, so neither is used.
+
+This surface shares the established `copilot` key, settings and metering, as do
+`copilot-cli` and `copilot-vscode`. No new backend slug or gateway strategy is needed
+for this launcher. Its default port is 41600. App exit stops the relay; Ctrl-C closes
+the app before stopping the relay. Quit an existing app first to avoid singleton handoff.
+
+Remote/cloud runtimes do not inherit local proxy settings. Plugin delivery remains
+unverified for all four component kinds and is reported as unsupported. Windows/Linux
+app paths and transport remain unverified; this launch target currently supports macOS only.

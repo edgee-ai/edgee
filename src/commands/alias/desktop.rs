@@ -46,7 +46,14 @@ pub const CLAUDE_DESKTOP_APP: AppSpec = AppSpec {
     launch_target: "claude-desktop",
 };
 
-pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, COPILOT_VSCODE_APP, CLAUDE_DESKTOP_APP];
+pub const COPILOT_DESKTOP_APP: AppSpec = AppSpec {
+    id: "copilot-desktop",
+    display_name: "GitHub Copilot (Edgee)",
+    host_label: "GitHub Copilot",
+    launch_target: "copilot-desktop",
+};
+
+pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, COPILOT_VSCODE_APP, CLAUDE_DESKTOP_APP, COPILOT_DESKTOP_APP];
 
 #[derive(Clone, Copy)]
 pub enum Action {
@@ -193,6 +200,7 @@ pub fn target_app_installed(app: &AppSpec) -> bool {
         "cursor" => cursor_installed(),
         "copilot-vscode" => vscode_installed(),
         "claude-desktop" => claude_desktop_installed(),
+        "copilot-desktop" => crate::commands::launch::copilot_desktop::binary().is_ok(),
         _ => false,
     }
 }
@@ -444,10 +452,11 @@ fn macos_source_icns(app: &AppSpec) -> Option<PathBuf> {
         "copilot-vscode" => find_macos_app("Visual Studio Code.app")
             .or_else(|| find_macos_app("Code - Insiders.app"))?,
         "claude-desktop" => find_macos_app("Claude.app")?,
+        "copilot-desktop" => find_macos_app("GitHub Copilot.app")?,
         _ => return None,
     };
     let resources = bundle.join("Contents/Resources");
-    for name in ["Cursor.icns", "Code.icns", "Claude.icns", "app.icns", "electron.icns"] {
+    for name in ["Cursor.icns", "Code.icns", "Claude.icns", "app.icns", "electron.icns", "icon.icns"] {
         let p = resources.join(name);
         if p.is_file() {
             return Some(p);
