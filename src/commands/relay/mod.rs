@@ -27,7 +27,7 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 /// Canonical relay targets (same public names as `edgee launch`). See
 /// `src/commands/launch/README.md` for naming rules.
 const TARGETS: &[&str] =
-    &["claude", "claude-desktop", "codex", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
+    &["claude", "claude-desktop", "codex", "copilot-desktop", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
@@ -44,6 +44,7 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
         // GitHub Copilot CLI — relayed (not env-injected) so it keeps using the
         // user's real GitHub OAuth session; see `is_copilot_cli`.
         "copilot-cli" => Some("copilot-cli"),
+        "copilot-desktop" => Some("copilot-desktop"),
         // GitHub Copilot in VS Code — canonical name is `copilot-vscode`.
         "copilot-vscode" | "vscode-copilot" | "vscode" | "code" => Some("copilot-vscode"),
         _ => None,
@@ -55,8 +56,12 @@ fn is_copilot_vscode(agent: &str) -> bool {
     agent == "copilot-vscode"
 }
 
-/// True for the GitHub Copilot CLI relay target (launches the `copilot` binary
-/// directly, TUI-style — no `--wait` window to wait on).
+/// True for the standalone GitHub Copilot app.
+fn is_copilot_desktop(agent: &str) -> bool {
+    agent == "copilot-desktop"
+}
+
+/// True for the Copilot CLI, launched directly without a GUI window.
 fn is_copilot_cli(agent: &str) -> bool {
     agent == "copilot-cli"
 }
@@ -71,7 +76,7 @@ fn is_opencode(agent: &str) -> bool {
 /// Whether this relay target can produce GitHub Copilot traffic. OpenCode is
 /// included because Copilot may be selected in the user's existing config.
 fn intercepts_copilot_hosts(agent: &str) -> bool {
-    is_copilot_cli(agent) || is_copilot_vscode(agent) || is_opencode(agent)
+    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_copilot_vscode(agent) || is_opencode(agent)
 }
 
 /// True for the Cursor relay target (launches the `cursor` binary).
@@ -95,7 +100,7 @@ fn is_gui_editor(agent: &str) -> bool {
 /// Whether requests retain the agent's existing provider credentials and must
 /// be forwarded to their original upstream by the gateway.
 fn uses_upstream_credentials(agent: &str) -> bool {
-    is_gui_editor(agent) || is_copilot_cli(agent) || is_opencode(agent)
+    is_gui_editor(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent) || is_opencode(agent)
 }
 
 /// Display name of the GUI editor behind a relay target, for user-facing messages.
@@ -153,9 +158,8 @@ fn macos_cli_path_hint(agent: &str) -> Option<&'static [&'static str]> {
 /// (e.g. `copilot-vscode` → `copilot`).
 fn key_provider(target: &str) -> &str {
     match target {
-        // Copilot CLI and Copilot-in-VS-Code share one provider key/pipeline —
-        // both are passthrough surfaces of the same GitHub Copilot backend.
-        "copilot-cli" | "copilot-vscode" => "copilot",
+        // Copilot surfaces share one provider key and retain GitHub credentials.
+        "copilot-cli" | "copilot-vscode" | "copilot-desktop" => "copilot",
         // Claude Desktop is a dedicated backend agent with its own key/compression
         // (coding_assistant `claude_desktop`), so it maps to its own provider slot
         // rather than sharing the `claude` (Claude Code) key.
@@ -167,7 +171,7 @@ fn key_provider(target: &str) -> &str {
 }
 
 setup_command! {
-    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-vscode|cursor|opencode).
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|copilot-vscode|cursor|opencode).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
@@ -175,7 +179,7 @@ setup_command! {
     #[arg(long)]
     pub no_launch: bool,
     /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200,
-    /// cursor 41300, claude-desktop 41400, opencode 41500) so multiple relays can
+    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600) so multiple relays can
     /// run side by side.
     #[arg(long)]
     pub port: Option<u16>,
@@ -284,7 +288,9 @@ pub async fn run(opts: Options) -> Result<()> {
         ensure_ca()?
     };
     let ca = build_ca(&cert_pem, &key_pem)?;
-    let port = opts.port.unwrap_or_else(|| default_port(&provider));
+    let port = opts.port.unwrap_or_else(|| {
+        if is_copilot_desktop(&agent) { 41600 } else { default_port(&provider) }
+    });
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
     // Logging is opt-in: enabled only when a log file is given.
@@ -377,18 +383,27 @@ pub async fn run(opts: Options) -> Result<()> {
             // Ctrl-C during the session — stop everything.
             None => task.abort(),
         }
-    } else if is_claude_desktop(&agent) {
-        // Claude Desktop is a GUI app we spawn and must tear down ourselves (it
-        // can't recover once the proxy dies), so — unlike the TUI agents below —
+    } else if is_claude_desktop(&agent) || is_copilot_desktop(&agent) {
+        // Desktop apps must close before their proxy stops (they
+        // cannot recover once the proxy dies), so — unlike the TUI agents below —
         // we race its exit against Ctrl-C and kill it explicitly.
-        print_claude_desktop_hint();
+        if is_claude_desktop(&agent) {
+            print_claude_desktop_hint();
+        } else {
+            println!("Launching GitHub Copilot app through Edgee. Quit any existing Copilot app first.");
+            println!("Local sessions use your Copilot subscription; remote sessions are not routed.");
+            println!("Usage is grouped under Copilot. Edgee plugin delivery is not yet supported for this app.");
+            println!("Keep this command running. Ctrl-C closes the app and stops its connection.");
+        }
         // Claude Desktop (Chromium) verifies API certs against the macOS system
         // trust store — it ignores NODE_EXTRA_CA_CERTS and the --ignore-certificate-*
         // switches. Trust our CA there once; it's name-constrained to anthropic.com,
         // so a persistent trust root can MITM nothing else. Idempotent, so only the
         // first launch prompts (`--untrust` removes it).
-        ensure_ca_trusted(&cert_path)?;
-        let mut agent_child = spawn_agent(&agent, port, &cert_path, &session_id, &org_slug, &[])?;
+        if is_claude_desktop(&agent) {
+            ensure_ca_trusted(&cert_path)?;
+        }
+        let mut agent_child = spawn_agent(&agent, port, &cert_path, &session_id, &org_slug, &opts.extra_args)?;
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
@@ -424,19 +439,14 @@ pub async fn run(opts: Options) -> Result<()> {
         // with success — leaving that existing instance running WITHOUT the proxy.
         // Detect the near-instant success exit and tell the user, instead of exiting
         // 0 as if the relay were live.
-        if is_claude_desktop(&agent)
-            && status.success()
+        if status.success()
             && started.elapsed() < std::time::Duration::from_millis(1500)
         {
             eprintln!(
                 "{}",
-                style(
-                    "Claude Desktop was already running, so this launch handed off to the \
-                     existing instance — which is NOT behind the relay. Quit Claude \
-                     completely (Cmd-Q / right-click the tray icon → Quit), then re-run \
-                     `edgee launch claude-desktop`."
-                )
-                .yellow()
+                style(format!(
+                    "App exited immediately; an existing instance may already be running. Quit the app completely, then rerun `edgee launch {agent}`."
+                )).yellow()
             );
             std::process::exit(1);
         }
@@ -1061,7 +1071,14 @@ fn spawn_agent(
     // NODE_EXTRA_CA_CERTS *and* the --ignore-certificate-errors* switches when
     // passed via argv), so the relay CA must be trusted in the keychain — handled
     // in the System keychain by `ensure_ca_trusted` in `run`.
-    let mut cmd = if is_claude_desktop(agent) {
+    let mut cmd = if is_copilot_desktop(agent) {
+        let mut c = tokio::process::Command::new(crate::commands::launch::copilot_desktop::binary()?);
+        c.args(extra_args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        c
+    } else if is_claude_desktop(agent) {
         let bin = claude_desktop_binary()?;
         let mut c = tokio::process::Command::new(bin);
         c.arg(format!("--proxy-server={proxy_url}"));
@@ -1364,6 +1381,16 @@ fn print_external_help(addr: &SocketAddr, cert_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copilot_desktop_preserves_subscription_and_intercepts_copilot_hosts() {
+        assert_eq!(canonicalize_target("copilot-desktop"), Some("copilot-desktop"));
+        assert_eq!(key_provider("copilot-desktop"), "copilot");
+        assert!(uses_upstream_credentials("copilot-desktop"));
+        assert!(intercepts_copilot_hosts("copilot-desktop"));
+        assert!(!is_gui_editor("copilot-desktop"));
+        assert!(!is_claude_desktop("copilot-desktop"));
+    }
 
     #[test]
     fn parses_default_gateway() {

@@ -9,9 +9,8 @@
 //! file, and never into a git working tree. A kind that cannot be redirected is
 //! reported as not delivered — it is not worked around.
 
-/// A coding agent that plugins can be delivered to. Cursor and Copilot are
-/// absent on purpose: they are GUI apps reached through the relay, never spawned
-/// by the CLI, so there is no launch to attach a plugin directory to.
+/// A coding agent represented in the plugin delivery matrix. Relay launchers
+/// need a verified runtime configuration mechanism before delivery can be enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     Claude,
@@ -21,6 +20,7 @@ pub enum Target {
     Codebuddy,
     Pi,
     Omp,
+    CopilotDesktop,
 }
 
 impl Target {
@@ -33,6 +33,7 @@ impl Target {
             Target::Codebuddy => "codebuddy",
             Target::Pi => "pi",
             Target::Omp => "omp",
+            Target::CopilotDesktop => "copilot-desktop",
         }
     }
 
@@ -47,11 +48,15 @@ impl Target {
     pub fn layout(self) -> Layout {
         match self {
             Target::Claude | Target::Codebuddy | Target::Omp => Layout::Bundle,
-            Target::Codex | Target::Opencode | Target::Crush | Target::Pi => Layout::Flat,
+            Target::Codex
+            | Target::Opencode
+            | Target::Crush
+            | Target::Pi
+            | Target::CopilotDesktop => Layout::Flat,
         }
     }
 
-    pub const ALL: [Target; 7] = [
+    pub const ALL: [Target; 8] = [
         Target::Claude,
         Target::Codex,
         Target::Opencode,
@@ -59,6 +64,7 @@ impl Target {
         Target::Codebuddy,
         Target::Pi,
         Target::Omp,
+        Target::CopilotDesktop,
     ];
 }
 
@@ -163,6 +169,7 @@ const UNVERIFIED: Delivery = Delivery::Unsupported {
 pub fn delivery(target: Target, kind: Kind) -> Delivery {
     match target {
         Target::Claude => PLUGIN_DIR,
+        Target::CopilotDesktop => UNVERIFIED,
 
         // OpenCode's config schema has `skills.paths`, `agent` and `mcp`, but no
         // `hooks` key anywhere — its event extensibility is the JS `plugin`

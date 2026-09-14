@@ -121,6 +121,7 @@ edgee launch copilot-vscode
 
 # GitHub Copilot CLI
 edgee launch copilot-cli
+edgee launch copilot-desktop  # GitHub Copilot app (macOS)
 
 # Claude Desktop (app)
 edgee launch claude-desktop
@@ -174,6 +175,7 @@ edgee alias                 # CLI shims + desktop wrappers (when the app is inst
 edgee alias claude          # one CLI agent
 edgee alias cursor          # Cursor.app wrapper (skipped if Cursor is not installed)
 edgee alias copilot-vscode  # VS Code wrapper (skipped if VS Code is not installed)
+edgee alias copilot-desktop # GitHub Copilot app wrapper (macOS)
 edgee alias claude-desktop  # Claude Desktop wrapper (skipped if Claude Desktop is not installed)
 edgee alias remove          # undo
 ```
@@ -181,7 +183,7 @@ edgee alias remove          # undo
 This covers two kinds of targets:
 
 1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`, `pi`, `omp`, `kimi`, `kilo`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
-2. **Apps** (`cursor`, `copilot-vscode`, `claude-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
+2. **Apps** (`cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
 
 ### Check savings
 
@@ -327,6 +329,7 @@ and stays silent otherwise.
 | Kilo Code (CLI) | `edgee launch kilo` | ✅ Supported |
 | Cursor (app) | `edgee launch cursor` | ✅ Supported |
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
+| GitHub Copilot app (macOS, local sessions) | `edgee launch copilot-desktop` | ✅ Supported |
 | GitHub Copilot CLI | `edgee launch copilot-cli` | ✅ Supported |
 | Claude Desktop (Claude Code) | `edgee launch claude-desktop` | ✅ Supported |
 | ChatGPT desktop app (Codex tab) | `edgee launch codex-desktop` | ✅ Supported |
@@ -415,3 +418,16 @@ text. For bigger changes, open an issue first so we can align before you build.
 Edgee is built by Edgee Cloud SAS (Paris) and Edgee Corporation (Delaware). Edgee is SOC 2
 and GDPR compliant, supports BYOK, and is available on-premise. Talk to us at
 [edgee.ai](https://www.edgee.ai).
+
+### GitHub Copilot app
+
+Quit GitHub Copilot completely, then run `edgee launch copilot-desktop` on macOS.
+Edgee launches the installed app with its connection configured and keeps that connection
+alive until the app quits. Ctrl-C closes the launched app before stopping the connection.
+`edgee alias copilot-desktop` installs a **GitHub Copilot (Edgee)** desktop wrapper.
+
+Local sessions retain your GitHub Copilot subscription and are metered under **Copilot**,
+sharing `edgee settings copilot` with the CLI and VS Code. Remote/cloud sessions are not
+covered. Edgee plugin delivery and Windows/Linux desktop launch are not yet supported.
+Install the app from https://github.com/features/ai/github-app into `/Applications` or
+`~/Applications`. Verified with app 1.1.20, including a tool call and follow-up response.
