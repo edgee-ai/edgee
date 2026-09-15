@@ -175,13 +175,13 @@ fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
     };
 
     let mut line = format!(
-        "{prefix}{PURPLE}三 Edgee{RESET}  {DIM}in {}  cache-read {}  cache-write {}  out {}  reasoning {}  ${:.4}  {} reqs{RESET}",
+        "{prefix}{PURPLE}三 Edgee{RESET}  {DIM}in {}  cache-read {}  cache-write {}  out {}  reasoning {}  ${}  {} reqs{RESET}",
         format_tokens(stats.total_input_tokens),
         format_tokens(stats.total_cached_input_tokens),
         format_tokens(stats.total_cache_creation_input_tokens),
         format_tokens(stats.total_output_tokens),
         format_tokens(stats.total_reasoning_output_tokens),
-        stats.total_cost as f64 / 1_000_000_000.0,
+        format_cost(stats.total_cost),
         stats.total_requests,
     );
 
@@ -202,17 +202,30 @@ fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
 }
 
 fn format_tokens(tokens: u64) -> String {
-    let digits = tokens.to_string();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
-
-    for (index, digit) in digits.chars().rev().enumerate() {
-        if index > 0 && index % 3 == 0 {
-            formatted.push(',');
+    for (scale, suffix) in [
+        (1_000_000_000_000_000_000, "E"),
+        (1_000_000_000_000_000, "P"),
+        (1_000_000_000_000, "T"),
+        (1_000_000_000, "G"),
+        (1_000_000, "M"),
+        (1_000, "k"),
+    ] {
+        if tokens >= scale {
+            return format!("{:.1}{suffix}", tokens as f64 / scale as f64);
         }
-        formatted.push(digit);
     }
+    tokens.to_string()
+}
 
-    formatted.chars().rev().collect()
+fn format_cost(nanodollars: u64) -> String {
+    let dollars = nanodollars as f64 / 1_000_000_000.0;
+    if nanodollars < 1_000_000_000 {
+        format!("{dollars:.2}")
+    } else if nanodollars < 10_000_000_000 {
+        format!("{dollars:.1}")
+    } else {
+        format!("{dollars:.0}")
+    }
 }
 
 #[cfg(test)]
@@ -228,6 +241,51 @@ mod tests {
     }
 
     #[test]
+    fn format_large_session_compactly() {
+        let stats = SessionSummary {
+            total_input_tokens: 24_127,
+            total_cached_input_tokens: 40_865_520,
+            total_cache_creation_input_tokens: 2_594_168,
+            total_output_tokens: 196_796,
+            total_reasoning_output_tokens: 113_765,
+            total_cost: 19_841_300_000,
+            total_requests: 571,
+            ..Default::default()
+        };
+        assert_eq!(
+            format_line("", Some(&stats)),
+            format!("{PURPLE}三 Edgee{RESET}  {DIM}in 24.1k  cache-read 40.9M  cache-write 2.6M  out 196.8k  reasoning 113.8k  $20  571 reqs{RESET}")
+        );
+    }
+
+    #[test]
+    fn format_token_magnitudes() {
+        for (tokens, expected) in [
+            (0, "0"),
+            (999, "999"),
+            (1_000, "1.0k"),
+            (1_000_000, "1.0M"),
+            (1_000_000_000, "1.0G"),
+        ] {
+            assert_eq!(format_tokens(tokens), expected);
+        }
+    }
+
+    #[test]
+    fn format_cost_precision_by_magnitude() {
+        for (nanodollars, expected) in [
+            (0, "0.00"),
+            (990_000_000, "0.99"),
+            (1_000_000_000, "1.0"),
+            (4_123_000_000, "4.1"),
+            (10_000_000_000, "10"),
+            (19_841_300_000, "20"),
+        ] {
+            assert_eq!(format_cost(nanodollars), expected);
+        }
+    }
+
+    #[test]
     fn format_includes_all_token_types_and_cost() {
         let stats = SessionSummary {
             total_input_tokens: 1_234,
@@ -240,12 +298,12 @@ mod tests {
             ..Default::default()
         };
         let s = format_line("", Some(&stats));
-        assert!(s.contains("in 1,234"));
-        assert!(s.contains("cache-read 2,345"));
+        assert!(s.contains("in 1.2k"));
+        assert!(s.contains("cache-read 2.3k"));
         assert!(s.contains("cache-write 345"));
         assert!(s.contains("out 678"));
         assert!(s.contains("reasoning 90"));
-        assert!(s.contains("$0.0123"));
+        assert!(s.contains("$0.01"));
         assert!(s.contains("12 reqs"));
         assert!(!s.contains("compression"));
         assert!(!s.contains("fallback"));
@@ -259,7 +317,7 @@ mod tests {
         assert!(s.contains("cache-write 0"));
         assert!(s.contains("out 0"));
         assert!(s.contains("reasoning 0"));
-        assert!(s.contains("$0.0000"));
+        assert!(s.contains("$0.00"));
         assert!(s.contains("0 reqs"));
     }
 
