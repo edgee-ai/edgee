@@ -231,6 +231,42 @@ fn build_edgee_provider(
     provider
 }
 
+/// The `mcp.edgee` entry registering Edgee's own session-tracking MCP
+/// server, same `opencode_mcp` shape `plugins/config.rs` already uses for
+/// third-party plugin servers (`"remote"` discriminant, `enabled: true`).
+fn build_edgee_mcp(token: &str) -> Value {
+    serde_json::json!({
+        "edgee": {
+            "type": "remote",
+            "url": crate::config::mcp_base_url(),
+            "enabled": true,
+            "headers": {
+                "Authorization": format!("Bearer {token}")
+            }
+        }
+    })
+}
+
+/// Appends `path` to `instructions`, OpenCode's top-level list of extra
+/// context files. Not nested under a parent object the way `skills.paths`
+/// is, so `push_path` doesn't fit — this is the top-level equivalent, local
+/// to this file.
+fn push_instructions_path(config: &mut Value, path: &str) {
+    let Some(obj) = config.as_object_mut() else {
+        return;
+    };
+    let list = obj
+        .entry("instructions")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Some(array) = list.as_array_mut() else {
+        return;
+    };
+    let entry = Value::String(path.to_string());
+    if !array.contains(&entry) {
+        array.push(entry);
+    }
+}
+
 pub async fn run(opts: Options) -> Result<()> {
     let mut creds = crate::config::read()?;
 
@@ -264,6 +300,17 @@ pub async fn run(opts: Options) -> Result<()> {
         crate::config::write(&creds)?;
     }
 
+    // Step 3b: fetch the org once and derive both the gateway URL and the MCP
+    // gate from it, rather than issue a second request later. Done before
+    // borrowing `creds.opencode` below since a positive gate re-reads `creds`.
+    let org = super::fetch_active_org(&creds).await;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
+    let mcp_disabled = super::mcp_injection_disabled_with_org(org.as_ref());
+    if !mcp_disabled {
+        crate::commands::auth::login::ensure_mcp_preference().await?;
+        creds = crate::config::read()?;
+    }
+
     // Step 4: build merged config from user's existing opencode.json + edgee provider
     let opencode = creds.opencode.as_ref().unwrap();
     let api_key = &opencode.api_key;
@@ -273,8 +320,6 @@ pub async fn run(opts: Options) -> Result<()> {
     // First-run: install the persistent user-level statusline integration
     // exactly once (Claude Code-targeted; honors the disable marker).
     util::ensure_first_run_installed().await;
-
-    let gateway_url = super::resolve_gateway_base_url(&creds).await;
 
     let mut config = find_user_config().unwrap_or_else(|| {
         serde_json::json!({
@@ -328,6 +373,32 @@ pub async fn run(opts: Options) -> Result<()> {
     }
     plugins::report_launch(&plugin_report);
 
+    let use_mcp = creds.enable_mcp.unwrap_or(false) && !mcp_disabled;
+    let mut instructions_path: Option<std::path::PathBuf> = None;
+    if use_mcp {
+        let token = creds.user_token.as_deref().unwrap_or("");
+        plugins::config::merge_object(&mut config, "mcp", build_edgee_mcp(token));
+
+        let repo_origin = crate::git::detect_origin();
+        let session_url = match creds.org_slug.as_deref() {
+            Some(slug) if !slug.is_empty() => {
+                format!(
+                    "{}/sessions/{slug}/{session_id}",
+                    crate::config::console_base_url()
+                )
+            }
+            _ => format!(
+                "{}/sessions/{session_id}",
+                crate::config::console_base_url()
+            ),
+        };
+        let text = super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
+        let path = std::env::temp_dir().join(format!("edgee-opencode-instructions-{session_id}.md"));
+        std::fs::write(&path, &text)?;
+        push_instructions_path(&mut config, &path.to_string_lossy());
+        instructions_path = Some(path);
+    }
+
     let config_content = serde_json::to_string_pretty(&config)?;
     let config_path =
         std::env::temp_dir().join(format!("edgee-opencode-config-{}.json", session_id));
@@ -352,6 +423,9 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // Clean up the temporary config file
     let _ = std::fs::remove_file(&config_path);
+    if let Some(path) = instructions_path {
+        let _ = std::fs::remove_file(path);
+    }
 
     super::print_session_stats(&creds, &session_id, "OpenCode").await;
 
@@ -563,5 +637,53 @@ mod tests {
         let cost = &provider["models"]["zai/glm-4.5-flash"]["cost"];
         assert_eq!(cost["input"], serde_json::json!(0.0));
         assert_eq!(cost["output"], serde_json::json!(0.0));
+    }
+
+    #[test]
+    fn edgee_mcp_uses_the_remote_discriminant() {
+        let mcp = build_edgee_mcp("tok");
+        assert_eq!(mcp["edgee"]["type"], serde_json::json!("remote"));
+        assert_eq!(mcp["edgee"]["enabled"], serde_json::json!(true));
+        assert_eq!(
+            mcp["edgee"]["headers"]["Authorization"],
+            serde_json::json!("Bearer tok")
+        );
+    }
+
+    #[test]
+    fn merging_edgee_mcp_preserves_plugin_mcp_entries() {
+        let mut config = serde_json::json!({
+            "mcp": { "house__remote": { "type": "remote", "url": "https://example.com/mcp" } }
+        });
+        plugins::config::merge_object(&mut config, "mcp", build_edgee_mcp("tok"));
+
+        assert_eq!(
+            config["mcp"]["house__remote"]["url"],
+            serde_json::json!("https://example.com/mcp")
+        );
+        assert_eq!(config["mcp"]["edgee"]["type"], serde_json::json!("remote"));
+    }
+
+    #[test]
+    fn push_instructions_path_creates_and_dedupes() {
+        let mut config = serde_json::json!({});
+        push_instructions_path(&mut config, "/tmp/edgee-instructions.md");
+        push_instructions_path(&mut config, "/tmp/edgee-instructions.md");
+
+        assert_eq!(
+            config["instructions"],
+            serde_json::json!(["/tmp/edgee-instructions.md"])
+        );
+    }
+
+    #[test]
+    fn push_instructions_path_preserves_existing_entries() {
+        let mut config = serde_json::json!({ "instructions": ["CONTRIBUTING.md"] });
+        push_instructions_path(&mut config, "/tmp/edgee-instructions.md");
+
+        assert_eq!(
+            config["instructions"],
+            serde_json::json!(["CONTRIBUTING.md", "/tmp/edgee-instructions.md"])
+        );
     }
 }
