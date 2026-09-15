@@ -122,6 +122,10 @@ pub async fn run(opts: Options) -> Result<()> {
     // exactly once (Claude Code-targeted; honors the disable marker).
     util::ensure_first_run_installed().await;
 
+    // First-run: install Kimi's own statusline integration exactly once
+    // (honors its own, separate disable marker).
+    util::ensure_kimi_first_run_installed().await;
+
     util::spawn_cli_version_report(&creds, &session_id);
 
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
