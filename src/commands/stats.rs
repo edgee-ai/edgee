@@ -59,6 +59,8 @@ struct Totals {
     input_tokens: u64,
     output_tokens: u64,
     cached_input_tokens: u64,
+    cache_creation_input_tokens: u64,
+    reasoning_output_tokens: u64,
     cost_usd: f64,
     token_cost_savings: u64,
     uncompressed_tools_tokens: u64,
@@ -100,6 +102,8 @@ fn compute_totals(logs: &[util::SessionLogEntry]) -> Totals {
         input_tokens: logs.iter().map(|e| e.stats.total_input_tokens).sum(),
         output_tokens: logs.iter().map(|e| e.stats.total_output_tokens).sum(),
         cached_input_tokens: logs.iter().map(|e| e.stats.total_cached_input_tokens).sum(),
+        cache_creation_input_tokens: logs.iter().map(|e| e.stats.total_cache_creation_input_tokens).sum(),
+        reasoning_output_tokens: logs.iter().map(|e| e.stats.total_reasoning_output_tokens).sum(),
         cost_usd: nano_usd_to_dollars(logs.iter().map(|e| e.stats.total_cost).sum()),
         token_cost_savings: logs.iter().map(|e| e.stats.total_token_cost_savings).sum(),
         uncompressed_tools_tokens: uncompressed,
@@ -158,6 +162,8 @@ fn stats_json_from_summary(
             input_tokens: summary.input_tokens,
             output_tokens: summary.output_tokens,
             cached_input_tokens: summary.cached_input_tokens,
+            cache_creation_input_tokens: summary.cache_creation_input_tokens,
+            reasoning_output_tokens: summary.reasoning_output_tokens,
             cost_usd: nano_usd_to_dollars(summary.total_cost),
             token_cost_savings: summary.token_cost_savings,
             uncompressed_tools_tokens: summary.uncompressed_tools_tokens,
@@ -355,6 +361,8 @@ mod tests {
             "input_tokens",
             "output_tokens",
             "cached_input_tokens",
+            "cache_creation_input_tokens",
+            "reasoning_output_tokens",
             "cost_usd",
             "token_cost_savings",
             "uncompressed_tools_tokens",
@@ -404,6 +412,8 @@ mod tests {
                 "error_requests": 3,
                 "input_tokens": 189000,
                 "cached_input_tokens": 3300000,
+                "cache_creation_input_tokens": 12000,
+                "reasoning_output_tokens": 7000,
                 "output_tokens": 34000,
                 "total_cost": 1250000000,
                 "token_cost_savings": 42,
@@ -428,6 +438,8 @@ mod tests {
         assert_eq!(v["totals"]["requests"], 241);
         assert_eq!(v["totals"]["errors"], 3);
         assert_eq!(v["totals"]["cached_input_tokens"], 3_300_000u64);
+        assert_eq!(v["totals"]["cache_creation_input_tokens"], 12000);
+        assert_eq!(v["totals"]["reasoning_output_tokens"], 7000);
         assert_eq!(v["totals"]["cost_usd"], 1.25);
         assert_eq!(v["totals"]["compression_pct"], 40); // (100-60)/100
         assert_eq!(v["recent"].as_array().unwrap().len(), 0);
