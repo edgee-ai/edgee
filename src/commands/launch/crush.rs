@@ -201,6 +201,41 @@ fn insert_edgee_provider(config: &mut Value, provider: Value) {
     }
 }
 
+/// The `mcp.edgee` entry registering Edgee's own session-tracking MCP
+/// server, same `crush_mcp_entry` shape `plugins/config.rs` already uses for
+/// third-party plugin servers.
+fn build_edgee_mcp(token: &str) -> Value {
+    serde_json::json!({
+        "edgee": {
+            "type": "http",
+            "url": crate::config::mcp_base_url(),
+            "headers": {
+                "Authorization": format!("Bearer {token}")
+            }
+        }
+    })
+}
+
+/// Appends `path` to `context_paths`, Crush's top-level list of context files
+/// to load alongside the auto-discovered `CRUSH.md`/`AGENTS.md`. Not nested
+/// under a parent object the way `options.skills_paths` is, so `push_path`
+/// doesn't fit — this is the top-level equivalent, local to this file.
+fn push_context_path(config: &mut Value, path: &str) {
+    let Some(obj) = config.as_object_mut() else {
+        return;
+    };
+    let list = obj
+        .entry("context_paths")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Some(array) = list.as_array_mut() else {
+        return;
+    };
+    let entry = Value::String(path.to_string());
+    if !array.contains(&entry) {
+        array.push(entry);
+    }
+}
+
 pub async fn run(opts: Options) -> Result<()> {
     let mut creds = crate::config::read()?;
 
@@ -236,6 +271,17 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // Step 4: build merged config from the user's existing global crush.json +
     // the Edgee provider.
+    // Step 3b: fetch the org once and derive both the gateway URL and the MCP
+    // gate from it, rather than issue a second request later. Done before
+    // borrowing `creds.crush` below since a positive gate re-reads `creds`.
+    let org = super::fetch_active_org(&creds).await;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
+    let mcp_disabled = super::mcp_injection_disabled_with_org(org.as_ref());
+    if !mcp_disabled {
+        crate::commands::auth::login::ensure_mcp_preference().await?;
+        creds = crate::config::read()?;
+    }
+
     let crush = creds.crush.as_ref().unwrap();
     let api_key = &crush.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -244,8 +290,6 @@ pub async fn run(opts: Options) -> Result<()> {
     // First-run: install the persistent user-level statusline integration
     // exactly once (Claude Code-targeted; honors the disable marker).
     util::ensure_first_run_installed().await;
-
-    let gateway_url = super::resolve_gateway_base_url(&creds).await;
 
     let mut config = find_global_config().unwrap_or_else(|| {
         serde_json::json!({
@@ -294,6 +338,31 @@ pub async fn run(opts: Options) -> Result<()> {
     // so we write into a per-session temp directory and point the variable at it.
     let config_dir = std::env::temp_dir().join(format!("edgee-crush-config-{}", session_id));
     std::fs::create_dir_all(&config_dir)?;
+
+    let use_mcp = creds.enable_mcp.unwrap_or(false) && !mcp_disabled;
+    if use_mcp {
+        let token = creds.user_token.as_deref().unwrap_or("");
+        plugins::config::merge_object(&mut config, "mcp", build_edgee_mcp(token));
+
+        let repo_origin = crate::git::detect_origin();
+        let session_url = match creds.org_slug.as_deref() {
+            Some(slug) if !slug.is_empty() => {
+                format!(
+                    "{}/sessions/{slug}/{session_id}",
+                    crate::config::console_base_url()
+                )
+            }
+            _ => format!(
+                "{}/sessions/{session_id}",
+                crate::config::console_base_url()
+            ),
+        };
+        let text = super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
+        let instructions_path = config_dir.join("edgee-instructions.md");
+        std::fs::write(&instructions_path, &text)?;
+        push_context_path(&mut config, &instructions_path.to_string_lossy());
+    }
+
     let config_path = config_dir.join("crush.json");
     let config_content = serde_json::to_string_pretty(&config)?;
     std::fs::write(&config_path, &config_content)?;
@@ -532,5 +601,52 @@ mod tests {
         for key in model.as_object().unwrap().keys() {
             assert!(allowed.contains(&key.as_str()), "unexpected field {key}");
         }
+    }
+
+    #[test]
+    fn edgee_mcp_entry_is_an_http_server_keyed_by_edgee() {
+        let mcp = build_edgee_mcp("tok");
+        assert_eq!(mcp["edgee"]["type"], serde_json::json!("http"));
+        assert_eq!(
+            mcp["edgee"]["headers"]["Authorization"],
+            serde_json::json!("Bearer tok")
+        );
+    }
+
+    #[test]
+    fn merging_edgee_mcp_preserves_plugin_mcp_entries() {
+        let mut config = serde_json::json!({
+            "mcp": { "house__remote": { "type": "http", "url": "https://example.com/mcp" } }
+        });
+        plugins::config::merge_object(&mut config, "mcp", build_edgee_mcp("tok"));
+
+        assert_eq!(
+            config["mcp"]["house__remote"]["url"],
+            serde_json::json!("https://example.com/mcp")
+        );
+        assert_eq!(config["mcp"]["edgee"]["type"], serde_json::json!("http"));
+    }
+
+    #[test]
+    fn push_context_path_creates_and_dedupes() {
+        let mut config = serde_json::json!({});
+        push_context_path(&mut config, "/tmp/edgee-instructions.md");
+        push_context_path(&mut config, "/tmp/edgee-instructions.md");
+
+        assert_eq!(
+            config["context_paths"],
+            serde_json::json!(["/tmp/edgee-instructions.md"])
+        );
+    }
+
+    #[test]
+    fn push_context_path_preserves_existing_entries() {
+        let mut config = serde_json::json!({ "context_paths": ["CRUSH.md"] });
+        push_context_path(&mut config, "/tmp/edgee-instructions.md");
+
+        assert_eq!(
+            config["context_paths"],
+            serde_json::json!(["CRUSH.md", "/tmp/edgee-instructions.md"])
+        );
     }
 }
