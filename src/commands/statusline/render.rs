@@ -175,7 +175,7 @@ fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
     };
 
     let mut line = format!(
-        "{prefix}{PURPLE}三 Edgee{RESET}  {DIM}in {}  cache-read {}  cache-write {}  out {}  reasoning {}  ${}  {} reqs{RESET}",
+        "{prefix}{PURPLE}三 Edgee{RESET}  {DIM}in {}  cr {}  cw {}  out {}  rsn {}  ${}  {} reqs{RESET}",
         format_tokens(stats.total_input_tokens),
         format_tokens(stats.total_cached_input_tokens),
         format_tokens(stats.total_cache_creation_input_tokens),
@@ -254,7 +254,7 @@ mod tests {
         };
         assert_eq!(
             format_line("", Some(&stats)),
-            format!("{PURPLE}三 Edgee{RESET}  {DIM}in 24.1k  cache-read 40.9M  cache-write 2.6M  out 196.8k  reasoning 113.8k  $20  571 reqs{RESET}")
+            format!("{PURPLE}三 Edgee{RESET}  {DIM}in 24.1k  cr 40.9M  cw 2.6M  out 196.8k  rsn 113.8k  $20  571 reqs{RESET}")
         );
     }
 
@@ -299,10 +299,10 @@ mod tests {
         };
         let s = format_line("", Some(&stats));
         assert!(s.contains("in 1.2k"));
-        assert!(s.contains("cache-read 2.3k"));
-        assert!(s.contains("cache-write 345"));
+        assert!(s.contains("cr 2.3k"));
+        assert!(s.contains("cw 345"));
         assert!(s.contains("out 678"));
-        assert!(s.contains("reasoning 90"));
+        assert!(s.contains("rsn 90"));
         assert!(s.contains("$0.01"));
         assert!(s.contains("12 reqs"));
         assert!(!s.contains("compression"));
@@ -313,10 +313,10 @@ mod tests {
     fn format_keeps_zero_value_token_types_visible() {
         let s = format_line("", Some(&SessionSummary::default()));
         assert!(s.contains("in 0"));
-        assert!(s.contains("cache-read 0"));
-        assert!(s.contains("cache-write 0"));
+        assert!(s.contains("cr 0"));
+        assert!(s.contains("cw 0"));
         assert!(s.contains("out 0"));
-        assert!(s.contains("reasoning 0"));
+        assert!(s.contains("rsn 0"));
         assert!(s.contains("$0.00"));
         assert!(s.contains("0 reqs"));
     }
