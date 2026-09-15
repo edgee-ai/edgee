@@ -109,8 +109,9 @@ pub async fn run(opts: Options) -> Result<()> {
         .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5[1m]");
 
     // Set up the environment for Edgee session tracking and console API access.
-    cmd.env("EDGEE_SESSION_ID", &session_id);
-    cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
+    cmd.env("EDGEE_SESSION_ID", &session_id)
+        .env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default())
+        .env("EDGEE_CONFIGURED_MODEL", configured_model(&key_status));
     cmd.env(
         "EDGEE_CONSOLE_API_URL",
         crate::config::console_api_base_url(),
@@ -198,7 +199,16 @@ pub async fn run(opts: Options) -> Result<()> {
     Ok(())
 }
 
-/// Flags that wire the Edgee MCP server into a session.
+fn configured_model(status: &crate::commands::auth::login::ProviderKeyStatus) -> String {
+    if let Some(model) = &status.reroute_model {
+        return format!("Rerouting to: {model}");
+    }
+    if let Some(model) = &status.fallback_model {
+        return format!("Fallback to: {model}");
+    }
+    "Passthrough".to_string()
+}
+
 ///
 /// `--mcp-config <configs...>` and `--allowedTools <tools...>` are **variadic**
 /// in Claude Code, so they are passed as `--flag=value`. Separated by a space,

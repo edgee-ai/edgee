@@ -244,7 +244,18 @@ five token categories (input, cache read, cache write, output, and reasoning), c
 and active fallback warning. **No setup required:** the first launch auto-installs the integration
 into `~/.claude/settings.json`, and subsequent launches reuse it.
 
-### Manage it
+When `edgee launch claude` starts, the statusline labels configured routing as `Rerouting to: <model>`, `Fallback to: <model>`, or `Passthrough`. It labels runtime observation separately as `Last request inferred on: <model>`.
+
+To inspect or change configured routing without the interactive settings wizard:
+
+```bash
+edgee route models --agent claude --query qwen --json
+edgee route status --agent claude --json
+edgee route set --agent claude --strategy reroute --model qwen/qwen3-coder-next
+```
+
+Model lookup prefers canonical provider-qualified IDs for BYOK routing. New launches pick up route changes; existing sessions keep their current environment.
+
 
 ```bash
 edgee statusline claude install   # run the install manually (idempotent)

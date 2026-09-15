@@ -12,7 +12,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const CACHE_MAX_AGE_SECS: u64 = 8;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -22,7 +22,7 @@ const YELLOW: &str = "\x1b[33m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 struct SessionSummary {
     #[serde(default)]
     total_input_tokens: u64,
@@ -44,14 +44,26 @@ struct SessionSummary {
     last_request_is_fallback: bool,
     #[serde(default)]
     last_request_model: String,
+    #[serde(default)]
+    last_request_effort: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeStatuslineInput {
+    #[serde(default)]
+    effort_level: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct RenderContext {
+    configured_model: Option<String>,
+    effort: Option<String>,
 }
 
 /// Run as the `edgee statusline` subcommand without `--wrap`.
 pub async fn run() -> anyhow::Result<()> {
-    // Drain stdin so the upstream invoker doesn't block on an unread pipe.
-    let _ = drain_stdin();
-
-    let line = render_with_separator(env_separator()).await;
+    let context = read_claude_context();
+    let line = render_with_separator(env_separator(), &context).await;
     if !line.is_empty() {
         println!("{line}");
     }
@@ -64,11 +76,11 @@ pub async fn run() -> anyhow::Result<()> {
 /// Never blocks longer than [`HTTP_TIMEOUT`] on a network call. Falls back to
 /// a minimal output if anything goes wrong.
 pub async fn render_line() -> String {
-    render_with_separator("").await
+    render_with_separator("", &RenderContext::default()).await
 }
 
 /// Internal entrypoint for tests and the standalone command.
-async fn render_with_separator(prefix: &str) -> String {
+async fn render_with_separator(prefix: &str, context: &RenderContext) -> String {
     let session_id = std::env::var("EDGEE_SESSION_ID").unwrap_or_default();
     if session_id.is_empty() {
         // No Edgee session in scope (Claude launched outside `edgee launch`).
@@ -82,13 +94,23 @@ async fn render_with_separator(prefix: &str) -> String {
     }
 
     let stats = fetch_or_cache(&session_id, &org_slug).await;
-    format_line(prefix, stats.as_ref())
+    format_line(prefix, stats.as_ref(), context)
 }
 
-fn drain_stdin() -> std::io::Result<()> {
-    let mut buf = Vec::new();
-    std::io::stdin().lock().read_to_end(&mut buf)?;
-    Ok(())
+fn read_claude_context() -> RenderContext {
+    let mut input = String::new();
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        return RenderContext::default();
+    }
+    let Ok(value) = serde_json::from_str::<ClaudeStatuslineInput>(&input) else {
+        return RenderContext::default();
+    };
+    let effort = value.effort_level;
+    let configured_model = std::env::var("EDGEE_CONFIGURED_MODEL").ok();
+    RenderContext {
+        configured_model,
+        effort,
+    }
 }
 
 fn env_separator() -> &'static str {
@@ -132,6 +154,7 @@ async fn fetch_or_cache(session_id: &str, org_slug: &str) -> Option<SessionSumma
             "total_fallback_requests": stats.total_fallback_requests,
             "last_request_is_fallback": stats.last_request_is_fallback,
             "last_request_model": stats.last_request_model,
+            "last_request_effort": stats.last_request_effort,
         })) {
             let _ = fs::write(&cache_file, json);
         }
@@ -169,9 +192,11 @@ async fn fetch_summary(session_id: &str, org_slug: &str) -> Option<SessionSummar
     resp.json::<SessionSummary>().await.ok()
 }
 
-fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
+fn format_line(prefix: &str, stats: Option<&SessionSummary>, context: &RenderContext) -> String {
     let Some(stats) = stats else {
-        return format!("{prefix}{PURPLE}三 Edgee{RESET}");
+        let mut line = format!("{prefix}{PURPLE}三 Edgee{RESET}");
+        append_context(&mut line, context, None);
+        return line;
     };
 
     let mut line = format!(
@@ -184,6 +209,8 @@ fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
         stats.total_cost as f64 / 1_000_000_000.0,
         stats.total_requests,
     );
+
+    append_context(&mut line, context, Some(stats));
 
     if stats.last_request_is_fallback {
         line.push_str(&format!(
@@ -199,6 +226,21 @@ fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
     }
 
     line
+}
+
+fn append_context(line: &mut String, context: &RenderContext, stats: Option<&SessionSummary>) {
+    if let Some(model) = &context.configured_model {
+        line.push_str(&format!("  {DIM}{model}{RESET}"));
+    }
+    if let Some(effort) = &context.effort {
+        line.push_str(&format!("  {DIM}effort: {effort}{RESET}"));
+    }
+    if let Some(model) = stats
+        .map(|stats| stats.last_request_model.as_str())
+        .filter(|model| !model.is_empty())
+    {
+        line.push_str(&format!("  {DIM}Last request inferred on: {model}{RESET}"));
+    }
 }
 
 fn format_tokens(tokens: u64) -> String {
@@ -222,7 +264,7 @@ mod tests {
 
     #[test]
     fn format_no_stats() {
-        let s = format_line("", None);
+        let s = format_line("", None, &RenderContext::default());
         assert!(s.contains("三 Edgee"));
         assert!(!s.contains("reqs"));
     }
@@ -239,7 +281,7 @@ mod tests {
             total_requests: 12,
             ..Default::default()
         };
-        let s = format_line("", Some(&stats));
+        let s = format_line("", Some(&stats), &RenderContext::default());
         assert!(s.contains("in 1,234"));
         assert!(s.contains("cache-read 2,345"));
         assert!(s.contains("cache-write 345"));
@@ -253,7 +295,7 @@ mod tests {
 
     #[test]
     fn format_keeps_zero_value_token_types_visible() {
-        let s = format_line("", Some(&SessionSummary::default()));
+        let s = format_line("", Some(&SessionSummary::default()), &RenderContext::default());
         assert!(s.contains("in 0"));
         assert!(s.contains("cache-read 0"));
         assert!(s.contains("cache-write 0"));
@@ -272,7 +314,7 @@ mod tests {
             last_request_model: "claude-sonnet-5".to_string(),
             ..Default::default()
         };
-        let s = format_line("", Some(&stats));
+        let s = format_line("", Some(&stats), &RenderContext::default());
         assert!(s.contains("5 reqs"));
         assert!(s.contains("⚠ fallback: claude-sonnet-5"));
         assert!(s.contains("3 this session"));
@@ -281,7 +323,7 @@ mod tests {
 
     #[test]
     fn format_with_separator_prefix() {
-        let s = format_line("| ", None);
+        let s = format_line("| ", None, &RenderContext::default());
         assert!(s.starts_with("| "));
     }
 
@@ -291,7 +333,7 @@ mod tests {
         unsafe {
             std::env::remove_var("EDGEE_SESSION_ID");
         }
-        let s = render_with_separator("").await;
+        let s = render_with_separator("", &RenderContext::default()).await;
         assert!(
             s.is_empty(),
             "expected empty render with no session, got {s:?}"
@@ -305,7 +347,7 @@ mod tests {
             std::env::set_var("EDGEE_SESSION_ID", "test-session");
             std::env::remove_var("EDGEE_ORG_SLUG");
         }
-        let s = render_with_separator("").await;
+        let s = render_with_separator("", &RenderContext::default()).await;
         unsafe {
             std::env::remove_var("EDGEE_SESSION_ID");
         }

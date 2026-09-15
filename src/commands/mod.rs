@@ -15,6 +15,8 @@ setup_commands! {
     Plugins(plugins),
     /// Configure compression, fallback, and reroute settings for a coding-agent key
     Settings(settings),
+    /// Inspect or change Edgee model routing
+    Route(route),
     /// Show stored session stats
     #[command(visible_alias = "report")]
     Stats(stats),

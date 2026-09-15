@@ -369,6 +369,8 @@ fn key_is_expired(expires_at: time::OffsetDateTime) -> bool {
 pub struct ProviderKeyStatus {
     pub created: bool,
     pub compression: Option<crate::api::Compression>,
+    pub reroute_model: Option<String>,
+    pub fallback_model: Option<String>,
 }
 
 /// Ensures the active profile holds an API key that still exists server-side
@@ -401,6 +403,8 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStat
         return Ok(ProviderKeyStatus {
             created: key_item.created,
             compression: key_item.compression,
+            reroute_model: route_models(&key_item).0,
+            fallback_model: route_models(&key_item).1,
         });
     }
 
@@ -414,6 +418,8 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStat
         return Ok(ProviderKeyStatus {
             created: false,
             compression: None,
+            reroute_model: None,
+            fallback_model: None,
         });
     };
 
@@ -426,6 +432,8 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStat
             Ok(ProviderKeyStatus {
                 created: key_item.created,
                 compression: key_item.compression,
+            reroute_model: route_models(&key_item).0,
+            fallback_model: route_models(&key_item).1,
             })
         }
         // Key still exists but has expired → same re-provisioning path as deletion.
@@ -434,6 +442,8 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStat
             Ok(ProviderKeyStatus {
                 created: key_item.created,
                 compression: key_item.compression,
+            reroute_model: route_models(&key_item).0,
+            fallback_model: route_models(&key_item).1,
             })
         }
         // Key still exists and is valid → keep the cached key, surface its
@@ -441,13 +451,24 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStat
         Ok(Some(key_item)) => Ok(ProviderKeyStatus {
             created: false,
             compression: key_item.compression,
+            reroute_model: route_models(&key_item).0,
+            fallback_model: route_models(&key_item).1,
         }),
         // Server was unreachable → keep the cached key; compression unknown.
         Err(_) => Ok(ProviderKeyStatus {
             created: false,
             compression: None,
+            reroute_model: None,
+            fallback_model: None,
         }),
     }
+}
+
+fn route_models(key: &crate::api::ApiKeyItem) -> (Option<String>, Option<String>) {
+    (
+        key.reroutes.first().map(|route| route.model.clone()),
+        key.fallbacks.first().map(|route| route.model.clone()),
+    )
 }
 
 /// Gets-or-creates the provider key and returns the full key item, so callers
