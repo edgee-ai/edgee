@@ -25,6 +25,10 @@ pub struct OrgUsageSummary {
     #[serde(default)]
     pub cached_input_tokens: u64,
     #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+    #[serde(default)]
+    pub reasoning_output_tokens: u64,
+    #[serde(default)]
     pub output_tokens: u64,
     /// Nano-USD (divide by 1e9 for dollars), matching the console's cost fields.
     #[serde(default)]
