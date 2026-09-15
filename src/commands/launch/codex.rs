@@ -25,10 +25,6 @@ const EDGEE_ENABLED_TOOLS: &[&str] = &[
 /// server — the same server claude.rs points `--mcp-config` at, delivered here
 /// as TOML overrides instead of a JSON file, the same way `codex_mcp_args`
 /// delivers plugin MCP servers.
-///
-/// No system-prompt nudge: `experimental_instructions_file` replaces Codex's
-/// built-in instructions rather than appending, so tool adherence relies on
-/// the model reading the MCP tool descriptions on its own.
 fn edgee_mcp_args(token: &str) -> Vec<String> {
     let mut args = vec![format!(
         "mcp_servers.edgee.url={}",
@@ -50,6 +46,16 @@ fn edgee_mcp_args(token: &str) -> Vec<String> {
     args.push(format!("mcp_servers.edgee.enabled_tools=[{tools}]"));
 
     args
+}
+
+/// Add session guidance without replacing Codex's built-in model instructions.
+/// Like our provider overrides, this replaces the corresponding config value;
+/// an explicit user `-c developer_instructions=...` passed later takes precedence.
+fn developer_instructions_arg(session_id: &str, repo: Option<&str>, session_url: &str) -> String {
+    format!(
+        "developer_instructions={}",
+        plugins::config::toml_string(&super::mcp::session_instructions(session_id, repo, session_url))
+    )
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -106,7 +112,8 @@ pub async fn run(opts: Options) -> Result<()> {
 
     util::spawn_cli_version_report(&creds, &session_id);
 
-    let repo_entry = crate::git::detect_origin()
+    let repo_origin = crate::git::detect_origin();
+    let repo_entry = repo_origin.as_ref()
         .map(|url| format!(",\"x-edgee-repo\"=\"{url}\""))
         .unwrap_or_default();
     let debug_log_entry = util::resolve_debug_log_keypair()?
@@ -151,6 +158,11 @@ pub async fn run(opts: Options) -> Result<()> {
         for arg in edgee_mcp_args(token) {
             cmd.args(["-c", &arg]);
         }
+        let session_url = match creds.org_slug.as_deref().filter(|slug| !slug.is_empty()) {
+            Some(slug) => format!("{}/sessions/{slug}/{session_id}", crate::config::console_base_url()),
+            None => format!("{}/sessions/{session_id}", crate::config::console_base_url()),
+        };
+        cmd.args(["-c", &developer_instructions_arg(&session_id, repo_origin.as_deref(), &session_url)]);
     }
     if let Some(skills_root) = plugin_report.skills_root.as_ref() {
         if let Some(mirror) = plugins::codex_home_mirror() {
@@ -190,6 +202,30 @@ pub async fn run(opts: Options) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn developer_instructions_round_trip_session_metadata() {
+        let session_id = "session-123";
+        let repo = "https://example.com/a/\"repo\"";
+        let url = "https://console.example/sessions/org/session-123";
+        let arg = developer_instructions_arg(session_id, Some(repo), url);
+        let parsed: toml::Table = arg.parse().unwrap();
+        let instructions = parsed["developer_instructions"].as_str().unwrap();
+        assert!(instructions.contains(session_id));
+        assert!(instructions.contains(repo));
+        assert!(instructions.contains(url));
+        assert!(instructions.contains("setSessionName"));
+        assert!(instructions.contains("addSessionPullRequest"));
+        assert!(instructions.contains("setSessionGitRepo"));
+        assert_eq!(parsed.len(), 1);
+    }
+
+    #[test]
+    fn developer_instructions_omit_repo_tool_without_origin() {
+        let arg = developer_instructions_arg("session-123", None, "https://example.com/session");
+        let parsed: toml::Table = arg.parse().unwrap();
+        assert!(!parsed["developer_instructions"].as_str().unwrap().contains("setSessionGitRepo"));
+    }
 
     #[test]
     fn edgee_mcp_args_are_well_formed_toml_overrides() {
