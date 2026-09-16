@@ -72,6 +72,13 @@ fn is_copilot_cli(agent: &str) -> bool {
     agent == "copilot-cli"
 }
 
+/// Copilot surfaces whose network stack needs the dedicated CA in the macOS
+/// system keychain. The desktop app runs a bundled Copilot CLI, so both CLI
+/// launch targets share the same trust lifecycle as Copilot in VS Code.
+fn uses_trusted_copilot_ca(agent: &str) -> bool {
+    is_copilot_vscode(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent)
+}
+
 /// True for OpenCode running with its existing provider configuration. It is a
 /// generic passthrough target and may use GitHub Copilot, so its relay must also
 /// intercept the Copilot-only hosts.
@@ -195,7 +202,7 @@ setup_command! {
     #[arg(long)]
     pub log_output: Option<PathBuf>,
     /// Remove the target's Edgee relay CA from the system keychain, then exit
-    /// (macOS). For example: `relay copilot-vscode --untrust`.
+    /// (macOS). For example: `relay copilot-cli --untrust`.
     #[arg(long)]
     pub untrust: bool,
     /// Never prompt: fail instead of running interactive login / org selection /
@@ -290,13 +297,14 @@ pub async fn run(opts: Options) -> Result<()> {
         debug_log_headers,
     )?;
 
-    // GUI front-ends use dedicated, name-constrained CAs because Electron does not
-    // trust NODE_EXTRA_CA_CERTS. Other relays use the shared process-only CA.
+    // Native Copilot clients and GUI front-ends use dedicated, name-constrained
+    // CAs because their TLS stacks do not consistently trust NODE_EXTRA_CA_CERTS.
+    // Other relays use the shared process-only CA.
     let (cert_pem, key_pem, cert_path) = if is_claude_desktop(&agent) {
         let ca = ensure_claude_desktop_ca()?;
         ensure_ca_trusted(&ca.2, CLAUDE_DESKTOP_CA_CN)?;
         ca
-    } else if is_copilot_vscode(&agent) {
+    } else if uses_trusted_copilot_ca(&agent) {
         let ca = ensure_copilot_ca()?;
         ensure_ca_trusted(&ca.2, COPILOT_CA_CN)?;
         ca
@@ -563,8 +571,8 @@ const COPILOT_CA_CN: &str = "Edgee Copilot CA";
 #[cfg(target_os = "macos")]
 const SYSTEM_KEYCHAIN: &str = "/Library/Keychains/System.keychain";
 
-/// The shared, unconstrained relay CA (used by every target except claude-desktop
-/// via per-process `NODE_EXTRA_CA_CERTS`, never installed in a system trust store).
+/// The shared, unconstrained relay CA (used by targets that rely only on
+/// per-process `NODE_EXTRA_CA_CERTS`, never installed in a system trust store).
 fn ensure_ca() -> Result<(String, String, PathBuf)> {
     ensure_ca_named("edgee-ca", "Edgee CA", &[])
 }
@@ -582,9 +590,9 @@ fn ensure_claude_desktop_ca() -> Result<(String, String, PathBuf)> {
     )
 }
 
-/// The CA used by the Copilot-VS-Code relay. It is constrained to the inference
-/// provider domains that the shared relay can intercept, so trusting it for the
-/// Electron process cannot vouch for arbitrary Internet hosts.
+/// The CA used by Copilot CLI, its desktop wrapper, and Copilot in VS Code. It is
+/// constrained to the inference provider domains that the relay can intercept,
+/// so trusting it cannot vouch for arbitrary Internet hosts.
 fn ensure_copilot_ca() -> Result<(String, String, PathBuf)> {
     ensure_ca_named(
         "edgee-copilot-ca",
@@ -734,9 +742,9 @@ fn build_ca(cert_pem: &str, key_pem: &str) -> Result<RcgenAuthority> {
     ))
 }
 
-/// Ensure a name-constrained GUI relay CA is trusted in the macOS **System** keychain,
-/// installing it **once** if needed. Chromium verifies against the OS trust store only,
-/// so the CA is constrained to the relay's known inference domains.
+/// Ensure a name-constrained relay CA is trusted in the macOS **System** keychain,
+/// installing it **once** if needed. The CA is constrained to the relay's known
+/// inference domains.
 ///
 /// Idempotent: if the exact CA (matched by SHA-1, so a regenerated CA is caught) is
 /// already trusted, it returns without prompting. Otherwise it purges stale copies
@@ -907,14 +915,14 @@ fn remove_trusted_ca(common_name: &str) {
     }
 }
 
-/// `edgee relay claude-desktop --untrust`: remove the trusted claude-desktop CA.
+/// Remove the target's trusted relay CA from the macOS System keychain.
 /// Reports whether anything was actually removed and fails (non-zero exit) if a
 /// cert is still present afterward — for a command whose whole job is revoking a
 /// system trust root, a silent success on a denied `sudo` would be dangerous.
 fn untrust_ca(agent: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        let common_name = if is_copilot_vscode(agent) {
+        let common_name = if uses_trusted_copilot_ca(agent) {
             COPILOT_CA_CN
         } else {
             CLAUDE_DESKTOP_CA_CN
@@ -1482,6 +1490,10 @@ mod tests {
         assert!(!is_copilot_cli("copilot-vscode"));
         assert!(!is_copilot_vscode("copilot-cli"));
         assert!(!is_gui_editor("copilot-cli"));
+        assert!(uses_trusted_copilot_ca("copilot-cli"));
+        assert!(uses_trusted_copilot_ca("copilot-desktop"));
+        assert!(uses_trusted_copilot_ca("copilot-vscode"));
+        assert!(!uses_trusted_copilot_ca("intellij"));
         // Both Copilot surfaces need the Copilot-only hosts MITM'd.
         assert!(intercepts_copilot_hosts("copilot-cli"));
         assert!(intercepts_copilot_hosts("copilot-vscode"));

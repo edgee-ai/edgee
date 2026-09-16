@@ -109,7 +109,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
 | `intellij` | GitHub Copilot in IntelliJ IDEA | `copilot` | Direct IDE launch with proxy env + Node CA; live-session validation pending |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
-| `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + Node CA, no system trust |
+| `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + dedicated system-trusted Copilot CA |
 | `copilot-cli` | GitHub Copilot CLI | `copilot` | Relays the `copilot` binary directly (TUI, no `--wait`) — deliberately not env-injected; see below |
 | `claude-desktop` | Claude Desktop (**Claude Code only**) | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code). Routes `api.anthropic.com/v1/messages`; the app's own chat goes to `claude.ai` and is not covered — see below |
 | `codex-desktop` | ChatGPT desktop app (**Codex tab only**) | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched, and the file is restored when the app quits. See below. |
@@ -447,8 +447,9 @@ full authenticated request/response cycle):
   mock signed by a throwaway CA failed TLS verification until
   `NODE_EXTRA_CA_CERTS` was set to that CA's cert, then succeeded — the same
   mechanism `claude`, `copilot-vscode`, and `cursor` already rely on for relay
-  MITM trust (see `spawn_agent`), with no system-keychain install needed (unlike
-  `claude-desktop`'s Chromium net stack).
+  MITM trust (see `spawn_agent`). Native model requests use a stricter platform
+  verifier, so the dedicated, name-constrained Copilot CA is also installed in
+  the macOS system keychain on first launch.
 
 Net effect: `edgee launch copilot-cli` spawns `copilot` directly (TUI-style, no
 `--wait`, same as `claude`/`codex`) with the relay's proxy env and CA, and its
@@ -502,6 +503,8 @@ macOS app 1.1.20 ships Copilot CLI 1.0.84-5. Launch
 `NODE_EXTRA_CA_CERTS` reach that runtime. Native `/responses` traffic and a `bash`
 tool round trip were verified on 2026-09-14. The released app explicitly ignores
 `COPILOT_CLI_PATH`; BYOK replaces the user's subscription, so neither is used.
+The bundled CLI's native model client also uses the dedicated, name-constrained
+Copilot CA in the macOS system keychain.
 
 This surface shares the established `copilot` key, settings and metering, as do
 `copilot-cli` and `copilot-vscode`. No new backend slug or gateway strategy is needed

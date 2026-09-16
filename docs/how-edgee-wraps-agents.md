@@ -419,15 +419,15 @@ forwarded untouched.
 
 The relay generates local CAs, stored `0600` in the user's Edgee config directory. For Cursor, the
 CA is handed to the child process alone through `NODE_EXTRA_CA_CERTS`; nothing is installed in the
-system trust store. Copilot-in-VS-Code and Claude Desktop use dedicated, name-constrained CAs that
-are explicitly installed in the macOS **System** keychain because their Electron network stacks do
-not trust `NODE_EXTRA_CA_CERTS` for all requests.
+system trust store. Copilot CLI, the Copilot desktop app, Copilot-in-VS-Code, and Claude Desktop use
+dedicated, name-constrained CAs that are explicitly installed in the macOS **System** keychain
+because their native or Electron network stacks do not trust `NODE_EXTRA_CA_CERTS` for all requests.
 
-Claude Desktop and Copilot-in-VS-Code are the exceptions: both touch the OS trust store. Claude
+Claude Desktop and the three Copilot surfaces are the exceptions: they touch the OS trust store. Claude
 Desktop's Chromium net stack consults only the macOS **System** keychain, so
-`edgee launch claude-desktop` asks for `sudo` **once** to trust a CA. The Copilot-VS-Code relay uses
-the same explicit trust lifecycle,
-because VS Code's Electron network stack also checks the macOS system keychain. Four mitigations,
+`edgee launch claude-desktop` asks for `sudo` **once** to trust a CA. The Copilot relays use
+the same explicit trust lifecycle because the CLI's native model client, the desktop app's bundled
+CLI, and VS Code's Electron network stack also check the macOS system keychain. Four mitigations,
 all in code:
 
 - It is a **separate, dedicated CA** (`Edgee Claude Desktop CA`), never the shared relay CA.
@@ -439,7 +439,7 @@ all in code:
 - `edgee relay claude-desktop --untrust` removes it, and fails loudly rather than silently if
   removal is denied.
 - The Copilot relay uses a separate `Edgee Copilot CA`, constrained to the known inference domains,
-  and `edgee relay copilot-vscode --untrust` removes it.
+  and `edgee relay copilot-cli --untrust` removes it.
 
 These are nonetheless persistent system trust roots installed by a third-party tool. They are
 scoped, reversible and documented in the README, but expect them to be the single most scrutinised
@@ -706,12 +706,13 @@ https_proxy=http://127.0.0.1:41600
 http_proxy=http://127.0.0.1:41600
 NO_PROXY=localhost,127.0.0.1,::1 (plus existing exclusions)
 no_proxy=<same exclusions>
-NODE_EXTRA_CA_CERTS=~/.local/share/edgee/ca/edgee-ca.pem
+NODE_EXTRA_CA_CERTS=~/.local/share/edgee/ca/edgee-copilot-ca.pem
 ```
 
 This redirects an agent the user already authenticated with GitHub Copilot. It preserves
 subscription credentials and shares the `copilot` key with the CLI and VS Code.
-The bundled runtime inherits the proxy and CA; no system certificate installation is needed.
+The bundled runtime inherits the proxy and CA, and the same dedicated CA is trusted once in the
+macOS system keychain for its native model client.
 App exit stops the relay, and Ctrl-C closes the app before stopping the relay.
 
 [GitHub app](https://github.com/features/ai/github-app) documents subscription and BYOK
