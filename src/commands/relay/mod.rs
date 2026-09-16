@@ -194,8 +194,8 @@ setup_command! {
     /// Write relayed-traffic logs to this file (appended). If unset, logging is off.
     #[arg(long)]
     pub log_output: Option<PathBuf>,
-    /// Remove the Edgee Claude Desktop CA from the system keychain, then exit
-    /// (macOS). Undoes the one-time trust `relay claude-desktop` installs.
+    /// Remove the target's Edgee relay CA from the system keychain, then exit
+    /// (macOS). For example: `relay copilot-vscode --untrust`.
     #[arg(long)]
     pub untrust: bool,
     /// Never prompt: fail instead of running interactive login / org selection /
@@ -210,10 +210,12 @@ setup_command! {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    if opts.untrust {
-        return untrust_ca();
-    }
     let raw = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
+    if opts.untrust {
+        let agent = canonicalize_target(&raw)
+            .ok_or_else(|| anyhow::anyhow!("unknown agent '{raw}' (expected {})", TARGETS.join("|")))?;
+        return untrust_ca(agent);
+    }
     let agent = canonicalize_target(&raw)
         .ok_or_else(|| anyhow::anyhow!("unknown agent '{raw}' (expected {})", TARGETS.join("|")))?
         .to_string();
@@ -288,10 +290,16 @@ pub async fn run(opts: Options) -> Result<()> {
         debug_log_headers,
     )?;
 
-    // claude-desktop uses its own name-constrained CA (it's the only target trusted
-    // in a system keychain); every other target uses the shared unconstrained CA.
+    // GUI front-ends use dedicated, name-constrained CAs because Electron does not
+    // trust NODE_EXTRA_CA_CERTS. Other relays use the shared process-only CA.
     let (cert_pem, key_pem, cert_path) = if is_claude_desktop(&agent) {
-        ensure_claude_desktop_ca()?
+        let ca = ensure_claude_desktop_ca()?;
+        ensure_ca_trusted(&ca.2, CLAUDE_DESKTOP_CA_CN)?;
+        ca
+    } else if is_copilot_vscode(&agent) {
+        let ca = ensure_copilot_ca()?;
+        ensure_ca_trusted(&ca.2, COPILOT_CA_CN)?;
+        ca
     } else {
         ensure_ca()?
     };
@@ -317,8 +325,9 @@ pub async fn run(opts: Options) -> Result<()> {
     };
 
     // Copilot surfaces and OpenCode (which may use Copilot as its provider) need
-    // GitHub's control-plane host MITM'd for token/model discovery. Other relays
-    // blind-tunnel it so their MCP servers see GitHub's real certificate.
+    // Copilot's inference host MITM'd. The GitHub API remains blind-tunnelled so
+    // Electron and other clients can validate GitHub's real certificate during
+    // authentication and entitlement discovery.
     let handler = RelayHandler::new(
         sink,
         Arc::new(gateway.clone()),
@@ -402,14 +411,6 @@ pub async fn run(opts: Options) -> Result<()> {
             println!("Local sessions use your Copilot subscription; remote sessions are not routed.");
             println!("Usage is grouped under Copilot. Edgee plugin delivery is not yet supported for this app.");
             println!("Keep this command running. Ctrl-C closes the app and stops its connection.");
-        }
-        // Claude Desktop (Chromium) verifies API certs against the macOS system
-        // trust store — it ignores NODE_EXTRA_CA_CERTS and the --ignore-certificate-*
-        // switches. Trust our CA there once; it's name-constrained to anthropic.com,
-        // so a persistent trust root can MITM nothing else. Idempotent, so only the
-        // first launch prompts (`--untrust` removes it).
-        if is_claude_desktop(&agent) {
-            ensure_ca_trusted(&cert_path)?;
         }
         let mut agent_child = spawn_agent(&agent, port, &cert_path, &session_id, &org_slug, &opts.extra_args)?;
         let task = tokio::spawn(async move {
@@ -555,6 +556,7 @@ fn build_gateway_target(
 /// [`ensure_ca_trusted`] can add/remove exactly this cert in the keychain, and so
 /// it never gets trusted for anything but Anthropic.
 const CLAUDE_DESKTOP_CA_CN: &str = "Edgee Claude Desktop CA";
+const COPILOT_CA_CN: &str = "Edgee Copilot CA";
 
 /// The macOS System keychain — the admin-domain trust store Claude Desktop's
 /// Chromium net stack consults.
@@ -577,6 +579,17 @@ fn ensure_claude_desktop_ca() -> Result<(String, String, PathBuf)> {
         "edgee-claude-desktop-ca",
         CLAUDE_DESKTOP_CA_CN,
         &["anthropic.com"],
+    )
+}
+
+/// The CA used by the Copilot-VS-Code relay. It is constrained to the inference
+/// provider domains that the shared relay can intercept, so trusting it for the
+/// Electron process cannot vouch for arbitrary Internet hosts.
+fn ensure_copilot_ca() -> Result<(String, String, PathBuf)> {
+    ensure_ca_named(
+        "edgee-copilot-ca",
+        COPILOT_CA_CN,
+        &["anthropic.com", "openai.com", "chatgpt.com", "cursor.sh", "githubcopilot.com"],
     )
 }
 
@@ -721,28 +734,26 @@ fn build_ca(cert_pem: &str, key_pem: &str) -> Result<RcgenAuthority> {
     ))
 }
 
-/// Ensure the name-constrained claude-desktop CA is trusted in the macOS **System**
-/// keychain, installing it **once** if needed. Claude Desktop (Chromium) verifies
-/// against the OS trust store only, and this CA is constrained to `anthropic.com`, so
-/// a persistent trust root here can MITM nothing but Anthropic traffic — cheap enough
-/// to install once and leave, rather than re-prompt for `sudo` on every launch.
+/// Ensure a name-constrained GUI relay CA is trusted in the macOS **System** keychain,
+/// installing it **once** if needed. Chromium verifies against the OS trust store only,
+/// so the CA is constrained to the relay's known inference domains.
 ///
 /// Idempotent: if the exact CA (matched by SHA-1, so a regenerated CA is caught) is
-/// already trusted, it returns without prompting. Otherwise it purges any stale copy
-/// and adds the current CA — one `sudo` prompt, on the first launch only. Remove it
-/// anytime with `edgee relay claude-desktop --untrust`. No-op off macOS.
-fn ensure_ca_trusted(ca_path: &Path) -> Result<()> {
+/// already trusted, it returns without prompting. Otherwise it purges stale copies
+/// with the same Common Name and adds the current CA — one `sudo` prompt, on the first
+/// launch only. No-op off macOS.
+fn ensure_ca_trusted(ca_path: &Path, common_name: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        if ca_is_trusted(ca_path) {
+        if ca_is_trusted(ca_path, common_name) {
             return Ok(());
         }
         // Not trusted (first launch, or the CA was regenerated) → (re)install it.
-        remove_trusted_ca();
+        remove_trusted_ca(common_name);
         eprintln!(
             "{}",
             style(
-                "Trusting the Edgee Claude Desktop CA in the system keychain \
+                "Trusting the Edgee relay CA in the system keychain \
                  (one-time, admin required)…"
             )
             .dim()
@@ -769,33 +780,33 @@ fn ensure_ca_trusted(ca_path: &Path) -> Result<()> {
             .context("running `sudo security add-trusted-cert`")?;
         if !status.success() {
             anyhow::bail!(
-                "failed to trust the Edgee Claude Desktop CA in the system keychain \
-                 (Claude Desktop needs it to accept the relay)."
+                "failed to trust the Edgee relay CA in the system keychain \
+                 (the GUI application needs it to accept the relay)."
             );
         }
         // Confirm the cert now trusted is exactly the one we intended to install.
         // Closes the window between the fingerprint check above and `sudo` re-reading
         // the file: if anything swapped it underneath us, fail loudly rather than
         // leave an unexpected root blessed.
-        if !ca_is_trusted(ca_path) {
+        if !ca_is_trusted(ca_path, common_name) {
             anyhow::bail!(
-                "the Edgee Claude Desktop CA did not verify as trusted after install \
-                 (the cert file may have changed underneath us). Re-run, or clear any \
-                 stray cert with `edgee relay claude-desktop --untrust`."
+                "the Edgee relay CA did not verify as trusted after install \
+                 (the cert file may have changed underneath us). Re-run, or clear the \
+                 stale cert with the matching relay `--untrust` command."
             );
         }
         eprintln!(
             "{}",
             style(
-                "Done — future launches won't prompt. Remove anytime with \
-                 `edgee relay claude-desktop --untrust`."
+                 "Done — future launches won't prompt. Remove with the matching relay \
+                 `--untrust` command."
             )
             .dim()
         );
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = ca_path;
+        let _ = (ca_path, common_name);
     }
     Ok(())
 }
@@ -805,14 +816,14 @@ fn ensure_ca_trusted(ca_path: &Path) -> Result<()> {
 /// (not just Common Name) means a regenerated CA correctly reads as "not trusted"
 /// and gets refreshed.
 #[cfg(target_os = "macos")]
-fn ca_is_trusted(ca_path: &Path) -> bool {
+fn ca_is_trusted(ca_path: &Path, common_name: &str) -> bool {
     let Some(disk_sha1) = cert_sha1(ca_path) else {
         return false;
     };
     // `-a` lists *every* cert with this CN, not just the first match, so an
     // accumulated stale duplicate can't hide the current one (or vice-versa).
     let Ok(out) = std::process::Command::new("security")
-        .args(["find-certificate", "-a", "-c", CLAUDE_DESKTOP_CA_CN, "-Z", SYSTEM_KEYCHAIN])
+        .args(["find-certificate", "-a", "-c", common_name, "-Z", SYSTEM_KEYCHAIN])
         .output()
     else {
         return false;
@@ -826,9 +837,9 @@ fn ca_is_trusted(ca_path: &Path) -> bool {
 /// True when any cert with the claude-desktop CN is present in the System keychain.
 /// Used to tell "nothing to remove" from "removal failed" in the untrust path.
 #[cfg(target_os = "macos")]
-fn ca_present() -> bool {
+fn ca_present(common_name: &str) -> bool {
     std::process::Command::new("security")
-        .args(["find-certificate", "-a", "-c", CLAUDE_DESKTOP_CA_CN, SYSTEM_KEYCHAIN])
+        .args(["find-certificate", "-a", "-c", common_name, SYSTEM_KEYCHAIN])
         .output()
         .map(|o| o.status.success() && !o.stdout.is_empty())
         .unwrap_or(false)
@@ -872,9 +883,9 @@ fn pem_first_block_der(pem: &str) -> Option<Vec<u8>> {
 /// must never survive as a trusted root. The bounded count guards against an
 /// unexpected non-deleting exit spinning forever.
 #[cfg(target_os = "macos")]
-fn remove_trusted_ca() {
+fn remove_trusted_ca(common_name: &str) {
     for _ in 0..16 {
-        if !ca_present() {
+        if !ca_present(common_name) {
             return;
         }
         let deleted = std::process::Command::new("sudo")
@@ -882,7 +893,7 @@ fn remove_trusted_ca() {
                 "security",
                 "delete-certificate",
                 "-c",
-                CLAUDE_DESKTOP_CA_CN,
+                common_name,
                 SYSTEM_KEYCHAIN,
             ])
             .status()
@@ -900,24 +911,29 @@ fn remove_trusted_ca() {
 /// Reports whether anything was actually removed and fails (non-zero exit) if a
 /// cert is still present afterward — for a command whose whole job is revoking a
 /// system trust root, a silent success on a denied `sudo` would be dangerous.
-fn untrust_ca() -> Result<()> {
+fn untrust_ca(agent: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        if !ca_present() {
+        let common_name = if is_copilot_vscode(agent) {
+            COPILOT_CA_CN
+        } else {
+            CLAUDE_DESKTOP_CA_CN
+        };
+        if !ca_present(common_name) {
             eprintln!(
                 "{}",
-                style("No Edgee Claude Desktop CA is trusted — nothing to remove.").dim()
+                style(format!("No {common_name} is trusted — nothing to remove.")).dim()
             );
             return Ok(());
         }
         eprintln!(
             "{}",
-            style("Removing the Edgee Claude Desktop CA from the system keychain…").dim()
+            style(format!("Removing {common_name} from the system keychain…")).dim()
         );
-        remove_trusted_ca();
-        if ca_present() {
+        remove_trusted_ca(common_name);
+        if ca_present(common_name) {
             anyhow::bail!(
-                "failed to remove the Edgee Claude Desktop CA from the system keychain \
+                "failed to remove the Edgee relay CA from the system keychain \
                  (admin authorization is required)."
             );
         }
@@ -925,6 +941,7 @@ fn untrust_ca() -> Result<()> {
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = agent;
         eprintln!("Nothing to remove (macOS only).");
     }
     Ok(())
