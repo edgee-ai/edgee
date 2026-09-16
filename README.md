@@ -369,7 +369,7 @@ This repo is a single Rust binary crate (`edgee-cli`, binary name `edgee`).
 | `src/version_check.rs` | Background check for a newer CLI release |
 | `src/commands/launch/` | One module per launch target, plus [naming rules](src/commands/launch/README.md) |
 | `src/commands/auth/` | `login`, `status`, `list`, `switch` |
-| `src/commands/settings/` | Per-key agent settings and profile-wide settings |
+| `src/commands/settings/` | Per-key agent settings |
 | `src/commands/statusline/` | Statusline renderer, wrap/merge logic, Claude integration |
 | `src/commands/alias/` | Shell aliases, PATH shims, desktop app wrappers |
 | `src/commands/relay/` | Local MITM relay powering the app launch targets |
