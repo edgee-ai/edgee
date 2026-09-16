@@ -113,6 +113,9 @@ edgee launch kimi
 # Kilo Code
 edgee launch kilo
 
+# Hermes Agent
+edgee launch hermes
+
 # Cursor (desktop app)
 edgee launch cursor
 
@@ -152,6 +155,11 @@ edgee launch codex-desktop
 > TLS client requires the dedicated Copilot CA in the macOS system keychain, so
 > the first launch asks for your admin password once.
 
+> **Hermes Agent.** `edgee launch hermes` adds an `edgee` custom provider to the
+> active Hermes profile, then selects it for that process. Existing providers,
+> credentials, history, skills, hooks, and MCP servers remain unchanged; the
+> Edgee API key stays process-local.
+
 > **Claude Desktop, one-time trust (macOS).** Claude Desktop (Chromium) checks TLS
 > against the macOS **system** keychain, so the first `edgee launch claude-desktop`
 > asks for your admin password once to trust a dedicated Edgee CA. That CA is
@@ -179,6 +187,7 @@ edgee launch claude --resume abcd          # continue a Claude Code session
 edgee launch codex resume                  # resume the last Codex session
 edgee launch opencode -c                   # continue the last OpenCode session
 edgee launch codebuddy --resume <id>       # resume a CodeBuddy session
+edgee launch hermes -c                     # continue the latest Hermes session
 ```
 
 ### Route plain `claude` / desktop apps through Edgee (`edgee alias`)
@@ -186,6 +195,7 @@ edgee launch codebuddy --resume <id>       # resume a CodeBuddy session
 ```bash
 edgee alias                 # CLI shims + desktop wrappers (when the app is installed)
 edgee alias claude          # one CLI agent
+edgee alias hermes          # Hermes Agent CLI
 edgee alias cursor          # Cursor.app wrapper (skipped if Cursor is not installed)
 edgee alias copilot-vscode  # VS Code wrapper (skipped if VS Code is not installed)
 edgee alias intellij        # IntelliJ IDEA Copilot wrapper (requires the IDE installed)
@@ -196,7 +206,7 @@ edgee alias remove          # undo
 
 This covers two kinds of targets:
 
-1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`, `pi`, `omp`, `kimi`, `kilo`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
+1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`, `pi`, `omp`, `kimi`, `kilo`, `hermes`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
 2. **Apps** (`cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
 
 ### Check savings
@@ -341,6 +351,7 @@ and stays silent otherwise.
 | Oh My Pi (CLI) | `edgee launch omp` | ✅ Supported |
 | Kimi Code (CLI) | `edgee launch kimi` | ✅ Supported |
 | Kilo Code (CLI) | `edgee launch kilo` | ✅ Supported |
+| Hermes Agent (CLI) | `edgee launch hermes` | ✅ Supported |
 | Cursor (app) | `edgee launch cursor` | ✅ Supported |
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
 | GitHub Copilot in IntelliJ IDEA | `edgee launch intellij` | Experimental; live validation pending |

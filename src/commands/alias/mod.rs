@@ -37,8 +37,9 @@ const PI_ALIAS: AliasSpec = AliasSpec::new("pi", "edgee launch pi --");
 const OMP_ALIAS: AliasSpec = AliasSpec::new("omp", "edgee launch omp --");
 const KIMI_ALIAS: AliasSpec = AliasSpec::new("kimi", "edgee launch kimi --");
 const KILO_ALIAS: AliasSpec = AliasSpec::new("kilo", "edgee launch kilo --");
+const HERMES_ALIAS: AliasSpec = AliasSpec::new("hermes", "edgee launch hermes --");
 
-const ALL_ALIASES: [AliasSpec; 9] = [
+const ALL_ALIASES: [AliasSpec; 10] = [
     CLAUDE_ALIAS,
     CODEBUDDY_ALIAS,
     CODEX_ALIAS,
@@ -48,6 +49,7 @@ const ALL_ALIASES: [AliasSpec; 9] = [
     OMP_ALIAS,
     KIMI_ALIAS,
     KILO_ALIAS,
+    HERMES_ALIAS,
 ];
 
 const PATH_EXPORT_POSIX: &str = "case \":$PATH:\" in\n  *\":$HOME/.edgee/bin:\"*) ;;\n  *) export PATH=\"$HOME/.edgee/bin:$PATH\" ;;\nesac\n";
@@ -68,6 +70,7 @@ pub enum Agent {
     Omp,
     Kimi,
     Kilo,
+    Hermes,
     /// Cursor IDE desktop wrapper (requires Cursor installed)
     Cursor,
     /// GitHub Copilot in VS Code desktop wrapper (requires VS Code installed)
@@ -97,6 +100,7 @@ impl Agent {
             Self::Omp => std::slice::from_ref(&OMP_ALIAS),
             Self::Kimi => std::slice::from_ref(&KIMI_ALIAS),
             Self::Kilo => std::slice::from_ref(&KILO_ALIAS),
+            Self::Hermes => std::slice::from_ref(&HERMES_ALIAS),
             Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop | Self::CopilotDesktop | Self::Intellij => &[],
             Self::All => &ALL_ALIASES,
         }
@@ -126,13 +130,14 @@ impl Agent {
             Self::Omp => "omp",
             Self::Kimi => "kimi",
             Self::Kilo => "kilo",
+            Self::Hermes => "hermes",
             Self::Cursor => "cursor",
             Self::CopilotVscode => "copilot-vscode",
             Self::ClaudeDesktop => "claude-desktop",
             Self::CopilotDesktop => "copilot-desktop",
             Self::Intellij => "intellij",
             Self::All => {
-                "claude, codebuddy, codex, opencode, crush, pi, omp, kimi, kilo, cursor, copilot-vscode, intellij, copilot-desktop, and claude-desktop"
+                "claude, codebuddy, codex, opencode, crush, pi, omp, kimi, kilo, hermes, cursor, copilot-vscode, intellij, copilot-desktop, and claude-desktop"
             }
         }
     }

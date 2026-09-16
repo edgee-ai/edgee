@@ -19,8 +19,8 @@ The short answer is in two parts.
 the vendors themselves publish for exactly this purpose.** There is no binary patching, no code
 injection, no credential extraction, no reverse-engineered API.
 
-For three GUI targets (Cursor, Copilot in VS Code, Claude Desktop) Edgee runs a **local, opt-in,
-scoped MITM relay**. That is a materially different and more sensitive posture, and it is stated
+For GUI targets and Copilot CLI, Edgee runs a **local, opt-in, scoped MITM relay**. That is a
+materially different and more sensitive posture, and it is stated
 plainly in [Transport C](#transport-c-local-relay) and in
 [Fragility](#fragility-what-a-vendor-update-can-break).
 
@@ -33,8 +33,8 @@ Every launch target uses exactly one of three transports. Nothing else exists in
 | Transport | What Edgee does | Targets | Vendor-documented? |
 | --- | --- | --- | --- |
 | **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi`, `kilo` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
-| **B. Config-file patch** | Writes a provider block into the app's own config file — additive and persistent for `pi`/`omp`, temporary and reverted for `codex-desktop` | `pi`, `omp`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
-| **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop` | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
+| **B. Config-file patch** | Writes a provider block into the app's own config file — additive and persistent for `pi`/`omp`/`hermes`, temporary and reverted for `codex-desktop` | `pi`, `omp`, `hermes`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
+| **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop`, `copilot-cli` | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
 
 Transport A covers the products that drive most enterprise coding-agent spend. Transport C is the
 compatibility path for GUI apps that expose no configuration surface at all.
@@ -42,9 +42,9 @@ compatibility path for GUI apps that expose no configuration surface at all.
 **Nothing runs as a daemon, a system extension, a kernel module, or an endpoint agent.** The relay
 is a foreground process started by the launch command and bound to loopback; it is never installed
 or registered, and it does not survive the terminal. Edgee never modifies the agent's binary, its
-installed files, or its stored credentials. Two config files are the exceptions: `codex-desktop`'s,
-which is reverted about ten seconds later, and `pi`'s `models.json`, which gains one namespaced
-`edgee` provider key and keeps it.
+installed files, or its stored credentials. Config-file targets are the exception: `pi`, `omp`, and
+`hermes` gain namespaced Edgee provider blocks; `codex-desktop` is patched and reverted about ten
+seconds later.
 
 ---
 
@@ -301,10 +301,9 @@ untouched and unused.
 
 ---
 
-## Transport B: config-file patch (`pi`, `omp`, `codex-desktop`)
+## Transport B: config-file patch (`pi`, `omp`, `hermes`, `codex-desktop`)
 
-Two targets write into a config file the user owns, for opposite reasons and with opposite
-lifecycles.
+These targets write into config files users own, with additive or temporary lifecycles.
 
 ### Pi (`edgee launch pi`)
 
@@ -329,6 +328,33 @@ OMP uses Pi's custom-provider schema. Edgee writes the same additive provider bl
 `~/.omp/agent/models.yml`, launches `omp` with credential references supplied through environment
 variables, and reuses the `pi` coding-agent key. Existing OMP providers and credentials remain
 untouched.
+
+### Hermes Agent (`edgee launch hermes`)
+
+Implementation: [`src/commands/launch/hermes.rs`](../src/commands/launch/hermes.rs).
+
+```
+$HERMES_HOME/config.yaml:
+  providers.edgee.api           = https://api.edgee.ai/v1
+  providers.edgee.key_env       = EDGEE_API_KEY
+  providers.edgee.transport     = chat_completions
+  providers.edgee.extra_headers = Edgee session/repo/debug attribution
+
+argv: --provider=edgee <user args>
+env:  EDGEE_API_KEY=<process-local Edgee key>
+      HERMES_INFERENCE_MODEL=<profile default, unless already set>
+```
+
+Hermes documents named custom providers in its
+[configuration reference](https://hermes-agent.nousresearch.com/docs/user-guide/configuration).
+It has no narrow config-file override: `HERMES_HOME` moves credentials, history, skills, hooks, and
+MCP settings with the config. Edgee therefore adds one namespaced provider to the active real
+profile, including explicit `--profile` selections, without changing `model.provider` or any
+unrelated key. API key remains process-local through `key_env`.
+
+This path runs entirely on Edgee-supplied credentials. Existing Hermes provider credentials remain
+stored but are unused by this launch. Hermes speaks OpenAI Chat Completions to Edgee; no relay or
+custom CA is involved.
 
 ### Codex Desktop (`edgee launch codex-desktop`)
 
@@ -367,19 +393,20 @@ to seconds and fully reverted.
 Implementation: [`src/commands/relay/mod.rs`](../src/commands/relay/mod.rs) and
 [`src/commands/relay/handler.rs`](../src/commands/relay/handler.rs)
 
-Used only for the three GUI targets that expose no configuration surface: `cursor`,
-`copilot-vscode`, `claude-desktop`. `edgee relay` is itself a hidden subcommand, because transport
-is an implementation detail rather than public UX.
+Used for GUI targets that expose no suitable configuration surface and Copilot CLI, whose
+subscription credential must be preserved: `cursor`, `copilot-vscode`, `claude-desktop`, and
+`copilot-cli`. `edgee relay` is itself a hidden subcommand, because transport is an implementation
+detail rather than public UX.
 
 **This is the part of the product that deserves the most scrutiny.** It is a compatibility bridge
-for three surfaces, not the core mechanism. We use it because it preserves the same one-command
-onboarding as every other target. Each of these three surfaces can also be pointed at a gateway
+for compatibility surfaces, not the core mechanism. We use it because it preserves the same one-command
+onboarding as every other target. Each of the three GUI surfaces can also be pointed at a gateway
 through documented vendor settings, which is the fallback if interception ever breaks — see
 [If the relay breaks](#if-the-relay-breaks-fall-back-to-transport-a).
 
 ### What it is
 
-A `hudsucker`-based HTTP proxy bound to **127.0.0.1** on a fixed per-agent port (41100–41400). It is
+A `hudsucker`-based HTTP proxy bound to **127.0.0.1** on a fixed per-agent port (41100–41700). It is
 started by the launch command and runs in the foreground for that command's lifetime. For the GUI
 editors it keeps serving after the editor window is handed off, until the user presses Ctrl-C. It is
 never installed, never registered as a service, and never survives the terminal.
@@ -501,6 +528,7 @@ gaps rather than bugs.
 | `kimi` | ⏳ | ❌ | ❌ | ❌ | not yet wired — see below |
 | `pi` | ✅ | ❌ | ❌ | ❌ | repeatable `--skill`; other kinds require extension code or have no configuration surface |
 | `omp` | ✅ | ✅ | ✅ | ✅ | Claude-compatible bundle via repeatable `--plugin-dir` |
+| `hermes` | ❌ | ❌ | ❌ | ❌ | all four kinds are discovered from `HERMES_HOME`/`config.yaml`; Hermes exposes no external component path |
 | `cursor`, `copilot-vscode`, `claude-desktop` | ❌ | ❌ | ❌ | ❌ | relay targets — Edgee never spawns the process, so there is no launch to attach a directory to |
 | `codex-desktop` | ❌ | ❌ | ❌ | ❌ | launched, but reads the real Codex config root that Edgee patches only for the handoff and reverts; it cannot use the symlink mirror because `auth.json` holds a single-use rotating token |
 

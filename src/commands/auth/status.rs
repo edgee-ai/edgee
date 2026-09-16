@@ -45,6 +45,7 @@ const PROVIDERS: &[(&str, &str)] = &[
     ("pi", "Pi"),
     ("kimi", "Kimi Code"),
     ("kilo", "Kilo Code"),
+    ("hermes", "Hermes Agent"),
 ];
 
 pub async fn run(opts: Options) -> Result<()> {
