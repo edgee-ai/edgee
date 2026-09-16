@@ -175,7 +175,7 @@ pub fn codex_mcp_args(plugins: &[Plugin]) -> Vec<String> {
 
 /// A TOML basic string. Every control character has to be escaped or the value
 /// silently fails to parse and Codex falls back to treating it as a literal.
-fn toml_string(value: &str) -> String {
+pub(crate) fn toml_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
     for ch in value.chars() {
@@ -195,7 +195,7 @@ fn toml_string(value: &str) -> String {
     out
 }
 
-fn toml_table(map: &std::collections::HashMap<String, String>) -> String {
+pub(crate) fn toml_table(map: &std::collections::HashMap<String, String>) -> String {
     // Sorted so repeated launches produce identical arguments.
     let mut keys: Vec<&String> = map.keys().collect();
     keys.sort();

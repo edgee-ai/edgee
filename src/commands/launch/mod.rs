@@ -7,6 +7,7 @@
 pub mod claude;
 pub mod claude_desktop;
 pub mod codebuddy;
+mod mcp;
 pub mod codex;
 pub mod codex_desktop;
 pub mod copilot_cli;
