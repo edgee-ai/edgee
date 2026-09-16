@@ -59,8 +59,9 @@ pub async fn run(opts: Options) -> Result<()> {
 }
 
 fn prompt_for_target() -> Result<String> {
-    let items = std::iter::once("Profile settings".to_string())
-        .chain(PROVIDERS.iter().map(|p| login::agent_label(p).to_string()))
+    let items = PROVIDERS
+        .iter()
+        .map(|p| login::agent_label(p).to_string())
         .collect::<Vec<_>>();
 
     let selection = Select::with_theme(&ColorfulTheme::default())
@@ -69,9 +70,5 @@ fn prompt_for_target() -> Result<String> {
         .default(0)
         .interact()?;
 
-    if selection == 0 {
-        Ok(PROFILE_TARGET.to_string())
-    } else {
-        Ok(PROVIDERS[selection - 1].to_string())
-    }
+    Ok(PROVIDERS[selection].to_string())
 }
