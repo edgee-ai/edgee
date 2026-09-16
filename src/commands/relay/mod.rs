@@ -806,7 +806,7 @@ fn ensure_ca_trusted(ca_path: &Path, common_name: &str) -> Result<()> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = ca_path;
+        let _ = (ca_path, common_name);
     }
     Ok(())
 }
