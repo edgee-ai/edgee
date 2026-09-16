@@ -38,6 +38,11 @@ pub async fn configure(provider: &str, first_run: bool) -> Result<()> {
     // catalog/billing fetches it needs.
     let routing_enabled = matches!(provider, "claude" | "codex");
 
+    // Tool surface reduction comes pre-checked only when a Claude Code or Codex
+    // key is first created — `first_run` is the onboarding path that follows key
+    // creation. Reconfiguring an existing key keeps its saved choice.
+    let tsr_default_on = first_run && matches!(provider, "claude" | "codex");
+
     let (is_paying, choices) = if routing_enabled {
         // Routing only takes effect with a paid plan. We still run the picker without
         // one — the user gets to choose, then sees the upsell. Unknown (request
@@ -86,9 +91,15 @@ pub async fn configure(provider: &str, first_run: bool) -> Result<()> {
         (true, Vec::new())
     };
 
-    let outcome =
-        match run_settings_wizard(label, &current, &choices, is_paying, first_run, routing_enabled)?
-        {
+    let outcome = match run_settings_wizard(
+        label,
+        &current,
+        &choices,
+        is_paying,
+        first_run,
+        routing_enabled,
+        tsr_default_on,
+    )? {
         Some(o) => o,
         None => {
             println!();
@@ -309,6 +320,9 @@ struct PendingRoute {
 
 /// Renders the settings editor pre-filled from the key's current state.
 /// Returns the chosen settings, or `None` if the user aborts.
+///
+/// `tsr_default_on` pre-checks tool surface reduction for a freshly created
+/// Claude Code / Codex key.
 fn run_settings_wizard(
     agent: &str,
     current: &CurrentSettings,
@@ -316,6 +330,7 @@ fn run_settings_wizard(
     is_paying: bool,
     first_run: bool,
     routing_enabled: bool,
+    tsr_default_on: bool,
 ) -> Result<Option<WizardOutcome>> {
     let theme = brackets_theme();
 
@@ -360,7 +375,9 @@ fn run_settings_wizard(
         ),
         (
             "Tool surface reduction — shrinks tool/MCP definitions sent to the model",
-            current.compression.tool_surface_reduction,
+            // Pre-checked for a fresh Claude Code / Codex key; preserve the saved
+            // choice when reconfiguring.
+            tsr_default_on || current.compression.tool_surface_reduction,
         ),
         (
             "Output brevity — nudges the model toward more concise responses",
