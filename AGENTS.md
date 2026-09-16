@@ -86,10 +86,9 @@ Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
   target**. Implementation per target under `src/commands/launch/`.
 - `edgee auth {login|status|list|switch}` — OAuth-style flow against the Edgee console. See
   `src/api.rs` and `src/commands/auth/`.
-- `edgee settings [profile|claude|claude_desktop|codebuddy|codex|codex_desktop|opencode|crush|cursor|copilot]`
+- `edgee settings [claude|claude_desktop|codebuddy|codex|codex_desktop|opencode|crush|cursor|copilot]`
   — configures compression, fallback, and reroute settings for a coding-agent key against the
-  console API. `edgee settings profile` manages profile-wide (non-agent-specific) settings instead —
-  currently the E2EE debug-log encryption passphrase (`src/commands/settings/profile.rs`). The
+  console API. The
   provider list uses bare `copilot`, deliberately distinct from launch's `copilot-vscode`, and
   underscored `claude_desktop`/`codex_desktop` for surfaces metered as their own backend agent.
 - `edgee stats` (visible alias `report`) — session token counts and compression savings.
@@ -125,7 +124,7 @@ src/
   commands/
     launch/            # one module per target + README.md naming rules
     auth/              # login, status, list, switch
-    settings/          # agent.rs (per-key), profile.rs (profile-wide)
+    settings/          # agent.rs (per-key)
     statusline/        # render, wrap, width + claude/ (install, doctor, fix, toggle)
     alias/             # PATH shims + desktop.rs app wrappers
     relay/             # hidden MITM proxy (hudsucker + rcgen)
