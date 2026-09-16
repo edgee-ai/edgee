@@ -8,7 +8,6 @@
 //! rewritten to the Edgee gateway (with `x-edgee-*` auth injected); other paths
 //! are forwarded to their original upstream. All decrypted traffic is logged.
 
-mod authority;
 mod handler;
 
 use std::net::SocketAddr;
@@ -19,10 +18,10 @@ use anyhow::{Context, Result};
 use console::style;
 use http::uri::{Authority, Scheme};
 use http::Uri;
+use hudsucker::certificate_authority::RcgenAuthority;
 use hudsucker::rustls::crypto::aws_lc_rs;
 use hudsucker::Proxy;
 
-use authority::ServerAuthAuthority;
 use handler::{GatewayTarget, RelayHandler, Sink};
 
 /// Canonical relay targets (same public names as `edgee launch`). See
@@ -731,13 +730,14 @@ fn generate_ca(common_name: &str, permitted_dns: &[&str]) -> Result<(String, Str
 }
 
 /// Build a hudsucker authority from PEM material.
-fn build_ca(cert_pem: &str, key_pem: &str) -> Result<ServerAuthAuthority> {
+fn build_ca(cert_pem: &str, key_pem: &str) -> Result<RcgenAuthority> {
     use rcgen::{Issuer, KeyPair};
 
     let key_pair = KeyPair::from_pem(key_pem).context("parsing CA key")?;
     let issuer = Issuer::from_ca_cert_pem(cert_pem, key_pair).context("parsing CA cert")?;
-    Ok(ServerAuthAuthority::new(
+    Ok(RcgenAuthority::new(
         issuer,
+        1_000,
         aws_lc_rs::default_provider(),
     ))
 }
