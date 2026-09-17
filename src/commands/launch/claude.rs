@@ -158,10 +158,10 @@ pub async fn run(opts: Options) -> Result<()> {
                 crate::config::console_base_url()
             ),
         };
-        cmd.args(mcp_injection_args(
-            &mcp_config_path,
-            &super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url),
-        ));
+        let system_prompt =
+            super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
+        let system_prompt_path = write_system_prompt_file(&system_prompt)?;
+        cmd.args(mcp_injection_args(&mcp_config_path, &system_prompt_path));
     }
 
     // Step 6: deliver the org's plugins. `--plugin-dir` loads a directory for
@@ -206,16 +206,28 @@ pub async fn run(opts: Options) -> Result<()> {
 /// eats whatever the user appended — their prompt (`claude "fix this"` starts an
 /// empty session) or a subcommand (`claude mcp add --transport http …` fails with
 /// "unknown option '--transport'", because `--transport` then lands on the root
-/// parser). `--append-system-prompt` takes a single value and is safe as a pair.
-fn mcp_injection_args(config_path: &Path, system_prompt: &str) -> Vec<OsString> {
-    // Built as OsString rather than formatted: config_path need not be UTF-8.
+/// parser).
+///
+/// The system prompt is injected via `--append-system-prompt-file`, pointing at
+/// a file on disk, rather than `--append-system-prompt <text>` inline. The
+/// prompt text is multi-line, and on Windows `claude` commonly resolves to an
+/// npm-installed `claude.cmd` batch shim rather than a native `.exe`. When the
+/// spawned program is a `.bat`/`.cmd` file, `std::process::Command` rejects any
+/// argument containing `\r`/`\n` outright — a CVE-2024-24576 ("BatBadBut")
+/// mitigation — with the error "batch file arguments are invalid". Routing the
+/// prompt through a file sidesteps that entirely, since the path itself is a
+/// single line.
+fn mcp_injection_args(config_path: &Path, system_prompt_path: &Path) -> Vec<OsString> {
+    // Built as OsString rather than formatted: paths need not be UTF-8.
     let mut mcp_config = OsString::from("--mcp-config=");
     mcp_config.push(config_path);
 
+    let mut system_prompt_file = OsString::from("--append-system-prompt-file=");
+    system_prompt_file.push(system_prompt_path);
+
     vec![
         mcp_config,
-        OsString::from("--append-system-prompt"),
-        OsString::from(system_prompt),
+        system_prompt_file,
         OsString::from(format!("--allowedTools={EDGEE_ALLOWED_TOOLS}")),
     ]
 }
@@ -243,6 +255,17 @@ fn write_mcp_config(creds: &crate::config::Credentials) -> Result<std::path::Pat
     Ok(path)
 }
 
+/// Writes the Edgee session system prompt to a file in the Edgee config
+/// directory, for use with `--append-system-prompt-file`. Returns the path to
+/// the written file.
+fn write_system_prompt_file(system_prompt: &str) -> Result<std::path::PathBuf> {
+    let dir = crate::config::config_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("system-prompt.txt");
+    std::fs::write(&path, system_prompt)?;
+    Ok(path)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -256,30 +279,46 @@ mod tests {
     // and `--transport` errors on the root parser). `=` stops the swallowing.
     #[test]
     fn variadic_injected_flags_use_equals_form() {
-        let injected = mcp_injection_args(Path::new("/tmp/mcp.json"), "sys prompt");
+        let injected = mcp_injection_args(
+            Path::new("/tmp/mcp.json"),
+            Path::new("/tmp/system-prompt.txt"),
+        );
 
         assert!(injected.contains(&OsString::from("--mcp-config=/tmp/mcp.json")));
+        assert!(injected.contains(&OsString::from(
+            "--append-system-prompt-file=/tmp/system-prompt.txt"
+        )));
         assert!(injected
             .iter()
             .any(|a| a.to_string_lossy() == format!("--allowedTools={EDGEE_ALLOWED_TOOLS}")));
         assert!(
-            !injected
-                .iter()
-                .any(|a| a == "--mcp-config" || a == "--allowedTools"),
+            !injected.iter().any(|a| a == "--mcp-config"
+                || a == "--allowedTools"
+                || a == "--append-system-prompt-file"),
             "variadic flags must not be passed as a space-separated pair: {injected:?}"
         );
     }
 
-    // Single-valued, so the pair form is safe — and required, since the prompt
-    // is multi-line text we should not have to escape into a `--flag=value`.
+    // Regression test: the system prompt used to be injected inline via
+    // `--append-system-prompt <multi-line text>`. On Windows, when `claude`
+    // resolves to an npm `claude.cmd` shim instead of a native `.exe`,
+    // std::process::Command refuses any argument containing `\r`/`\n` for a
+    // batch-file program with "batch file arguments are invalid". Passing the
+    // prompt via a file path (which is always a single line) avoids that class
+    // of bug entirely, regardless of what the prompt text contains.
     #[test]
-    fn append_system_prompt_stays_a_separate_value_arg() {
-        let injected = mcp_injection_args(Path::new("/tmp/mcp.json"), "sys prompt");
-        let at = injected
-            .iter()
-            .position(|a| a == "--append-system-prompt")
-            .expect("flag present");
+    fn no_injected_arg_contains_a_newline() {
+        let injected = mcp_injection_args(
+            Path::new("/tmp/mcp.json"),
+            Path::new("/tmp/system-prompt.txt"),
+        );
 
-        assert_eq!(injected[at + 1], OsString::from("sys prompt"));
+        for arg in &injected {
+            let text = arg.to_string_lossy();
+            assert!(
+                !text.contains('\n') && !text.contains('\r'),
+                "arg must not contain a newline: {text:?}"
+            );
+        }
     }
 }
