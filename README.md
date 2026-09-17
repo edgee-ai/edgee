@@ -313,6 +313,24 @@ The `SessionStart` hook installed by `edgee statusline claude install` (or by th
 first launch) prints a single warning line whenever the current project's statusLine shadows Edgee,
 and stays silent otherwise.
 
+### CLI updates
+
+When a newer release is available, interactive `edgee launch` commands offer
+**Update and continue** or **Later** (the default). After updating, Edgee restarts
+with the original arguments and launches the requested agent. Choosing Later or
+encountering an update error postpones the next offer for 24 hours. On failure,
+Edgee keeps the error visible until you press Enter, then continues launching.
+
+Homebrew installations show `brew upgrade edgee` instead of replacing the binary.
+For MDM-managed installations, administrators can set `EDGEE_DISABLE_SELF_UPDATE=1`
+in the user's environment: update notices remain, but both launch-time updates
+and `edgee update` are disabled. This setting controls CLI behavior, not filesystem
+permissions. Edgee does not request elevated privileges to update.
+
+Prompts require terminal stdin, stdout and stderr, and are disabled when `CI` is
+set. Statusline and relay commands skip update checks entirely.
+Set `EDGEE_NO_UPDATE_CHECK=1` to disable both notices and launch-time offers.
+
 ### Environment variables
 
 | Variable | Default | Purpose |
@@ -325,6 +343,7 @@ and stays silent otherwise.
 | `EDGEE_NO_AUTO_OVERLAY` | unset | Set to `1` to make `edgee statusline claude fix` print the suggested overlay instead of writing it (for users who manage `.claude` via dotfiles). |
 | `EDGEE_SILENCE_CONFLICT_WARNING` | unset | Set to `1` to silence the `SessionStart` warning. Per-user via shell env, or per-project via `.claude/settings.local.json`'s `env` block. |
 | `EDGEE_NO_UPDATE_CHECK` | unset | Set to `1` to skip the background check for a newer CLI release. |
+| `EDGEE_DISABLE_SELF_UPDATE` | unset | Set to `1` for administrator-managed updates: keep notices, disable launch-time updates and `edgee update`. |
 
 ---
 

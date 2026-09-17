@@ -19,6 +19,30 @@ fn is_homebrew_path(path: &Path) -> bool {
 }
 
 pub async fn run(_opts: Options) -> anyhow::Result<()> {
+    perform_update(false, None).await?;
+    Ok(())
+}
+
+pub(crate) fn self_update_disabled() -> bool {
+    std::env::var_os("EDGEE_DISABLE_SELF_UPDATE").is_some()
+}
+
+pub(crate) fn installed_with_homebrew() -> bool {
+    std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .is_ok_and(|path| is_homebrew_path(&path))
+}
+
+/// Returns true only when the executable was replaced. Launch-time updates
+/// already have consent and pin the version shown in the prompt.
+pub(crate) async fn perform_update(
+    confirmed: bool,
+    version: Option<String>,
+) -> anyhow::Result<bool> {
+    anyhow::ensure!(
+        !self_update_disabled(),
+        "Self-update is disabled by EDGEE_DISABLE_SELF_UPDATE. Contact your administrator to update Edgee."
+    );
     // Resolve the fast-launch link target *before* any self-replace: once
     // self_update renames the new binary over the running one, Linux's
     // /proc/self/exe reads "<path> (deleted)" and canonicalize fails — baking
@@ -35,39 +59,42 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
     //
     // Detection failure (no `current_exe`, or `canonicalize` error) falls through
     // to the existing direct-install flow so curl installs are never blocked.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Ok(real) = std::fs::canonicalize(&exe) {
-            if is_homebrew_path(&real) {
-                // Stabilize any fast-launch links to the brew `bin/edgee` symlink
-                // now, so they survive the deletion of the old Cellar version.
-                refresh_launch_links(launch_target.as_deref());
-                println!(
-                    "edgee was installed via Homebrew. Run {} to upgrade.",
-                    "brew upgrade edgee".cyan()
-                );
-                return Ok(());
-            }
-        }
+    if installed_with_homebrew() {
+        // Stabilize any fast-launch links to the brew `bin/edgee` symlink
+        // now, so they survive the deletion of the old Cellar version.
+        refresh_launch_links(launch_target.as_deref());
+        println!(
+            "edgee was installed via Homebrew. Run {} to upgrade.",
+            "brew upgrade edgee".cyan()
+        );
+        return Ok(false);
     }
 
     // self_update uses synchronous reqwest client so we need to run it in a blocking task
-    tokio::task::spawn_blocking(move || {
+    let updated = tokio::task::spawn_blocking(move || {
         use self_update::{backends::github::Update, Status};
 
-        let updater = Update::configure()
+        let mut builder = Update::configure();
+        builder
             .repo_owner("edgee-ai")
             .repo_name("edgee")
             .bin_name("edgee")
             .current_version(self_update::cargo_crate_version!())
             .show_download_progress(true)
-            .build()?;
+            .no_confirm(confirmed);
+        if let Some(version) = version {
+            builder.target_version_tag(&format!("v{}", version.trim_start_matches('v')));
+        }
+        let updater = builder.build()?;
 
-        match updater.update()? {
+        let status = updater.update()?;
+        let updated = matches!(status, Status::Updated(_));
+        match status {
             Status::Updated(version) => println!("Updated to {}", version.green()),
             Status::UpToDate(version) => println!("Already up to date ({})", version.green()),
         }
 
-        anyhow::Ok(())
+        anyhow::Ok(updated)
     })
     .await??;
 
@@ -76,7 +103,7 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
     // already current (e.g. baked against a previous install location).
     refresh_launch_links(launch_target.as_deref());
 
-    Ok(())
+    Ok(updated)
 }
 
 /// Best-effort refresh of installed fast-launch links (desktop wrappers).
