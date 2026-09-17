@@ -1222,26 +1222,65 @@ fn claude_desktop_binary() -> Result<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        let candidates = [
+        let mut candidates: Vec<PathBuf> = [
             std::env::var_os("LOCALAPPDATA")
                 .map(|a| PathBuf::from(a).join("AnthropicClaude").join("claude.exe")),
             std::env::var_os("PROGRAMFILES")
                 .map(|a| PathBuf::from(a).join("Claude").join("claude.exe")),
-        ];
-        candidates
-            .into_iter()
-            .flatten()
-            .find(|p| p.exists())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Claude Desktop not found. Install it from https://claude.ai/download."
-                )
-            })
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if let Some(msix) = msix_claude_binary() {
+            candidates.push(msix);
+        }
+        candidates.into_iter().find(|p| p.exists()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Claude Desktop not found. Install it from https://claude.ai/download."
+            )
+        })
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         anyhow::bail!("Claude Desktop is not available on this platform (macOS/Windows only).")
     }
+}
+
+/// Anthropic also ships Claude Desktop as an MSIX package on Windows
+/// (`Get-AppxPackage *Claude*`), installed under `Program Files\WindowsApps`.
+/// That directory's ACLs block a non-owning process from listing or globbing
+/// it — even the package's own subfolder — so guessing the executable's name
+/// or `read_dir`-ing it isn't reliable. Instead, read the package's own
+/// `AppxManifest.xml`, which declares the entry-point executable's path
+/// relative to the install dir (the same thing Windows itself resolves to
+/// launch the app); opening one exact, already-known file is permitted even
+/// where listing its parent's contents is not. Returns `None` if no matching
+/// package is installed (including on non-MSIX setups, where this is just a
+/// silent extra candidate).
+#[cfg(target_os = "windows")]
+fn msix_claude_binary() -> Option<PathBuf> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$pkg = Get-AppxPackage -Name '*Claude*' | Select-Object -First 1; \
+             if ($pkg) { \
+                 $manifest = [xml](Get-Content -Raw (Join-Path $pkg.InstallLocation 'AppxManifest.xml')); \
+                 $exe = $manifest.Package.Applications.Application | Select-Object -First 1 -ExpandProperty Executable; \
+                 Join-Path $pkg.InstallLocation $exe \
+             }",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if path.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(path))
 }
 
 /// The proxy-bypass list for relayed agents: loopback (so local MCP servers and
