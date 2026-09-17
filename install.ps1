@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$InstallDir = ""
@@ -58,7 +58,7 @@ function Get-InstallDir {
 function Get-LatestVersion {
     $apiUrl = "https://api.github.com/repos/$GithubOwner/$GithubRepo/releases/latest"
     try {
-        $response = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'edgee-installer' }
+        $response = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'edgee-installer' } -TimeoutSec 15
         return $response.tag_name
     } catch {
         Write-Err "Failed to fetch latest release info: $_"
@@ -91,7 +91,7 @@ function Install-Edgee {
         Write-Step "Downloading binary..."
         $binaryTmp = Join-Path $tmpDir $BinaryName
         try {
-            Invoke-WebRequest -Uri "$baseUrl/$remoteFile" -OutFile $binaryTmp -UseBasicParsing
+            Invoke-WebRequest -Uri "$baseUrl/$remoteFile" -OutFile $binaryTmp -UseBasicParsing -TimeoutSec 120
         } catch {
             Write-Err "Failed to download binary: $_"
         }
@@ -101,7 +101,7 @@ function Install-Edgee {
         Write-Step "Downloading checksum..."
         $checksumTmp = Join-Path $tmpDir "edgee.sha256"
         try {
-            Invoke-WebRequest -Uri "$baseUrl/$checksumFile" -OutFile $checksumTmp -UseBasicParsing
+            Invoke-WebRequest -Uri "$baseUrl/$checksumFile" -OutFile $checksumTmp -UseBasicParsing -TimeoutSec 30
         } catch {
             Write-Err "Failed to download checksum: $_"
         }
