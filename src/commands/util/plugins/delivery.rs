@@ -20,6 +20,7 @@ pub enum Target {
     Codebuddy,
     Pi,
     Omp,
+    Hermes,
     CopilotDesktop,
 }
 
@@ -33,6 +34,7 @@ impl Target {
             Target::Codebuddy => "codebuddy",
             Target::Pi => "pi",
             Target::Omp => "omp",
+            Target::Hermes => "hermes",
             Target::CopilotDesktop => "copilot-desktop",
         }
     }
@@ -52,11 +54,12 @@ impl Target {
             | Target::Opencode
             | Target::Crush
             | Target::Pi
+            | Target::Hermes
             | Target::CopilotDesktop => Layout::Flat,
         }
     }
 
-    pub const ALL: [Target; 8] = [
+    pub const ALL: [Target; 9] = [
         Target::Claude,
         Target::Codex,
         Target::Opencode,
@@ -64,6 +67,7 @@ impl Target {
         Target::Codebuddy,
         Target::Pi,
         Target::Omp,
+        Target::Hermes,
         Target::CopilotDesktop,
     ];
 }
@@ -170,6 +174,25 @@ pub fn delivery(target: Target, kind: Kind) -> Delivery {
     match target {
         Target::Claude => PLUGIN_DIR,
         Target::CopilotDesktop => UNVERIFIED,
+
+        // Hermes discovers every component kind from HERMES_HOME or config.yaml.
+        // HERMES_HOME is the whole profile (credentials, history, skills, hooks,
+        // and MCP), not a session-scoped plugin pointer, so replacing it would
+        // hide user state. Hermes exposes no external path for these definitions.
+        Target::Hermes => match kind {
+            Kind::Skills => Delivery::Unsupported {
+                reason: "Hermes loads skills from HERMES_HOME; no external skills-directory option exists",
+            },
+            Kind::Subagents => Delivery::Unsupported {
+                reason: "Hermes subagent definitions have no external configuration path",
+            },
+            Kind::Hooks => Delivery::Unsupported {
+                reason: "Hermes hooks live in config.yaml; no external hooks-file option exists",
+            },
+            Kind::McpServers => Delivery::Unsupported {
+                reason: "Hermes MCP config lives in HERMES_HOME; no external MCP-config option exists",
+            },
+        },
 
         // OpenCode's config schema has `skills.paths`, `agent` and `mcp`, but no
         // `hooks` key anywhere — its event extensibility is the JS `plugin`

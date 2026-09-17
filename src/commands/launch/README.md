@@ -111,6 +111,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + dedicated system-trusted Copilot CA |
 | `copilot-cli` | GitHub Copilot CLI | `copilot` | Relays the `copilot` binary directly (TUI, no `--wait`) — deliberately not env-injected; see below |
+| `hermes` | Hermes Agent CLI | `hermes` | Adds a namespaced Edgee custom provider to the active Hermes profile; see below |
 | `claude-desktop` | Claude Desktop (**Claude Code only**) | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code). Routes `api.anthropic.com/v1/messages`; the app's own chat goes to `claude.ai` and is not covered — see below |
 | `codex-desktop` | ChatGPT desktop app (**Codex tab only**) | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched, and the file is restored when the app quits. See below. |
 
@@ -456,6 +457,32 @@ Net effect: `edgee launch copilot-cli` spawns `copilot` directly (TUI-style, no
 real Copilot-billed traffic to `githubcopilot.com`/`api.github.com` reroutes
 through the gateway — preserving the user's actual GitHub Copilot subscription,
 which the BYOK lever cannot do.
+
+## `hermes` — additive Edgee provider
+
+Hermes Agent v0.21.3 supports named OpenAI-compatible providers under
+`providers:` in `$HERMES_HOME/config.yaml`. `edgee launch hermes` writes one
+namespaced `providers.edgee` block into the active Hermes profile and launches
+the child with `--provider=edgee`. Existing providers and the persistent model
+selection remain untouched.
+
+Hermes has no config-file-only override: `HERMES_HOME` relocates credentials,
+history, skills, hooks, and MCP settings together. A temporary home would hide
+that state, so the additive provider block lives in the real profile. It stores
+only gateway URL, OpenAI Chat Completions transport, model-discovery setting,
+and Edgee attribution headers. `key_env: EDGEE_API_KEY` keeps the credential out
+of the file; launch supplies it only to the child process.
+
+This path runs entirely on Edgee-supplied credentials. Hermes' Nous, OpenRouter,
+OpenAI, Anthropic, and other provider credentials are untouched and unused by
+`edgee launch hermes`. No relay or custom CA is involved. Arguments after
+`hermes` pass through unchanged, including `--profile`; Edgee updates the same
+profile Hermes selects.
+
+Plugin delivery is explicitly unsupported for this target. Hermes discovers
+skills, subagents, hooks, and MCP servers from its profile/config; none exposes
+an arbitrary external path that Edgee can attach without changing user-owned
+state.
 
 ## Planned targets (same rules)
 

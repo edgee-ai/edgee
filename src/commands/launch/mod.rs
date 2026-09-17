@@ -16,6 +16,7 @@ pub mod intellij;
 pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
+pub mod hermes;
 pub mod kimi;
 pub mod kilo;
 pub mod opencode;
@@ -51,6 +52,8 @@ enum Command {
     Kimi(kimi::Options),
     /// Kilo Code CLI
     Kilo(kilo::Options),
+    /// Hermes Agent CLI
+    Hermes(hermes::Options),
     /// GitHub Copilot CLI
     #[command(name = "copilot-cli")]
     CopilotCli(copilot_cli::Options),
@@ -91,6 +94,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Omp(o) => omp::run(o).await,
         Command::Kimi(o) => kimi::run(o).await,
         Command::Kilo(o) => kilo::run(o).await,
+        Command::Hermes(o) => hermes::run(o).await,
         Command::CopilotCli(o) => copilot_cli::run(o).await,
         Command::Intellij(o) => intellij::run(o).await,
         Command::CopilotDesktop(o) => copilot_desktop::run(o).await,
@@ -329,6 +333,17 @@ mod tests {
         }
     }
 
+    fn hermes_args(argv: &[&str]) -> Vec<String> {
+        let opts = crate::Options::try_parse_from(argv).expect("parses");
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::Hermes(c) => c.args,
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
     // `kilo` declares no flags of its own, so every flag Kilo Code owns reaches
     // it untouched — including the short ones most likely to collide with a
     // future edgee flag (`-m/--model`, `-c/--continue`, `-s/--session`).
@@ -352,6 +367,18 @@ mod tests {
         assert_eq!(
             omp_args(&["edgee", "launch", "omp", "--model", "openai/gpt-5", "-p"]),
             ["--model", "openai/gpt-5", "-p"]
+        );
+    }
+
+    #[test]
+    fn hermes_passes_agent_flags_through_verbatim() {
+        assert_eq!(
+            hermes_args(&["edgee", "launch", "hermes", "-m", "openai/gpt-5", "-p", "work"]),
+            ["-m", "openai/gpt-5", "-p", "work"]
+        );
+        assert_eq!(
+            hermes_args(&["edgee", "launch", "hermes", "--", "--tui"]),
+            ["--tui"]
         );
     }
 

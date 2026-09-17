@@ -349,6 +349,7 @@ pub fn agent_label(provider: &str) -> &'static str {
         "pi" => "Pi",
         "kimi" => "Kimi Code",
         "kilo" => "Kilo Code",
+        "hermes" => "Hermes Agent",
         "copilot" => "GitHub Copilot",
         "cursor" => "Cursor",
         _ => "your agent",
@@ -492,6 +493,7 @@ fn coding_assistant_name(provider: &str) -> Result<&'static str> {
         "pi" => Ok("pi"),
         "kimi" => Ok("kimi"),
         "kilo" => Ok("kilo"),
+        "hermes" => Ok("hermes"),
         "copilot" => Ok("copilot"),
         "cursor" => Ok("cursor"),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
@@ -513,6 +515,7 @@ fn provider_config_mut<'a>(
         "pi" => Ok(&mut creds.pi),
         "kimi" => Ok(&mut creds.kimi),
         "kilo" => Ok(&mut creds.kilo),
+        "hermes" => Ok(&mut creds.hermes),
         "copilot" => Ok(&mut creds.copilot),
         "cursor" => Ok(&mut creds.cursor),
         _ => anyhow::bail!("Unsupported provider `{provider}`"),
@@ -711,6 +714,7 @@ mod tests {
             "codex_desktop"
         );
         assert_eq!(coding_assistant_name("opencode").unwrap(), "opencode");
+        assert_eq!(coding_assistant_name("hermes").unwrap(), "hermes");
         assert!(coding_assistant_name("unknown").is_err());
     }
 
@@ -736,6 +740,9 @@ mod tests {
         provider_config_mut(&mut creds, "opencode")
             .unwrap()
             .replace(crate::config::ProviderConfig::default());
+        provider_config_mut(&mut creds, "hermes")
+            .unwrap()
+            .replace(crate::config::ProviderConfig::default());
 
         assert!(creds.claude.is_some());
         assert!(creds.claude_desktop.is_some());
@@ -743,6 +750,7 @@ mod tests {
         assert!(creds.codex.is_some());
         assert!(creds.codex_desktop.is_some());
         assert!(creds.opencode.is_some());
+        assert!(creds.hermes.is_some());
     }
 
     #[test]

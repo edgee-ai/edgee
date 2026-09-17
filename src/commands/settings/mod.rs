@@ -25,6 +25,7 @@ const PROVIDERS: &[&str] = &[
     "pi",
     "kimi",
     "kilo",
+    "hermes",
     "cursor",
     "copilot",
 ];
