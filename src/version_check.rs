@@ -7,8 +7,9 @@
 //! never delays the CLI noticeably.
 //!
 //! Interactive launches offer an update before starting the agent. Deferrals
-//! and failures snooze the offer for 24 hours. Managed installs keep their own
-//! update channel. Disable checks with `EDGEE_NO_UPDATE_CHECK=1`.
+//! and failures snooze the offer for 24 hours. Homebrew installs keep their own
+//! update channel. Disable checks and offers with `EDGEE_NO_UPDATE_CHECK=1`;
+//! explicit `edgee update` remains available.
 
 use std::io::IsTerminal;
 use std::path::Path;
@@ -141,11 +142,8 @@ pub async fn maybe_notify(is_launch: bool) {
         latest.green(),
     );
 
-    let managed = update::self_update_disabled();
     let homebrew = update::installed_with_homebrew();
-    if managed {
-        eprintln!("Updates are managed by your administrator. Contact them to update Edgee.");
-    } else if homebrew {
+    if homebrew {
         eprintln!("Run {} to upgrade.", "brew upgrade edgee".cyan());
     } else if !interactive {
         eprintln!("Run {} to upgrade.", "edgee update".cyan());
@@ -159,7 +157,7 @@ pub async fn maybe_notify(is_launch: bool) {
     let latest = latest.to_owned();
     state.remind_after = now_unix() + CHECK_INTERVAL_SECS;
     write_state(&state);
-    if managed || homebrew {
+    if homebrew {
         wait_to_continue();
         return;
     }

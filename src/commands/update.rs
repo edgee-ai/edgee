@@ -23,10 +23,6 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn self_update_disabled() -> bool {
-    std::env::var_os("EDGEE_DISABLE_SELF_UPDATE").is_some()
-}
-
 pub(crate) fn installed_with_homebrew() -> bool {
     std::env::current_exe()
         .and_then(std::fs::canonicalize)
@@ -39,10 +35,6 @@ pub(crate) async fn perform_update(
     confirmed: bool,
     version: Option<String>,
 ) -> anyhow::Result<bool> {
-    anyhow::ensure!(
-        !self_update_disabled(),
-        "Self-update is disabled by EDGEE_DISABLE_SELF_UPDATE. Contact your administrator to update Edgee."
-    );
     // Resolve the fast-launch link target *before* any self-replace: once
     // self_update renames the new binary over the running one, Linux's
     // /proc/self/exe reads "<path> (deleted)" and canonicalize fails — baking
