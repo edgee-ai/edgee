@@ -7,6 +7,7 @@
 //! `edgee statusline render`.
 
 pub mod claude;
+pub mod codebuddy;
 pub mod render;
 pub mod wrap;
 pub mod width;
@@ -41,6 +42,8 @@ pub enum Command {
     },
     /// Manage the Claude Code statusline integration.
     Claude(claude::Options),
+    /// Manage the CodeBuddy statusline integration.
+    Codebuddy(codebuddy::Options),
 }
 
 pub async fn run(opts: Options) -> Result<()> {
@@ -51,6 +54,7 @@ pub async fn run(opts: Options) -> Result<()> {
         Some(Command::Render) => render::run().await,
         Some(Command::Wrap { command }) => wrap::run(command).await,
         Some(Command::Claude(o)) => claude::run(o).await,
+        Some(Command::Codebuddy(o)) => codebuddy::run(o).await,
         None => {
             // Unreachable: `arg_required_else_help` makes clap exit with help
             // before we get here.
@@ -110,6 +114,18 @@ mod tests {
             opts.command,
             Some(Command::Claude(claude::Options {
                 command: claude::Command::Doctor(_),
+            }))
+        ));
+    }
+
+    #[test]
+    fn parses_codebuddy_subtree() {
+        let opts =
+            Options::try_parse_from(["edgee-statusline", "codebuddy", "install"]).unwrap();
+        assert!(matches!(
+            opts.command,
+            Some(Command::Codebuddy(codebuddy::Options {
+                command: codebuddy::Command::Install(_),
             }))
         ));
     }
