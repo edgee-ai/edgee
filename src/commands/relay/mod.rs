@@ -1175,7 +1175,15 @@ fn spawn_agent(
     cmd.env("NODE_EXTRA_CA_CERTS", ca_path);
     cmd.env("CODEX_CA_CERTIFICATE", ca_path);
     cmd.env("EDGEE_SESSION_ID", session_id);
+    cmd.env(
+        "EDGEE_ORG_ID",
+        crate::config::read()
+            .ok()
+            .and_then(|creds| creds.org_id)
+            .unwrap_or_default(),
+    );
     cmd.env("EDGEE_ORG_SLUG", org_slug);
+    cmd.env("EDGEE_PROFILE", crate::config::active_profile_name());
 
     cmd.spawn().with_context(|| {
         // A GUI editor most often fails here because its CLI isn't on PATH.

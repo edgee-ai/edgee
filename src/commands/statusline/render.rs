@@ -1,11 +1,11 @@
 //! Rust port of the legacy `statusline.sh` renderer.
 //!
 //! Reads the Claude Code session JSON from stdin (currently ignored — we use
-//! `EDGEE_SESSION_ID`/`EDGEE_ORG_SLUG` from the environment), fetches a
-//! per-session summary from the Edgee API (with an on-disk cache), and prints
-//! a single line of ANSI-colored text. Missing either env var, or a failed
-//! network call with no cache, degrades gracefully (no output, or the bare
-//! Edgee marker). The renderer must never crash and must always exit 0.
+//! `EDGEE_SESSION_ID`/`EDGEE_ORG_ID` from the environment), fetches an
+//! authenticated per-session summary from the Edgee API (with an on-disk
+//! cache), and prints a single line of ANSI-colored text. Missing context, or a
+//! failed network call with no cache, degrades gracefully (no output, or the
+//! bare Edgee marker). The renderer must never crash and must always exit 0.
 
 use std::fs;
 use std::io::Read;
@@ -75,13 +75,28 @@ async fn render_with_separator(prefix: &str) -> String {
         // Emit nothing so Claude Code hides the statusline entirely.
         return String::new();
     }
-    let org_slug = std::env::var("EDGEE_ORG_SLUG").unwrap_or_default();
-    if org_slug.is_empty() {
-        // Endpoint is org-scoped; no slug means it's unreachable.
+    let org_ref = std::env::var("EDGEE_ORG_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var("EDGEE_ORG_SLUG")
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_default();
+    if org_ref.is_empty() {
+        // Endpoint is org-scoped; no ID or slug means it's unreachable.
         return String::new();
     }
-
-    let stats = fetch_or_cache(&session_id, &org_slug).await;
+    let token = crate::config::read()
+        .ok()
+        .and_then(|creds| creds.user_token)
+        .unwrap_or_default();
+    let stats = if token.is_empty() {
+        read_cache(&cache_path(&session_id))
+    } else {
+        fetch_or_cache(&session_id, &org_ref, &token).await
+    };
     format_line(prefix, stats.as_ref())
 }
 
@@ -105,7 +120,7 @@ fn cache_path(session_id: &str) -> PathBuf {
         .join(format!("statusline-{session_id}.json"))
 }
 
-async fn fetch_or_cache(session_id: &str, org_slug: &str) -> Option<SessionSummary> {
+async fn fetch_or_cache(session_id: &str, org_ref: &str, token: &str) -> Option<SessionSummary> {
     let cache_file = cache_path(session_id);
     let cache_fresh = cache_age(&cache_file)
         .map(|age| age < Duration::from_secs(CACHE_MAX_AGE_SECS))
@@ -117,7 +132,7 @@ async fn fetch_or_cache(session_id: &str, org_slug: &str) -> Option<SessionSumma
         }
     }
 
-    if let Some(stats) = fetch_summary(session_id, org_slug).await {
+    if let Some(stats) = fetch_summary(session_id, org_ref, token).await {
         if let Some(parent) = cache_file.parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -152,21 +167,32 @@ fn read_cache(path: &PathBuf) -> Option<SessionSummary> {
     serde_json::from_str(&content).ok()
 }
 
-async fn fetch_summary(session_id: &str, org_slug: &str) -> Option<SessionSummary> {
+async fn fetch_summary(session_id: &str, org_ref: &str, token: &str) -> Option<SessionSummary> {
     let api_base = std::env::var("EDGEE_CONSOLE_API_URL")
         .unwrap_or_else(|_| "https://api.edgee.app".to_string());
-    let url = format!("{api_base}/v1/sessions/{org_slug}/{session_id}/summary");
-
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()
         .ok()?;
-
-    let resp = client.get(&url).send().await.ok()?;
+    let request = summary_request(&client, &api_base, org_ref, session_id, token)?;
+    let resp = client.execute(request).await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
     resp.json::<SessionSummary>().await.ok()
+}
+
+fn summary_request(
+    client: &reqwest::Client,
+    api_base: &str,
+    org_ref: &str,
+    session_id: &str,
+    token: &str,
+) -> Option<reqwest::Request> {
+    let url = format!(
+        "{api_base}/v1/organizations/{org_ref}/sessions/{session_id}/summary"
+    );
+    client.get(url).bearer_auth(token).build().ok()
 }
 
 fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
@@ -357,10 +383,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn render_without_org_slug_is_empty() {
+    async fn render_without_org_context_is_empty() {
         let _lock = crate::commands::claude_settings::env_test_lock();
         unsafe {
             std::env::set_var("EDGEE_SESSION_ID", "test-session");
+            std::env::remove_var("EDGEE_ORG_ID");
             std::env::remove_var("EDGEE_ORG_SLUG");
         }
         let s = render_with_separator("").await;
@@ -369,7 +396,29 @@ mod tests {
         }
         assert!(
             s.is_empty(),
-            "expected empty render with no org slug, got {s:?}"
+            "expected empty render with no org ID or slug, got {s:?}"
+        );
+    }
+
+    #[test]
+    fn summary_request_uses_protected_route_and_bearer_token() {
+        let client = reqwest::Client::new();
+        let request = summary_request(
+            &client,
+            "https://api.edgee.app",
+            "org-456",
+            "session-123",
+            "secret-token",
+        )
+        .unwrap();
+
+        assert_eq!(
+            request.url().as_str(),
+            "https://api.edgee.app/v1/organizations/org-456/sessions/session-123/summary"
+        );
+        assert_eq!(
+            request.headers()[reqwest::header::AUTHORIZATION],
+            "Bearer secret-token"
         );
     }
 }

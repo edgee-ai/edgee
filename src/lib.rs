@@ -27,7 +27,7 @@ use clap::Parser;
 #[command(name = "edgee", about = "Edgee CLI", version)]
 pub struct Options {
     /// Profile to use
-    #[arg(long, short = 'p')]
+    #[arg(long, short = 'p', env = "EDGEE_PROFILE")]
     pub profile: Option<String>,
 
     #[command(subcommand)]
@@ -39,7 +39,7 @@ pub async fn run() -> Result<()> {
     let opts = Options::parse();
 
     // Resolve active profile in precedence order:
-    // 1. --profile flag
+    // 1. --profile flag (or EDGEE_PROFILE, propagated to agent subprocesses)
     // 2. active_profile stored in the effective credentials file
     //    (local .edgee/credentials.toml if present, global otherwise)
     // 3. hardcoded fallback: "default"
