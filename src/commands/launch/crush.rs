@@ -119,8 +119,14 @@ fn build_edgee_provider(
     if let (Some(headers_obj), Some(debug_headers)) =
         (extra_headers.as_object_mut(), debug_log_headers)
     {
-        headers_obj.insert("x-edgee-debug-pubkey".to_string(), Value::String(debug_headers.pubkey));
-        headers_obj.insert("x-edgee-debug-salt".to_string(), Value::String(debug_headers.salt));
+        headers_obj.insert(
+            "x-edgee-debug-pubkey".to_string(),
+            Value::String(debug_headers.pubkey),
+        );
+        headers_obj.insert(
+            "x-edgee-debug-salt".to_string(),
+            Value::String(debug_headers.salt),
+        );
     }
 
     let mut provider = serde_json::json!({
@@ -357,8 +363,9 @@ pub async fn run(opts: Options) -> Result<()> {
                 crate::config::console_base_url()
             ),
         };
-        let text = super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
-        let instructions_path = config_dir.join("edgee-instructions.md");
+        let text =
+            super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
+        let instructions_path = config_dir.join("CRUSH.md");
         std::fs::write(&instructions_path, &text)?;
         push_context_path(&mut config, &instructions_path.to_string_lossy());
     }
@@ -371,7 +378,10 @@ pub async fn run(opts: Options) -> Result<()> {
     let mut cmd = std::process::Command::new(util::resolve_binary("crush"));
     cmd.env("CRUSH_GLOBAL_CONFIG", &config_dir);
     cmd.env("EDGEE_SESSION_ID", &session_id);
-    cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
+    cmd.env(
+        "EDGEE_ORG_SLUG",
+        creds.org_slug.as_deref().unwrap_or_default(),
+    );
     cmd.args(&opts.args);
 
     let status = cmd.status().map_err(|e| {
@@ -467,7 +477,10 @@ mod tests {
             &["anthropic/claude-opus-5"],
             &[("anthropic/claude-opus-5", 1_000_000)],
         );
-        assert_eq!(models[0]["id"], serde_json::json!("anthropic/claude-opus-5"));
+        assert_eq!(
+            models[0]["id"],
+            serde_json::json!("anthropic/claude-opus-5")
+        );
         assert_eq!(models[0]["context_window"], serde_json::json!(1_000_000));
     }
 
@@ -560,12 +573,15 @@ mod tests {
 
     #[test]
     fn a_free_model_declares_zeroed_rates_rather_than_omitting_them() {
-        let model = priced_model("zai/glm-4.5-flash", crate::api::GatewayModelCost {
-            input: 0.0,
-            output: 0.0,
-            cache_read: 0.0,
-            cache_write: 0.0,
-        });
+        let model = priced_model(
+            "zai/glm-4.5-flash",
+            crate::api::GatewayModelCost {
+                input: 0.0,
+                output: 0.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        );
         assert_eq!(model["cost_per_1m_in"], serde_json::json!(0.0));
         assert_eq!(model["cost_per_1m_out"], serde_json::json!(0.0));
     }
