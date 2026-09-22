@@ -385,7 +385,15 @@ pub async fn run(opts: Options) -> Result<()> {
         // leave the terminal free, so their Ctrl-C really does reach us as SIGINT
         // (TUI agents keep the terminal in raw mode and swallow it themselves).
         let mut interrupt = std::pin::pin!(shutdown_signal());
-        let mut editor = std::pin::pin!(run_agent(&agent, port, &cert_path, &session_id, &org_slug, &opts.extra_args));
+        let mut editor = std::pin::pin!(run_agent(
+            &agent,
+            port,
+            &cert_path,
+            &key_pem,
+            &session_id,
+            &org_slug,
+            &opts.extra_args,
+        ));
         let exited = tokio::select! {
             res = &mut editor => Some(res?),
             _ = &mut interrupt => None,
@@ -420,7 +428,15 @@ pub async fn run(opts: Options) -> Result<()> {
             println!("Usage is grouped under Copilot. Edgee plugin delivery is not yet supported for this app.");
             println!("Keep this command running. Ctrl-C closes the app and stops its connection.");
         }
-        let mut agent_child = spawn_agent(&agent, port, &cert_path, &session_id, &org_slug, &opts.extra_args)?;
+        let mut agent_child = spawn_agent(
+            &agent,
+            port,
+            &cert_path,
+            &key_pem,
+            &session_id,
+            &org_slug,
+            &opts.extra_args,
+        )?;
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
@@ -481,6 +497,7 @@ pub async fn run(opts: Options) -> Result<()> {
             &agent,
             port,
             &cert_path,
+            &key_pem,
             &session_id,
             &org_slug,
             &opts.extra_args,
@@ -1089,6 +1106,7 @@ fn spawn_agent(
     agent: &str,
     port: u16,
     ca_path: &Path,
+    ca_key_pem: &str,
     session_id: &str,
     org_slug: &str,
     extra_args: &[String],
@@ -1134,6 +1152,14 @@ fn spawn_agent(
         let bin = crate::commands::launch::util::resolve_binary(bin_name);
         let mut c = tokio::process::Command::new(bin);
         c.args(args);
+        // Copilot uses Electron's Chromium network service for some requests.
+        // That stack ignores NODE_EXTRA_CA_CERTS, so narrowly allow the SPKI of
+        // Edgee's relay key instead of disabling certificate validation globally.
+        // Hudsucker signs every generated leaf with this same key, making its SPKI
+        // visible in the leaf even though the relay does not send the root CA.
+        if let Some(arg) = copilot_vscode_spki_arg(agent, ca_key_pem)? {
+            c.arg(arg);
+        }
         // TUI agents relayed from `edgee launch` (currently only `copilot-cli`)
         // forward the user's flags to the spawned binary. GUI editors never have
         // extra args — their launch targets parse none — so they stay untouched.
@@ -1202,13 +1228,47 @@ async fn run_agent(
     agent: &str,
     port: u16,
     ca_path: &Path,
+    ca_key_pem: &str,
     session_id: &str,
     org_slug: &str,
     extra_args: &[String],
 ) -> Result<std::process::ExitStatus> {
-    Ok(spawn_agent(agent, port, ca_path, session_id, org_slug, extra_args)?
+    Ok(spawn_agent(
+        agent,
+        port,
+        ca_path,
+        ca_key_pem,
+        session_id,
+        org_slug,
+        extra_args,
+    )?
         .wait()
         .await?)
+}
+
+/// Chromium's targeted certificate-error bypass for the persisted Copilot relay
+/// key. Unlike `--ignore-certificate-errors`, this leaves normal verification in
+/// place for every certificate whose SPKI does not match Edgee's local key.
+fn copilot_vscode_spki_arg(agent: &str, ca_key_pem: &str) -> Result<Option<String>> {
+    if !is_copilot_vscode(agent) {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "--ignore-certificate-errors-spki-list={}",
+        spki_sha256(ca_key_pem)?
+    )))
+}
+
+/// Base64-encoded SHA-256 digest of a key's DER SubjectPublicKeyInfo, the format
+/// Chromium expects in `--ignore-certificate-errors-spki-list`.
+fn spki_sha256(key_pem: &str) -> Result<String> {
+    use base64::Engine;
+    use rcgen::{KeyPair, PublicKeyData};
+    use sha2::{Digest, Sha256};
+
+    let key_pair = KeyPair::from_pem(key_pem).context("parsing CA key for Chromium trust")?;
+    let spki = key_pair.subject_public_key_info();
+    Ok(base64::engine::general_purpose::STANDARD.encode(Sha256::digest(spki)))
 }
 
 /// Resolve the Claude Desktop executable to launch behind the relay. Claude
@@ -1616,6 +1676,32 @@ mod tests {
             constrained.len() > shared.len(),
             "constrained CA should carry the name-constraints extension"
         );
+    }
+
+    #[test]
+    fn copilot_vscode_gets_a_targeted_chromium_spki_allowlist() {
+        use base64::Engine;
+
+        let (_, key_pem) = generate_ca(COPILOT_CA_CN, &["githubcopilot.com"]).unwrap();
+        let fingerprint = spki_sha256(&key_pem).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&fingerprint)
+            .unwrap();
+        assert_eq!(decoded.len(), 32, "SHA-256 digest must be 32 bytes");
+
+        let arg = copilot_vscode_spki_arg("copilot-vscode", &key_pem)
+            .unwrap()
+            .expect("VS Code should receive the Chromium allowlist");
+        assert_eq!(
+            arg,
+            format!("--ignore-certificate-errors-spki-list={fingerprint}")
+        );
+        assert!(copilot_vscode_spki_arg("copilot-cli", &key_pem)
+            .unwrap()
+            .is_none());
+        assert!(copilot_vscode_spki_arg("cursor", &key_pem)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
