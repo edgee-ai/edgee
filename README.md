@@ -186,6 +186,7 @@ edgee launch codebuddy --resume <id>       # resume a CodeBuddy session
 ```bash
 edgee alias                 # CLI shims + desktop wrappers (when the app is installed)
 edgee alias claude          # one CLI agent
+edgee alias copilot-cli     # GitHub Copilot CLI (installs a `copilot` shim)
 edgee alias cursor          # Cursor.app wrapper (skipped if Cursor is not installed)
 edgee alias copilot-vscode  # VS Code wrapper (skipped if VS Code is not installed)
 edgee alias intellij        # IntelliJ IDEA Copilot wrapper (requires the IDE installed)
