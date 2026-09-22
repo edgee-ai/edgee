@@ -226,6 +226,9 @@ pub async fn run(opts: Options) -> Result<()> {
     let agent = canonicalize_target(&raw)
         .ok_or_else(|| anyhow::anyhow!("unknown agent '{raw}' (expected {})", TARGETS.join("|")))?
         .to_string();
+    if is_cursor(&agent) {
+        crate::commands::launch::cursor::restore_for_plan()?;
+    }
     // The Edgee provider key backing the gateway reroute. GUI editors (VS Code
     // Copilot, Cursor) map to their own passthrough provider key.
     let provider = key_provider(&agent).to_string();
