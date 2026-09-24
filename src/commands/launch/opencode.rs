@@ -374,6 +374,20 @@ fn build_edgee_mcp(token: &str) -> Value {
     })
 }
 
+/// v2 accepts `instructions` but never loads them. A reference's `description`
+/// is the one config field it copies verbatim into the system prompt, so the
+/// session-tracking prompt rides there, pointing at a directory holding the
+/// same text.
+fn merge_session_reference(config: &mut Value, dir: &str, instructions: &str) {
+    let reference = serde_json::json!({
+        "edgee": {
+            "path": dir,
+            "description": instructions,
+        }
+    });
+    plugins::config::merge_object(config, "references", reference);
+}
+
 /// Appends `path` to a top-level string array, without duplicates.
 fn push_top_level_path(config: &mut Value, key: &str, path: &str) {
     let Some(obj) = config.as_object_mut() else {
@@ -573,28 +587,36 @@ pub async fn run(opts: Options) -> Result<()> {
         let token = creds.user_token.as_deref().unwrap_or("");
         merge_mcp(&mut config, version, build_edgee_mcp(token));
 
-        // v2 never loads `instructions`.
-        if version == ConfigVersion::V1 {
-            let repo_origin = crate::git::detect_origin();
-            let session_url = match creds.org_slug.as_deref() {
-                Some(slug) if !slug.is_empty() => {
-                    format!(
-                        "{}/sessions/{slug}/{session_id}",
-                        crate::config::console_base_url()
-                    )
-                }
-                _ => format!(
-                    "{}/sessions/{session_id}",
+        let repo_origin = crate::git::detect_origin();
+        let session_url = match creds.org_slug.as_deref() {
+            Some(slug) if !slug.is_empty() => {
+                format!(
+                    "{}/sessions/{slug}/{session_id}",
                     crate::config::console_base_url()
-                ),
-            };
-            let text =
-                super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
-            let path =
-                std::env::temp_dir().join(format!("edgee-opencode-instructions-{session_id}.md"));
-            std::fs::write(&path, &text)?;
-            push_top_level_path(&mut config, "instructions", &path.to_string_lossy());
-            instructions_path = Some(path);
+                )
+            }
+            _ => format!(
+                "{}/sessions/{session_id}",
+                crate::config::console_base_url()
+            ),
+        };
+        let text =
+            super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
+        match version {
+            ConfigVersion::V1 => {
+                let path = std::env::temp_dir()
+                    .join(format!("edgee-opencode-instructions-{session_id}.md"));
+                std::fs::write(&path, &text)?;
+                push_top_level_path(&mut config, "instructions", &path.to_string_lossy());
+                instructions_path = Some(path);
+            }
+            ConfigVersion::V2 => {
+                let dir = std::env::temp_dir().join(format!("edgee-opencode-session-{session_id}"));
+                std::fs::create_dir_all(&dir)?;
+                std::fs::write(dir.join("README.md"), &text)?;
+                merge_session_reference(&mut config, &dir.to_string_lossy(), &text);
+                instructions_path = Some(dir);
+            }
         }
     }
 
@@ -626,7 +648,11 @@ pub async fn run(opts: Options) -> Result<()> {
     // Clean up the temporary config file
     let _ = std::fs::remove_file(&config_path);
     if let Some(path) = instructions_path {
-        let _ = std::fs::remove_file(path);
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(path);
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     super::print_session_stats(&creds, &session_id, "OpenCode").await;
@@ -886,6 +912,20 @@ mod tests {
         assert_eq!(
             config["instructions"],
             serde_json::json!(["CONTRIBUTING.md", "/tmp/edgee-instructions.md"])
+        );
+    }
+
+    #[test]
+    fn v2_session_reference_keeps_existing_references() {
+        let mut config = serde_json::json!({
+            "references": { "docs": { "path": "../docs" } }
+        });
+        merge_session_reference(&mut config, "/tmp/edgee-session", "track this session");
+
+        assert_eq!(config["references"]["docs"]["path"], serde_json::json!("../docs"));
+        assert_eq!(
+            config["references"]["edgee"],
+            serde_json::json!({ "path": "/tmp/edgee-session", "description": "track this session" })
         );
     }
 
