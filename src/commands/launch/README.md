@@ -258,7 +258,8 @@ OpenCode 2.x reshaped its config (`providers`/`package`/`settings`,
 emits the matching shape. v2 clients also attach to a shared background
 service that keeps the config it started with, so the launcher passes
 `--standalone` to the TUI, `run` and `mini`. v2 ignores `instructions`, so the
-MCP session-tracking prompt is v1-only.
+MCP session-tracking prompt goes in the `description` of a `references.edgee`
+entry instead, which v2 copies verbatim into the system prompt.
 
 The hidden `edgee relay opencode` path serves a different use case: it launches
 OpenCode with the user's config unchanged and proxies supported inference traffic
