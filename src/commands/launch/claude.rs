@@ -106,12 +106,15 @@ pub async fn run(opts: Options) -> Result<()> {
 
     // Set up the environment for the claude CLI to use 1M context window instead of the default 200k on Claude models.
     cmd.env("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5[1m]")
-        .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5[1m]");
+        .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5-5[1m]");
 
     // Set up the environment for Edgee session tracking and console API access.
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env("EDGEE_ORG_ID", creds.org_id.as_deref().unwrap_or_default());
-    cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
+    cmd.env(
+        "EDGEE_ORG_SLUG",
+        creds.org_slug.as_deref().unwrap_or_default(),
+    );
     cmd.env("EDGEE_PROFILE", crate::config::active_profile_name());
     cmd.env(
         "EDGEE_CONSOLE_API_URL",
@@ -267,7 +270,6 @@ fn write_system_prompt_file(system_prompt: &str) -> Result<std::path::PathBuf> {
     std::fs::write(&path, system_prompt)?;
     Ok(path)
 }
-
 
 #[cfg(test)]
 mod tests {

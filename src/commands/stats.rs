@@ -43,6 +43,10 @@ struct StatsJson {
     /// Live online-session count when `source == "api"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     active_sessions: Option<u64>,
+    /// True only when the latest-request lookup succeeded (including an empty result).
+    last_request_checked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_request: Option<crate::api::LastRequest>,
     totals: Totals,
     recent: Vec<SessionBrief>,
 }
@@ -136,6 +140,8 @@ fn build_stats_json(logs: &[util::SessionLogEntry], limit: Option<usize>) -> Sta
 
     StatsJson {
         source: "local",
+        last_request_checked: false,
+        last_request: None,
         window: None,
         sessions: logs.len(),
         active_sessions: None,
@@ -153,6 +159,8 @@ fn stats_json_from_summary(
 ) -> StatsJson {
     StatsJson {
         source: "api",
+        last_request_checked: false,
+        last_request: None,
         window: Some(period.to_string()),
         sessions: summary.distinct_sessions as usize,
         active_sessions: active,
@@ -192,7 +200,14 @@ async fn fetch_remote_stats(period: &str) -> Option<StatsJson> {
     let summary = client.get_org_usage(org, period, user).await.ok()?;
     // Online count is best-effort; a failure just leaves `active_sessions` unset.
     let active = client.get_online_sessions_count(org, user).await.ok();
-    Some(stats_json_from_summary(&summary, period, active))
+    let mut stats = stats_json_from_summary(&summary, period, active);
+    if let Some(user) = user {
+        if let Ok(request) = client.get_last_request(org, period, user).await {
+            stats.last_request_checked = true;
+            stats.last_request = request;
+        }
+    }
+    Some(stats)
 }
 
 fn fmt_compression_cell(before: u64, after: u64) -> (String, bool) {

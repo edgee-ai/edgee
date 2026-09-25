@@ -131,6 +131,12 @@ edgee launch claude-desktop
 edgee launch codex-desktop
 ```
 
+> **Cursor.** Fully quit Cursor before launching. Edgee configures Cursor's
+> OpenAI-compatible BYOK provider in `state.vscdb`, registers gateway models,
+> then opens the app. To use your Cursor subscription instead, fully quit Cursor
+> and run `edgee relay cursor`; this restores your previous provider settings and
+> starts the Plan relay.
+
 > **ChatGPT desktop app.** Quit any running instance first — the app only picks up
 > the Edgee settings on a fresh start, and an already-running one keeps talking
 > straight to OpenAI (the command tells you when this happens).
@@ -186,6 +192,7 @@ edgee launch codebuddy --resume <id>       # resume a CodeBuddy session
 ```bash
 edgee alias                 # CLI shims + desktop wrappers (when the app is installed)
 edgee alias claude          # one CLI agent
+edgee alias copilot-cli     # GitHub Copilot CLI (installs a `copilot` shim)
 edgee alias cursor          # Cursor.app wrapper (skipped if Cursor is not installed)
 edgee alias copilot-vscode  # VS Code wrapper (skipped if VS Code is not installed)
 edgee alias intellij        # IntelliJ IDEA Copilot wrapper (requires the IDE installed)

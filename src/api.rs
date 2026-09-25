@@ -1,11 +1,41 @@
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 pub struct ApiClient {
     http: reqwest::Client,
     base_url: String,
+}
+
+/// Latest recorded request. Missing routing flags mean unknown, never false.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LastRequest {
+    pub timestamp: String,
+    pub model: String,
+    pub original_model: Option<String>,
+    pub is_reroute: Option<bool>,
+    pub is_fallback: Option<bool>,
+    pub is_plan_fallback: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct RequestLogsResponse {
+    data: Vec<LastRequest>,
+}
+
+#[derive(Deserialize)]
+struct OwnedRequestKey {
+    id: String,
+    user_id: Option<String>,
+}
+
+fn owned_request_key_ids(keys: Vec<OwnedRequestKey>, user_id: &str) -> Vec<String> {
+    keys.into_iter()
+        .filter(|key| key.user_id.as_deref() == Some(user_id))
+        .map(|key| key.id)
+        .collect()
 }
 
 /// Org-wide usage aggregate from `GET /v1/organizations/{org}/usage` (ClickHouse
@@ -699,6 +729,47 @@ impl ApiClient {
         Ok(body.summary)
     }
 
+    /// Latest request for this user's current keys in the selected usage window.
+    /// Logs do not support a user_id filter for admins, so filter by owned key IDs.
+    pub async fn get_last_request(
+        &self,
+        org_id: &str,
+        period: &str,
+        user_id: &str,
+    ) -> Result<Option<LastRequest>> {
+        anyhow::ensure!(!user_id.is_empty(), "Missing user ID for request history");
+        let response = self
+            .http
+            .get(format!(
+                "{}/v1/organizations/{org_id}/api_keys",
+                self.base_url
+            ))
+            .send()
+            .await
+            .context("Failed to fetch request keys")?;
+        check_status(&response, "fetch request keys")?;
+        let keys: Vec<OwnedRequestKey> = response.json().await.context("Invalid request keys")?;
+        let ids = owned_request_key_ids(keys, user_id);
+        // An empty key filter would expose the entire org to admins.
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        let mut query = vec![("period", period), ("page", "1"), ("page_size", "1")];
+        query.extend(ids.iter().map(|id| ("api_key_id", id.as_str())));
+        let mut url =
+            reqwest::Url::parse(&format!("{}/v1/organizations/{org_id}/logs", self.base_url))?;
+        url.query_pairs_mut().extend_pairs(query);
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Failed to fetch latest request")?;
+        check_status(&response, "fetch latest request")?;
+        let logs: RequestLogsResponse = response.json().await.context("Invalid request logs")?;
+        Ok(logs.data.into_iter().next())
+    }
+
     /// Number of sessions currently online (live "active" count), narrowed to one
     /// member when `user_id` is set — same scoping rules as [`Self::get_org_usage`].
     pub async fn get_online_sessions_count(
@@ -991,6 +1062,26 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn latest_request_preserves_unknown_routing_and_filters_keys() {
+        let row: super::LastRequest =
+            serde_json::from_str(r#"{"timestamp":"2026-09-23T12:00:00.123456Z","model":"kimi"}"#)
+                .unwrap();
+        assert_eq!(row.is_reroute, None);
+        let keys = serde_json::from_str(
+            r#"[{"id":"mine","user_id":"me"},{"id":"other","user_id":"them"},{"id":"unknown"}]"#,
+        )
+        .unwrap();
+        assert_eq!(super::owned_request_key_ids(keys, "me"), vec!["mine"]);
+        let logs: super::RequestLogsResponse = serde_json::from_str(r#"{"data":[]}"#).unwrap();
+        assert!(logs.data.is_empty());
+        let row: super::LastRequest = serde_json::from_str(
+            r#"{"timestamp":"2026-09-23T12:00:00Z","model":"kimi","original_model":"opus","is_reroute":true,"is_fallback":false}"#,
+        ).unwrap();
+        assert_eq!(row.is_reroute, Some(true));
+        assert_eq!(row.original_model.as_deref(), Some("opus"));
+    }
+
     use super::*;
 
     fn catalog_model(json: &str) -> GatewayModel {

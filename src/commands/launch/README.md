@@ -102,11 +102,11 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `kimi` | Kimi Code CLI | `kimi` |
 | `kilo` | Kilo Code CLI | `kilo` |
 
-### Apps & editors (relay today)
+### Apps & editors
 
 | Target | Product | Provider key | Notes |
 |---|---|---|---|
-| `cursor` | Cursor IDE | `cursor` | Relays the `cursor` binary |
+| `cursor` | Cursor IDE | `cursor` | Writes Edgee as Cursor's OpenAI-compatible BYOK provider; `edgee relay cursor` restores prior settings and retains the Plan relay |
 | `intellij` | GitHub Copilot in IntelliJ IDEA | `copilot` | Direct IDE launch with proxy env + Node CA; live-session validation pending |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + dedicated system-trusted Copilot CA |
@@ -251,6 +251,15 @@ every desktop request down the keyed pipeline, which authenticates from
 
 `edgee launch opencode` adds Edgee as a provider in a temporary merged config.
 OpenCode sends those requests directly to the gateway using the Edgee key.
+
+OpenCode 2.x reshaped its config (`providers`/`package`/`settings`,
+`mcp.servers` with `disabled`, `agents` with `system`, top-level `skills`,
+`cost.cache.{read,write}`), so the launcher reads `opencode --version` and
+emits the matching shape. v2 clients also attach to a shared background
+service that keeps the config it started with, so the launcher passes
+`--standalone` to the TUI, `run` and `mini`. v2 ignores `instructions`, so the
+MCP session-tracking prompt goes in the `description` of a `references.edgee`
+entry instead, which v2 copies verbatim into the system prompt.
 
 The hidden `edgee relay opencode` path serves a different use case: it launches
 OpenCode with the user's config unchanged and proxies supported inference traffic
@@ -446,7 +455,7 @@ full authenticated request/response cycle):
 - **It honors `NODE_EXTRA_CA_CERTS`.** A BYOK request pointed at a local HTTPS
   mock signed by a throwaway CA failed TLS verification until
   `NODE_EXTRA_CA_CERTS` was set to that CA's cert, then succeeded — the same
-  mechanism `claude`, `copilot-vscode`, and `cursor` already rely on for relay
+  mechanism `claude`, `copilot-vscode`, and explicit Cursor Plan launches rely on for relay
   MITM trust (see `spawn_agent`). Native model requests use a stricter platform
   verifier, so the dedicated, name-constrained Copilot CA is also installed in
   the macOS system keychain on first launch.
@@ -477,7 +486,7 @@ which the BYOK lever cannot do.
 5. Choose transport:
    - CLI with base URL / headers → follow `claude.rs` / `codex.rs`.
    - App that cannot be pointed at the gateway → thin wrapper calling
-     `relay::run_for_agent("<canonical>")` (see `cursor.rs`, `copilot_vscode.rs`).
+     `relay::run_for_agent("<canonical>")` (see `copilot_vscode.rs`).
 6. If relay: accept only the canonical name from launch; put legacy spellings in
    `relay::canonicalize_target` as aliases, not as new public targets. Never
    alias a reserved bare CLI name to an app surface.
