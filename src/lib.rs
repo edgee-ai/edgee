@@ -50,10 +50,15 @@ pub async fn run() -> Result<()> {
 
     config::set_active_profile(profile);
 
-    // Nudge about newer releases, except when the user is already updating.
+    // Internal/background commands must never display upgrade notices.
     #[cfg(feature = "self-update")]
-    if !matches!(opts.command, commands::Command::Update(_)) {
-        version_check::maybe_notify().await;
+    if !matches!(
+        opts.command,
+        commands::Command::Update(_)
+            | commands::Command::Statusline(_)
+            | commands::Command::Relay(_)
+    ) {
+        version_check::maybe_notify(matches!(opts.command, commands::Command::Launch(_))).await;
     }
 
     commands::run(opts.command).await
