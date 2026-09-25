@@ -252,6 +252,15 @@ every desktop request down the keyed pipeline, which authenticates from
 `edgee launch opencode` adds Edgee as a provider in a temporary merged config.
 OpenCode sends those requests directly to the gateway using the Edgee key.
 
+OpenCode 2.x reshaped its config (`providers`/`package`/`settings`,
+`mcp.servers` with `disabled`, `agents` with `system`, top-level `skills`,
+`cost.cache.{read,write}`), so the launcher reads `opencode --version` and
+emits the matching shape. v2 clients also attach to a shared background
+service that keeps the config it started with, so the launcher passes
+`--standalone` to the TUI, `run` and `mini`. v2 ignores `instructions`, so the
+MCP session-tracking prompt goes in the `description` of a `references.edgee`
+entry instead, which v2 copies verbatim into the system prompt.
+
 The hidden `edgee relay opencode` path serves a different use case: it launches
 OpenCode with the user's config unchanged and proxies supported inference traffic
 through Edgee in passthrough mode. Existing provider credentials remain attached
