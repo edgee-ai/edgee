@@ -37,8 +37,9 @@ const PI_ALIAS: AliasSpec = AliasSpec::new("pi", "edgee launch pi --");
 const OMP_ALIAS: AliasSpec = AliasSpec::new("omp", "edgee launch omp --");
 const KIMI_ALIAS: AliasSpec = AliasSpec::new("kimi", "edgee launch kimi --");
 const KILO_ALIAS: AliasSpec = AliasSpec::new("kilo", "edgee launch kilo --");
+const COPILOT_CLI_ALIAS: AliasSpec = AliasSpec::new("copilot", "edgee launch copilot-cli --");
 
-const ALL_ALIASES: [AliasSpec; 9] = [
+const ALL_ALIASES: [AliasSpec; 10] = [
     CLAUDE_ALIAS,
     CODEBUDDY_ALIAS,
     CODEX_ALIAS,
@@ -48,6 +49,7 @@ const ALL_ALIASES: [AliasSpec; 9] = [
     OMP_ALIAS,
     KIMI_ALIAS,
     KILO_ALIAS,
+    COPILOT_CLI_ALIAS,
 ];
 
 const PATH_EXPORT_POSIX: &str = "case \":$PATH:\" in\n  *\":$HOME/.edgee/bin:\"*) ;;\n  *) export PATH=\"$HOME/.edgee/bin:$PATH\" ;;\nesac\n";
@@ -68,6 +70,9 @@ pub enum Agent {
     Omp,
     Kimi,
     Kilo,
+    /// GitHub Copilot CLI shim (installed as `copilot`)
+    #[value(name = "copilot-cli")]
+    CopilotCli,
     /// Cursor IDE desktop wrapper (requires Cursor installed)
     Cursor,
     /// GitHub Copilot in VS Code desktop wrapper (requires VS Code installed)
@@ -97,6 +102,7 @@ impl Agent {
             Self::Omp => std::slice::from_ref(&OMP_ALIAS),
             Self::Kimi => std::slice::from_ref(&KIMI_ALIAS),
             Self::Kilo => std::slice::from_ref(&KILO_ALIAS),
+            Self::CopilotCli => std::slice::from_ref(&COPILOT_CLI_ALIAS),
             Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop | Self::CopilotDesktop | Self::Intellij => &[],
             Self::All => &ALL_ALIASES,
         }
@@ -126,13 +132,14 @@ impl Agent {
             Self::Omp => "omp",
             Self::Kimi => "kimi",
             Self::Kilo => "kilo",
+            Self::CopilotCli => "copilot-cli",
             Self::Cursor => "cursor",
             Self::CopilotVscode => "copilot-vscode",
             Self::ClaudeDesktop => "claude-desktop",
             Self::CopilotDesktop => "copilot-desktop",
             Self::Intellij => "intellij",
             Self::All => {
-                "claude, codebuddy, codex, opencode, crush, pi, omp, kimi, kilo, cursor, copilot-vscode, intellij, copilot-desktop, and claude-desktop"
+                "claude, codebuddy, codex, opencode, crush, pi, omp, kimi, kilo, copilot-cli, cursor, copilot-vscode, intellij, copilot-desktop, and claude-desktop"
             }
         }
     }
@@ -645,6 +652,10 @@ mod tests {
         vec![CODEX_ALIAS]
     }
 
+    fn copilot_cli_only() -> Vec<AliasSpec> {
+        vec![COPILOT_CLI_ALIAS]
+    }
+
     #[test]
     fn installs_single_alias_into_empty_file() {
         let block = render_block(&claude_only(), ShellSyntax::Posix);
@@ -745,6 +756,13 @@ mod tests {
     }
 
     #[test]
+    fn copilot_cli_alias_wraps_the_copilot_binary() {
+        let block = render_alias_block(&copilot_cli_only(), ShellSyntax::Posix);
+        assert!(block.contains("alias copilot='edgee launch copilot-cli --'"));
+        assert!(!block.contains("alias copilot-cli="));
+    }
+
+    #[test]
     fn block_contains_alias_detects_posix_and_fish() {
         let posix = "alias claude='edgee launch claude --'\n";
         let fish = "alias claude 'edgee launch claude --'\n";
@@ -769,6 +787,18 @@ mod tests {
 
         let mode = std::fs::metadata(&shim).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copilot_cli_writes_a_copilot_shim() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("bin");
+        write_shims(&dir, &copilot_cli_only()).unwrap();
+
+        assert!(!dir.join("copilot-cli").exists());
+        let body = std::fs::read_to_string(dir.join("copilot")).unwrap();
+        assert!(body.contains("exec edgee launch copilot-cli -- \"$@\""));
     }
 
     #[cfg(unix)]

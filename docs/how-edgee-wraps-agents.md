@@ -19,9 +19,9 @@ The short answer is in two parts.
 the vendors themselves publish for exactly this purpose.** There is no binary patching, no code
 injection, no credential extraction, no reverse-engineered API.
 
-For three GUI targets (Cursor, Copilot in VS Code, Claude Desktop) Edgee runs a **local, opt-in,
-scoped MITM relay**. That is a materially different and more sensitive posture, and it is stated
-plainly in [Transport C](#transport-c-local-relay) and in
+For Copilot in VS Code, Claude Desktop, and Cursor Plan mode, Edgee runs a **local, opt-in, scoped
+MITM relay**. `edgee launch cursor` instead uses Cursor's documented OpenAI-compatible BYOK path.
+Relay posture is stated plainly in [Transport C](#transport-c-local-relay) and in
 [Fragility](#fragility-what-a-vendor-update-can-break).
 
 ---
@@ -33,8 +33,8 @@ Every launch target uses exactly one of three transports. Nothing else exists in
 | Transport | What Edgee does | Targets | Vendor-documented? |
 | --- | --- | --- | --- |
 | **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi`, `kilo` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
-| **B. Config-file patch** | Writes a provider block into the app's own config file — additive and persistent for `pi`/`omp`, temporary and reverted for `codex-desktop` | `pi`, `omp`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's file is our own pattern |
-| **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop` | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
+| **B. Config-file patch** | Writes provider settings into the app's own configuration | `pi`, `omp`, `cursor`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's storage is our own pattern |
+| **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `copilot-vscode`, `copilot-desktop`, `claude-desktop`; `edgee relay cursor` for Plan mode | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
 
 Transport A covers the products that drive most enterprise coding-agent spend. Transport C is the
 compatibility path for GUI apps that expose no configuration surface at all.
@@ -301,10 +301,9 @@ untouched and unused.
 
 ---
 
-## Transport B: config-file patch (`pi`, `omp`, `codex-desktop`)
+## Transport B: config-file patch (`pi`, `omp`, `cursor`, `codex-desktop`)
 
-Two targets write into a config file the user owns, for opposite reasons and with opposite
-lifecycles.
+These targets write into configuration storage the user owns, with target-specific lifecycles.
 
 ### Pi (`edgee launch pi`)
 
@@ -329,6 +328,21 @@ OMP uses Pi's custom-provider schema. Edgee writes the same additive provider bl
 `~/.omp/agent/models.yml`, launches `omp` with credential references supplied through environment
 variables, and reuses the `pi` coding-agent key. Existing OMP providers and credentials remain
 untouched.
+
+### Cursor (`edgee launch cursor`)
+
+Cursor's documented BYOK settings support an OpenAI-compatible base URL, API key, and custom
+models. Edgee writes these fields into Cursor's VS Code-style `state.vscdb`:
+
+- `openAIBaseUrl` and `useOpenAIKey` in the `applicationUser` JSON blob;
+- gateway model IDs in `aiSettings.userAddedModels` and `modelOverrideEnabled`;
+- the Edgee key in `cursorAuth/openAIKey`, which Cursor imports into Electron safe storage on
+  startup.
+
+Cursor must be fully stopped during writes; otherwise its in-memory state can overwrite the
+database. Before the first provider write, Edgee snapshots the original application blob and both
+legacy and encrypted key rows. `edgee relay cursor` restores that snapshot before starting the
+existing Plan relay.
 
 ### Codex Desktop (`edgee launch codex-desktop`)
 
@@ -367,14 +381,15 @@ to seconds and fully reverted.
 Implementation: [`src/commands/relay/mod.rs`](../src/commands/relay/mod.rs) and
 [`src/commands/relay/handler.rs`](../src/commands/relay/handler.rs)
 
-Used only for the three GUI targets that expose no configuration surface: `cursor`,
-`copilot-vscode`, `claude-desktop`. `edgee relay` is itself a hidden subcommand, because transport
+Used for GUI targets that need their existing subscription traffic preserved: `copilot-vscode`,
+`claude-desktop`, and Cursor when explicitly started with `edgee relay cursor`. `edgee relay` is
+itself a hidden subcommand, because transport
 is an implementation detail rather than public UX.
 
-**This is the part of the product that deserves the most scrutiny.** It is a compatibility bridge
-for three surfaces, not the core mechanism. We use it because it preserves the same one-command
-onboarding as every other target. Each of these three surfaces can also be pointed at a gateway
-through documented vendor settings, which is the fallback if interception ever breaks — see
+**This is the part of the product that deserves the most scrutiny.** It is a compatibility bridge,
+not the core mechanism. We use it where preserving a paid app subscription matters. Each relayed
+surface can also be pointed at a gateway through documented vendor settings; Cursor's public launch
+target now does so automatically. For remaining migration paths, see
 [If the relay breaks](#if-the-relay-breaks-fall-back-to-transport-a).
 
 ### What it is
@@ -447,11 +462,9 @@ item in any security review, and never describe the product as if they did not e
 
 ### If the relay breaks: fall back to Transport A
 
-The relay is a convenience layer, not a dependency. **All three GUI surfaces expose a documented,
-vendor-supported way to point them at a custom gateway.** Edgee does not use those paths today
-because they are manual GUI configuration that a launch command cannot drive, which would cost the
-one-command onboarding that lets the product spread across a 500-developer org on its own. But if a
-vendor update breaks interception, the surface migrates to Transport A rather than being lost.
+The relay is a convenience layer, not a dependency. Relayed GUI surfaces expose a documented,
+vendor-supported way to point them at a custom gateway. Cursor already uses that path for
+`edgee launch cursor`; its relay remains available explicitly to preserve Cursor Plan billing.
 
 | Surface | Documented Transport A path | What it costs |
 | --- | --- | --- |
@@ -465,13 +478,11 @@ First, the Claude Desktop fallback is the strongest of the three. Anthropic docu
 first-class gateway surface, and an admin-distributed configuration needs nothing from the developer
 at all. For an enterprise rollout it is arguably *better* than the relay.
 
-Second, the Copilot and Cursor fallbacks change the commercial shape of the integration, because
-both are BYOK paths that consume API credits instead of the seat the customer already pays for. For
-those two, "we have a fallback" means the surface stays supported, not that the value proposition is
-unchanged.
+Second, the Copilot and Cursor gateway paths change the commercial shape of the integration,
+because both are BYOK paths that consume API credits instead of the seat the customer already pays
+for. Cursor users can explicitly choose its relay when preserving Plan billing matters.
 
-So the failure mode across all three is **degraded onboarding, not a dead surface**, and the
-migration is a configuration-writing change in the CLI rather than a rebuild.
+So relay failure means **degraded onboarding, not a dead surface**.
 
 ---
 
@@ -501,7 +512,7 @@ gaps rather than bugs.
 | `kimi` | ⏳ | ❌ | ❌ | ❌ | not yet wired — see below |
 | `pi` | ✅ | ❌ | ❌ | ❌ | repeatable `--skill`; other kinds require extension code or have no configuration surface |
 | `omp` | ✅ | ✅ | ✅ | ✅ | Claude-compatible bundle via repeatable `--plugin-dir` |
-| `cursor`, `copilot-vscode`, `claude-desktop` | ❌ | ❌ | ❌ | ❌ | relay targets — Edgee never spawns the process, so there is no launch to attach a directory to |
+| `cursor`, `copilot-vscode`, `claude-desktop` | ❌ | ❌ | ❌ | ❌ | GUI targets with no supported session-scoped plugin injection path |
 | `codex-desktop` | ❌ | ❌ | ❌ | ❌ | launched, but reads the real Codex config root that Edgee patches only for the handoff and reverts; it cannot use the symlink mirror because `auth.json` holds a single-use rotating token |
 
 ¹ Unix only. The mirror is symlinks, Windows needs elevated privileges for those, and copying a
@@ -514,9 +525,8 @@ config an agent silently ignores is worse than reporting that nothing was delive
 
 Two questions, in order:
 
-1. **Does the CLI spawn the process?** If not (`cursor`, `copilot-vscode`, `claude-desktop`), there
-   is no launch to attach anything to and the whole row is `❌`. This is the same boundary Transport
-   C draws, for the same reason.
+1. **Does the target expose a supported session-scoped plugin injection path?** If not, there is no
+   safe launch-time destination and the whole row is `❌`.
 2. **Is there a documented way to point the agent at a directory, without editing a file the user
    owns?** A flag or env var means delivery. Discovery driven only by the user's config file or data
    root means no delivery — the rule above forbids writing there.
@@ -561,8 +571,8 @@ MCP servers have no CLI surface at all — both are `config.toml`, which Edgee w
 - **CLI agents:** by setting the environment variables and config keys the vendor publishes for
   pointing their agent at a gateway.
 - **The ChatGPT desktop app:** by a patch of its own config file, reverted about ten seconds later.
-- **The three GUI apps:** by a local loopback proxy that decrypts four known inference hosts and
-  blind-tunnels everything else.
+- **Relayed GUI apps:** by a local loopback proxy that decrypts known inference hosts and
+  blind-tunnels everything else. Cursor's default launch uses its BYOK configuration instead.
 
 None of the three involves binary patching, code injection, credential extraction, an endpoint
 agent, or a daemon.
@@ -632,9 +642,9 @@ Yes, at very different severities per transport. See
 ### 4. Does it need a local proxy, a certificate, a wrapper, or an endpoint agent?
 
 - **Wrapper:** yes — `edgee launch <agent>`, or a PATH shim installed by `edgee alias`.
-- **Local proxy:** only for `cursor`, `copilot-vscode` and `claude-desktop`. Loopback only,
-  foreground, and it dies with the command.
-- **Certificate:** only for those same three. Process-scoped for two of them; for Claude Desktop, one
+- **Local proxy:** for `copilot-vscode`, `claude-desktop`, and explicit `edgee relay cursor` Plan
+  launches. Loopback only, foreground, and it dies with the command.
+- **Certificate:** only for those relayed paths. Process-scoped where supported; for Claude Desktop, one
   persistent, name-constrained, removable system root on macOS.
 - **Endpoint agent, daemon or kernel module:** **never**.
 
@@ -660,8 +670,8 @@ Technically, the answer differs per transport:
   no second configuration path on this surface, so the only fallback is the `codex` CLI — a
   different product for the user, even though it reaches the same models.
 - **Transport C** could be broken cheaply, and possibly unintentionally, by certificate pinning, an
-  HTTP/2-only transport, or a protocol change. Unlike Transport B, though, all three of these
-  surfaces have a documented vendor-supported gateway configuration to fall back on, so a break
+  HTTP/2-only transport, or a protocol change. Relayed surfaces have documented vendor-supported
+  gateway configuration to fall back on, so a break
   costs onboarding simplicity rather than the surface itself. See
   [If the relay breaks](#if-the-relay-breaks-fall-back-to-transport-a).
 
@@ -684,8 +694,8 @@ class of product Edgee is.
 | Transport | Blast radius | Failure mode | Recovery |
 | --- | --- | --- | --- |
 | **A — CLI env/config** | Low | A renamed env var or config key breaks one target, and requests fall back to the vendor's own endpoint | One-line change, shipped in a CLI release |
-| **B — codex-desktop patch** | Medium | A schema change, or a cold start exceeding the 10 s grace window, silently sends traffic direct to OpenAI | Against accidental drift: the config keys are shared with the CLI, so they move together. Against a deliberate close: no fallback on this surface, see [FAQ 5](#5-can-providers-block-edgee-technically-or-contractually) |
-| **C — relay** | **High** | Certificate pinning, an HTTP/2-only transport, or a protocol change breaks the relay outright, with no relay-side workaround | [Migrate the surface to Transport A](#if-the-relay-breaks-fall-back-to-transport-a): all three have a documented vendor gateway path, at the cost of manual setup |
+| **B — config patch** | Medium | A config schema or storage change breaks one patched target | Update that target's writer; Cursor Plan mode remains available through its relay |
+| **C — relay** | **High** | Certificate pinning, an HTTP/2-only transport, or a protocol change breaks the relay outright, with no relay-side workaround | [Migrate the surface to Transport A](#if-the-relay-breaks-fall-back-to-transport-a) |
 
 Fragility is therefore highest exactly where usage is lowest, which is the right way round.
 
