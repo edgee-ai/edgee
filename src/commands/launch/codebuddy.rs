@@ -67,12 +67,15 @@ pub async fn run(opts: Options) -> Result<()> {
     let api_key = &codebuddy.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
 
-    // First-run: install the persistent user-level statusline integration
-    // exactly once. CodeBuddy itself doesn't render an Edgee statusline today,
-    // but users typically also use Claude Code in the same shell — running
-    // the installer on the first `edgee launch` of any agent matches the
-    // "set it up once" flow we want.
+    // First-run: install the persistent user-level Claude Code statusline
+    // integration exactly once. Users typically also use Claude Code in the
+    // same shell — running the installer on the first `edgee launch` of any
+    // agent matches the "set it up once" flow we want.
     util::ensure_first_run_installed().await;
+
+    // First-run: install CodeBuddy's own statusline integration exactly
+    // once (honors its own, separate disable marker).
+    util::ensure_codebuddy_first_run_installed().await;
 
     util::spawn_cli_version_report(&creds, &session_id);
 
