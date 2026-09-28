@@ -193,37 +193,6 @@ pub struct ModelRoute {
     pub model: String,
 }
 
-/// A BYOK provider key (`GET /v1/organizations/{org}/provider-keys`). Only the
-/// fields needed to mark catalog models available via the user's own keys are read.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ProviderKey {
-    pub provider: String,
-    #[serde(default)]
-    pub active: bool,
-}
-
-/// Subset of `GET /v1/organizations/{org}/billing` used to decide whether the org
-/// has paid access to AI Gateway routing (fallback/reroute).
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct OrgBilling {
-    #[serde(default)]
-    pub ai_gateway_plan: Option<String>,
-    #[serde(default)]
-    pub ai_gateway_subscription_status: Option<String>,
-}
-
-impl OrgBilling {
-    /// A non-free plan, or an active trial, grants routing access.
-    pub fn is_paying(&self) -> bool {
-        let paid_plan = matches!(
-            self.ai_gateway_plan.as_deref(),
-            Some("team") | Some("enterprise") | Some("custom")
-        );
-        let trialing = self.ai_gateway_subscription_status.as_deref() == Some("trial");
-        paid_plan || trialing
-    }
-}
-
 /// One upstream provider's configuration for a catalog model.
 ///
 /// The rate fields are US dollars per million tokens. The server omits a rate
@@ -294,7 +263,6 @@ pub struct GatewayModel {
     #[serde(default)]
     pub active: bool,
     /// Whether the model is covered by the user's plan for fallback/reroute.
-    /// Plan-covered models are offered first in the settings pickers.
     #[serde(default)]
     pub plan_fallback: bool,
 }
@@ -319,7 +287,7 @@ impl GatewayModel {
 
     /// True when the model is served *only* through a coding-app subscription
     /// (Cursor, GitHub Copilot) — e.g. `cursor/composer-2`. Such a model is
-    /// unreachable as a fallback/reroute target, so the settings pickers hide it.
+    /// unreachable as a fallback/reroute target, so agent model lists hide it.
     pub fn app_subscription_only(&self) -> bool {
         !self.providers.is_empty() && self.providers.keys().all(|p| is_app_provider(p))
     }
@@ -393,17 +361,11 @@ impl GatewayModel {
     }
 }
 
-/// Full mutable settings sent to the key-update endpoint. Serializes to
-/// `{ "compression": {...}, "fallback": bool, "fallbacks": [...] | null,
-/// "reroutes": [...] | null }`. A `None` list clears that route (the server
-/// distinguishes a present-null field from an omitted one). `fallback` is the
-/// on/off switch; `fallbacks` are the models to fail over to.
+/// Compression settings sent to the key-update endpoint. Routing fields are
+/// omitted so edits leave the key's server-side routing configuration untouched.
 #[derive(Debug, Clone, Serialize)]
 pub struct KeySettings {
     pub compression: Compression,
-    pub fallback: bool,
-    pub fallbacks: Option<Vec<ModelRoute>>,
-    pub reroutes: Option<Vec<ModelRoute>>,
 }
 
 /// A skill: markdown instructions the assistant loads when the task matches.
@@ -795,8 +757,7 @@ impl ApiClient {
         Ok(body.online_sessions)
     }
 
-    /// Lists the gateway model catalog (with `plan_fallback`, `aliases`, etc.) used
-    /// to offer fallback/reroute targets. Served by the console API
+    /// Lists the gateway model catalog used to configure agents. Served by the console API
     /// (`console_api_base_url`, e.g. `api.edgee.app`) — not the gateway, whose
     /// `/v1/models` is the stripped OpenAI listing.
     pub async fn list_models(&self) -> Result<Vec<GatewayModel>> {
@@ -811,27 +772,9 @@ impl ApiClient {
         resp.json().await.context("Invalid models response")
     }
 
-    /// Lists the org's BYOK provider keys. Used to flag catalog models reachable
-    /// through the user's own keys. Returns a raw array (no `{ data: [...] }` wrapper).
-    pub async fn list_provider_keys(&self, org_id: &str) -> Result<Vec<ProviderKey>> {
-        let url = format!(
-            "{}/v1/organizations/{}/provider-keys",
-            self.base_url, org_id
-        );
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to list provider keys")?;
-        check_status(&resp, "list provider keys")?;
-        resp.json().await.context("Invalid provider keys response")
-    }
-
     /// Lists the org plugins that target the signed-in user, without the
     /// component bodies — names, flags, `revision` and `component_counts` only.
-    /// Returns a raw array (no `{ data: [...] }` wrapper), like
-    /// `list_provider_keys`.
+    /// Returns a raw array (no `{ data: [...] }` wrapper).
     ///
     /// Admins receive the whole org catalogue, including plugins that do not
     /// target them — read `targeted`/`active` rather than assuming membership.
@@ -868,22 +811,6 @@ impl ApiClient {
             .context("Failed to fetch plugin")?;
         check_status(&resp, "fetch plugin")?;
         resp.json().await.context("Invalid plugin response")
-    }
-
-    /// Whether the org has a paid AI Gateway plan (or active trial), which is what
-    /// unlocks fallback/reroute. Mirrors the console's `useAIGatewayPaying`: a
-    /// non-free `ai_gateway_plan` or a `trial` subscription status counts as paying.
-    pub async fn org_is_paying(&self, org_id: &str) -> Result<bool> {
-        let url = format!("{}/v1/organizations/{}/billing", self.base_url, org_id);
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to fetch billing")?;
-        check_status(&resp, "fetch billing")?;
-        let billing: OrgBilling = resp.json().await.context("Invalid billing response")?;
-        Ok(billing.is_paying())
     }
 
     pub async fn get_or_create_key(
@@ -923,9 +850,8 @@ impl ApiClient {
         }
     }
 
-    /// Applies the full settings bundle (compression + fallback + reroutes) to an
-    /// existing coding-agent key. Surfaces the server's error message directly
-    /// (e.g. the paid-seat requirement for fallback/reroute).
+    /// Updates compression for an existing coding-agent key without changing routing.
+    /// Surfaces the server's error message directly.
     pub async fn update_key_settings(
         &self,
         org_id: &str,
@@ -1263,28 +1189,26 @@ mod tests {
         assert_eq!(catalog_model(r#"{"model_id":"m1"}"#).context_limit(), None);
     }
 
-    fn billing(plan: Option<&str>, status: Option<&str>) -> OrgBilling {
-        OrgBilling {
-            ai_gateway_plan: plan.map(str::to_string),
-            ai_gateway_subscription_status: status.map(str::to_string),
-        }
-    }
-
     #[test]
-    fn is_paying_for_non_free_plans_and_trial() {
-        assert!(billing(Some("team"), None).is_paying());
-        assert!(billing(Some("enterprise"), None).is_paying());
-        assert!(billing(Some("custom"), None).is_paying());
-        // Trial counts even with a free/absent plan.
-        assert!(billing(Some("free"), Some("trial")).is_paying());
-        assert!(billing(None, Some("trial")).is_paying());
-    }
-
-    #[test]
-    fn not_paying_for_free_or_absent_plan() {
-        assert!(!billing(Some("free"), Some("active")).is_paying());
-        assert!(!billing(None, None).is_paying());
-        assert!(!billing(None, Some("cancelled")).is_paying());
+    fn compression_settings_omit_routing_fields() {
+        let settings = KeySettings {
+            compression: Compression {
+                tool_result_trimming: true,
+                tool_surface_reduction: false,
+                output_brevity: true,
+            },
+        };
+        // Sending null or false for routing fields would overwrite saved routes.
+        assert_eq!(
+            serde_json::to_value(settings).unwrap(),
+            serde_json::json!({
+                "compression": {
+                    "tool_result_trimming": true,
+                    "tool_surface_reduction": false,
+                    "output_brevity": true
+                }
+            })
+        );
     }
 
     #[test]
