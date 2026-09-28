@@ -449,12 +449,14 @@ async fn filter_copilot_models_response(res: Response<Body>) -> Response<Body> {
         return Response::from_parts(parts, Body::from(raw));
     };
 
-    let removed = remove_websocket_responses_endpoints(&mut catalog);
+    let mut affected_models = Vec::new();
+    let removed = remove_websocket_responses_endpoints(&mut catalog, &mut affected_models);
     if removed == 0 {
         return Response::from_parts(parts, Body::from(raw));
     }
     println!(
-        "Removed {removed} Copilot WebSocket Responses endpoint(s); using HTTP instead."
+        "Removed {removed} Copilot WebSocket Responses endpoint(s) from models: {}. Using HTTP instead.",
+        affected_models.join(", ")
     );
 
     let Ok(filtered) = serde_json::to_vec(&catalog) else {
@@ -471,26 +473,41 @@ async fn filter_copilot_models_response(res: Response<Body>) -> Response<Body> {
     Response::from_parts(parts, Body::from(filtered))
 }
 
-fn remove_websocket_responses_endpoints(value: &mut serde_json::Value) -> usize {
+fn remove_websocket_responses_endpoints(
+    value: &mut serde_json::Value,
+    affected_models: &mut Vec<String>,
+) -> usize {
     match value {
         serde_json::Value::Object(object) => {
             let mut removed = 0;
+            let model_name = object
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| object.get("name").and_then(serde_json::Value::as_str))
+                .unwrap_or("<unknown>")
+                .to_owned();
             if let Some(serde_json::Value::Array(endpoints)) =
                 object.get_mut("supported_endpoints")
             {
                 let before = endpoints.len();
                 endpoints.retain(|endpoint| endpoint.as_str() != Some("ws:/responses"));
-                removed += before - endpoints.len();
+                let removed_here = before - endpoints.len();
+                if removed_here > 0 {
+                    affected_models.push(model_name);
+                    removed += removed_here;
+                }
             }
             removed
                 + object
                     .values_mut()
-                    .map(remove_websocket_responses_endpoints)
+                    .map(|value| {
+                        remove_websocket_responses_endpoints(value, affected_models)
+                    })
                     .sum::<usize>()
         }
         serde_json::Value::Array(values) => values
             .iter_mut()
-            .map(remove_websocket_responses_endpoints)
+            .map(|value| remove_websocket_responses_endpoints(value, affected_models))
             .sum(),
         _ => 0,
     }
@@ -720,6 +737,14 @@ mod tests {
                 }
             ]
         });
+        let mut catalog = body.clone();
+        let mut affected_models = Vec::new();
+        assert_eq!(
+            remove_websocket_responses_endpoints(&mut catalog, &mut affected_models),
+            1
+        );
+        assert_eq!(affected_models, ["gpt-6-sol"]);
+
         let raw = serde_json::to_vec(&body).unwrap();
         let response = Response::builder()
             .status(200)
