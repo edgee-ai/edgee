@@ -237,6 +237,11 @@ pub struct RelayHandler {
     matched: bool,
     /// Whether the in-flight request was rerouted to the gateway.
     rerouted: bool,
+    /// Whether this request fetches Copilot's model catalog. Copilot prefers the
+    /// WebSocket Responses transport when the catalog advertises it, but the relay
+    /// only supports HTTP request/response forwarding. Strip that capability from
+    /// the response so Copilot selects the equivalent HTTP `/responses` endpoint.
+    filter_copilot_websocket_endpoints: bool,
 }
 
 impl RelayHandler {
@@ -256,6 +261,7 @@ impl RelayHandler {
             desc: String::new(),
             matched: false,
             rerouted: false,
+            filter_copilot_websocket_endpoints: false,
         }
     }
 }
@@ -273,7 +279,7 @@ impl HttpHandler for RelayHandler {
     async fn handle_request(
         &mut self,
         _ctx: &HttpContext,
-        req: Request<Body>,
+        mut req: Request<Body>,
     ) -> RequestOrResponse {
         // CONNECT is the tunnel-establishment request; the real request follows
         // after TLS termination. We don't log/reroute it — just pass it through so
@@ -283,6 +289,17 @@ impl HttpHandler for RelayHandler {
             return RequestOrResponse::Request(req);
         }
         self.matched = true;
+
+        self.filter_copilot_websocket_endpoints = self.intercept_copilot_hosts
+            && req.method() == http::Method::GET
+            && req.uri().path() == "/models"
+            && host.as_deref().is_some_and(is_copilot_only_host);
+        if self.filter_copilot_websocket_endpoints {
+            // Keep the response body directly editable. Copilot normally honors
+            // this and returns identity encoding; the response filter still
+            // handles an encoded response defensively.
+            req.headers_mut().remove(http::header::ACCEPT_ENCODING);
+        }
 
         let reroute = gateway_path_for(req.uri().path());
         self.rerouted = reroute.is_some();
@@ -355,6 +372,12 @@ impl HttpHandler for RelayHandler {
             return res;
         }
 
+        let res = if self.filter_copilot_websocket_endpoints {
+            filter_copilot_models_response(res).await
+        } else {
+            res
+        };
+
         let status = res.status();
 
         if !self.log_enabled {
@@ -405,6 +428,67 @@ impl HttpHandler for RelayHandler {
         self.sink.emit(&buf);
 
         Response::from_parts(parts, Body::from(raw))
+    }
+}
+
+/// Remove Copilot's WebSocket Responses capability from its model catalog so
+/// clients use the simultaneously advertised HTTP `/responses` transport. The
+/// gateway's relay path is HTTP-only and cannot bridge upgraded WebSocket frames.
+async fn filter_copilot_models_response(res: Response<Body>) -> Response<Body> {
+    if !res.status().is_success() || !is_json(res.headers()) {
+        return res;
+    }
+
+    let (mut parts, body) = res.into_parts();
+    let raw = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(_) => return Response::from_parts(parts, Body::from(bytes::Bytes::new())),
+    };
+    let decoded = decode_for_log(&parts.headers, &raw).await;
+    let Ok(mut catalog) = serde_json::from_slice::<serde_json::Value>(&decoded) else {
+        return Response::from_parts(parts, Body::from(raw));
+    };
+
+    if remove_websocket_responses_endpoints(&mut catalog) == 0 {
+        return Response::from_parts(parts, Body::from(raw));
+    }
+
+    let Ok(filtered) = serde_json::to_vec(&catalog) else {
+        return Response::from_parts(parts, Body::from(raw));
+    };
+    parts.headers.remove(http::header::CONTENT_ENCODING);
+    parts.headers.remove(http::header::TRANSFER_ENCODING);
+    parts.headers.remove(http::header::ETAG);
+    if let Ok(length) = http::HeaderValue::from_str(&filtered.len().to_string()) {
+        parts.headers.insert(http::header::CONTENT_LENGTH, length);
+    } else {
+        parts.headers.remove(http::header::CONTENT_LENGTH);
+    }
+    Response::from_parts(parts, Body::from(filtered))
+}
+
+fn remove_websocket_responses_endpoints(value: &mut serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut removed = 0;
+            if let Some(serde_json::Value::Array(endpoints)) =
+                object.get_mut("supported_endpoints")
+            {
+                let before = endpoints.len();
+                endpoints.retain(|endpoint| endpoint.as_str() != Some("ws:/responses"));
+                removed += before - endpoints.len();
+            }
+            removed
+                + object
+                    .values_mut()
+                    .map(remove_websocket_responses_endpoints)
+                    .sum::<usize>()
+        }
+        serde_json::Value::Array(values) => values
+            .iter_mut()
+            .map(remove_websocket_responses_endpoints)
+            .sum(),
+        _ => 0,
     }
 }
 
@@ -616,6 +700,53 @@ mod tests {
             claude_api_key: None,
             debug_log_headers: None,
         }
+    }
+
+    #[tokio::test]
+    async fn copilot_models_filter_removes_only_websocket_responses_endpoint() {
+        let body = serde_json::json!({
+            "data": [
+                {
+                    "id": "gpt-6-sol",
+                    "supported_endpoints": ["/responses", "ws:/responses"]
+                },
+                {
+                    "id": "claude-sonnet-5",
+                    "supported_endpoints": ["/v1/messages"]
+                }
+            ]
+        });
+        let raw = serde_json::to_vec(&body).unwrap();
+        let response = Response::builder()
+            .status(200)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .header(http::header::CONTENT_LENGTH, raw.len())
+            .header(http::header::ETAG, "catalog-v1")
+            .body(Body::from(raw))
+            .unwrap();
+
+        let filtered = filter_copilot_models_response(response).await;
+        assert!(!filtered.headers().contains_key(http::header::ETAG));
+        assert!(!filtered
+            .headers()
+            .contains_key(http::header::CONTENT_ENCODING));
+        let declared_length = filtered.headers()[http::header::CONTENT_LENGTH]
+            .to_str()
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let bytes = filtered.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(declared_length, bytes.len());
+
+        let catalog: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            catalog["data"][0]["supported_endpoints"],
+            serde_json::json!(["/responses"])
+        );
+        assert_eq!(
+            catalog["data"][1]["supported_endpoints"],
+            serde_json::json!(["/v1/messages"])
+        );
     }
 
     #[test]
