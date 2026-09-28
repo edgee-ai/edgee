@@ -218,13 +218,8 @@ edgee stats
 
 ### Routing: fallbacks and reroutes
 
-Point a coding-agent key at another model — as a **fallback** (only when the usual model errors or
-is rate-limited) or a **reroute** (every request, instead of the usual model):
-
-```bash
-edgee settings           # pick an agent, then configure routing and compression
-edgee settings claude    # go straight to one agent's key
-```
+Configure a coding-agent key in the [Edgee console](https://www.edgee.ai) to use another model
+as a **fallback** (when the usual model errors or is rate-limited) or a **reroute** (every request).
 
 Routing runs on the gateway, so it applies to every request from that key regardless of which
 machine or agent surface it came from.
@@ -234,6 +229,13 @@ machine or agent surface it came from.
 Edgee's compression engine analyses tool outputs and removes noise before they enter the LLM
 context. Compression runs on the **gateway**, the CLI routes your agent there. 
 From the model's perspective the workflow is unchanged, the prompts are just leaner.
+
+Configure compression for a coding-agent key from the CLI:
+
+```bash
+edgee settings           # pick an agent
+edgee settings claude    # go straight to one agent's key
+```
 
 ### Usage tracking
 

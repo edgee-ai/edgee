@@ -13,7 +13,7 @@ setup_commands! {
     Launch(launch),
     /// Show and install the plugins your organization has assigned to you
     Plugins(plugins),
-    /// Configure compression, fallback, and reroute settings for a coding-agent key
+    /// Configure compression settings for a coding-agent key
     Settings(settings),
     /// Show stored session stats
     #[command(visible_alias = "report")]

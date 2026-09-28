@@ -323,7 +323,7 @@ pub async fn ensure_onboarded(provider: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Run the same compression + routing wizard as `edgee settings`, with a
+    // Run the same compression wizard as `edgee settings`, with a
     // first-run welcome banner. Keep failures non-fatal so launch proceeds.
     if let Err(e) = crate::commands::settings::agent::configure(provider, true).await {
         eprintln!(
@@ -451,7 +451,7 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStat
 }
 
 /// Gets-or-creates the provider key and returns the full key item, so callers
-/// can read the key's current server-side settings (compression/fallback/reroutes).
+/// can read the key's current server-side compression settings.
 /// Ensures the key exists and persists it into the active profile as a side effect.
 pub async fn fetch_provider_key(provider: &str) -> Result<crate::api::ApiKeyItem> {
     let mut creds = crate::config::read()?;
