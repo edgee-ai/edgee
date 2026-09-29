@@ -4,9 +4,8 @@
 //! Two side effects on `~/.claude/settings.json`:
 //!
 //! 1. Sets `statusLine.command` to `edgee statusline render` if no statusLine
-//!    is configured at user level. (Doesn't touch the user's existing one —
-//!    we overlay via `edgee statusline claude fix` per project, never
-//!    globally.)
+//!    is configured at user level. Existing command statuslines are preserved
+//!    through `edgee statusline wrap` so both segments render.
 //! 2. Adds a `SessionStart` hook that runs
 //!    `edgee statusline claude doctor --warn-only`, so users in projects with
 //!    their own statusLine get a one-line warning when Edgee is shadowed.
@@ -59,7 +58,7 @@ pub async fn run(opts: Options) -> Result<()> {
     let mut changes = Vec::new();
 
     if !opts.skip_statusline && install_statusline(&mut value)? {
-        changes.push("statusLine → edgee statusline render");
+        changes.push("statusLine → Edgee renderer");
     }
 
     if !opts.skip_hook && install_session_start_hook(&mut value)? {
@@ -109,11 +108,9 @@ fn report_no_op(value: &Value, opts: &Options, path: &std::path::Path) {
     } else {
         match &sl {
             StatuslineState::Edgee => println!("    • statusLine → {STATUSLINE_COMMAND}"),
-            StatuslineState::Foreign(cmd) => {
-                println!("    • statusLine → {cmd} (yours — Edgee never overrides it)")
-            }
+            StatuslineState::Foreign(cmd) => println!("    • statusLine → {cmd}"),
             StatuslineState::ForeignOpaque => {
-                println!("    • statusLine → your own config (Edgee never overrides it)")
+                println!("    • statusLine → your own non-command config (unchanged)")
             }
         }
     }
@@ -152,7 +149,14 @@ fn statusline_state(value: &Value) -> StatuslineState {
         .get("statusLine")
         .map(|sl| claude_settings::status_line_command(sl))
     {
-        Some(Some(cmd)) if cmd == STATUSLINE_COMMAND => StatuslineState::Edgee,
+        Some(Some(cmd))
+            if matches!(
+                claude_settings::classify_command(cmd),
+                claude_settings::CommandKind::Edgee | claude_settings::CommandKind::EdgeeWrap
+            ) =>
+        {
+            StatuslineState::Edgee
+        }
         Some(Some(cmd)) => StatuslineState::Foreign(cmd.to_string()),
         Some(None) => StatuslineState::ForeignOpaque,
         // No `statusLine` at all can only happen with --skip-statusline; the
@@ -164,6 +168,15 @@ fn statusline_state(value: &Value) -> StatuslineState {
 fn install_statusline(value: &mut Value) -> Result<bool> {
     if let Some(sl) = value.get("statusLine") {
         if let Some(cmd) = claude_settings::status_line_command(sl) {
+            if cmd == STATUSLINE_COMMAND {
+                return Ok(false);
+            }
+            if matches!(
+                claude_settings::classify_command(cmd),
+                claude_settings::CommandKind::EdgeeWrap
+            ) {
+                return Ok(false);
+            }
             // Heal a legacy form (bare `edgee statusline`, or a wrapper-script
             // path left over from the old transient install): rewrite it to
             // the canonical explicit form so Claude Code calls the renderer
@@ -173,7 +186,13 @@ fn install_statusline(value: &mut Value) -> Result<bool> {
                 return Ok(true);
             }
         }
-        // User has their own statusLine — never override.
+        if let Some(cmd) = claude_settings::status_line_command(sl) {
+            let escaped = claude_settings::posix_single_quote_escape(cmd);
+            let wrapped = format!("edgee statusline wrap '{escaped}'");
+            claude_settings::set_status_line(value, &wrapped, Some(10));
+            return Ok(true);
+        }
+        // Preserve unsupported/opaque statusLine configurations.
         return Ok(false);
     }
     claude_settings::set_status_line(value, STATUSLINE_COMMAND, Some(10));
@@ -395,7 +414,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_does_not_replace_existing_statusline() {
+    async fn install_wraps_existing_statusline() {
         let (_tmp, home) = fresh_home();
         fs::create_dir_all(home.join(".claude")).unwrap();
         fs::write(
@@ -418,7 +437,43 @@ mod tests {
         .unwrap();
 
         let v = read_user(&home);
-        assert_eq!(v["statusLine"]["command"], "/path/to/user-custom.sh");
+        assert_eq!(
+            v["statusLine"]["command"],
+            "edgee statusline wrap '/path/to/user-custom.sh'"
+        );
+    }
+
+    #[tokio::test]
+    async fn install_does_not_double_wrap_existing_statusline() {
+        let (_tmp, home) = fresh_home();
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::write(
+            home.join(".claude").join("settings.json"),
+            serde_json::to_string_pretty(&json!({
+                "statusLine": {
+                    "type": "command",
+                    "command": "edgee statusline wrap '/path/to/user-custom.sh'"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let _lock = env_lock();
+        let _h = isolate_home(&home);
+        run(Options {
+            skip_hook: true,
+            skip_statusline: false,
+            implicit: false,
+        })
+        .await
+        .unwrap();
+
+        let v = read_user(&home);
+        assert_eq!(
+            v["statusLine"]["command"],
+            "edgee statusline wrap '/path/to/user-custom.sh'"
+        );
     }
 
     #[tokio::test]
