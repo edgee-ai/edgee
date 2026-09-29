@@ -106,7 +106,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 
 | Target | Product | Provider key | Notes |
 |---|---|---|---|
-| `cursor` | Cursor IDE | `cursor` | Writes Edgee as Cursor's OpenAI-compatible BYOK provider; `edgee relay cursor` restores prior settings and retains the Plan relay |
+| `cursor` | Cursor IDE | `cursor` | Writes Edgee as Cursor's OpenAI-compatible BYOK provider and adds each model's catalog reasoning efforts to Cursor's picker metadata; `edgee relay cursor` restores prior settings and retains the Plan relay |
 | `intellij` | GitHub Copilot in IntelliJ IDEA | `copilot` | Direct IDE launch with proxy env + Node CA; live-session validation pending |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + dedicated system-trusted Copilot CA |
