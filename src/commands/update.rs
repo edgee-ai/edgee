@@ -54,13 +54,24 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
     tokio::task::spawn_blocking(move || {
         use self_update::{backends::github::Update, Status};
 
-        let updater = Update::configure()
-            .repo_owner("edgee-ai")
+        let current = self_update::cargo_crate_version!();
+        let mut builder = Update::configure();
+        builder.repo_owner("edgee-ai")
             .repo_name("edgee")
             .bin_name("edgee")
-            .current_version(self_update::cargo_crate_version!())
-            .show_download_progress(true)
-            .build()?;
+            .current_version(current)
+            .show_download_progress(true);
+
+        println!("Checking latest released version...");
+        let latest = builder.build()?.get_latest_release()?;
+        // CLI release tags are `v{version}` (see the release workflow).
+        let tag = format!("v{}", latest.version);
+        println!("Installing latest release: v{} → v{}", current, latest.version);
+
+        // The default update path prefers SemVer-compatible patches and prints
+        // a misleading "NOT compatible" warning for 0.x minor upgrades. Pinning
+        // the latest stable tag bypasses both while preserving confirmation.
+        let updater = builder.target_version_tag(&tag).build()?;
 
         match updater.update()? {
             Status::Updated(version) => println!("Updated to {}", version.green()),
