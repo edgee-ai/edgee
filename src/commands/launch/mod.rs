@@ -318,6 +318,17 @@ mod tests {
         }
     }
 
+    fn pi_args(argv: &[&str]) -> Vec<String> {
+        let opts = crate::Options::try_parse_from(argv).expect("parses");
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::Pi(c) => c.args,
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
     fn omp_args(argv: &[&str]) -> Vec<String> {
         let opts = crate::Options::try_parse_from(argv).expect("parses");
         match opts.command {
@@ -345,6 +356,18 @@ mod tests {
                 [flag, "my prompt"],
             );
         }
+    }
+
+    // The launcher itself adds `-e`/`--skill`; the user's own flags, including
+    // Pi's `-e` and `-ne`, must still arrive untouched and in order.
+    #[test]
+    fn pi_passes_agent_flags_through_verbatim() {
+        assert_eq!(
+            pi_args(&[
+                "edgee", "launch", "pi", "-e", "./ext", "-ne", "-p", "my prompt", "--model", "edgee/x"
+            ]),
+            ["-e", "./ext", "-ne", "-p", "my prompt", "--model", "edgee/x"]
+        );
     }
 
     #[test]

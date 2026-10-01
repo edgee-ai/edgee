@@ -97,7 +97,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `opencode` | OpenCode CLI | `opencode` |
 | `codebuddy` | CodeBuddy CLI | `codebuddy` |
 | `crush` | Crush CLI | `crush` |
-| `pi` | Pi CLI | `pi` |
+| `pi` | Pi CLI (loads the `pi-edgee` extension) | `pi` |
 | `omp` | Oh My Pi CLI | `pi` |
 | `kimi` | Kimi Code CLI | `kimi` |
 | `kilo` | Kilo Code CLI | `kilo` |
@@ -268,66 +268,77 @@ to the request, including a GitHub Copilot token selected through OpenCode. The
 relay uses the `opencode` Edgee key for agent attribution and also intercepts the
 Copilot inference and token-discovery hosts.
 
-## `pi` and `omp` — additive provider in each agent's own config
+## `pi` - the `pi-edgee` extension, loaded per launch
 
-`opencode` and `crush` build a merged config in `$TMPDIR` and point the agent at
-it (`OPENCODE_CONFIG`, `CRUSH_GLOBAL_CONFIG`), so the user's files are never
-touched. Pi has no such lever, and the one that looks like it is a trap:
-`PI_CODING_AGENT_DIR` relocates the **entire** agent directory — `models.json`
-but also `auth.json`, `settings.json`, `keybindings.json`, `sessions/`,
-`themes/`, `tools/`, `prompts/`, `bin/`, plus extension, skill and plugin
-discovery. Pointing it at a temp dir launches pi with no history, no logins, no
-settings and none of the user's plugins. `--models` is not an alternative: it
-takes model *patterns* for Ctrl+P cycling, not a config path.
+`pi` no longer writes provider blocks. `pi.rs` passes `-e npm:pi-edgee@<pinned>` (Pi's
+temporary extension scope: cached under `<agent dir>/tmp/extensions`, nothing written to
+`settings.json`) and hands the extension its identity in the child-only `EDGEE_PI_CONTEXT` JSON
+variable. The extension owns the `edgee` provider, model discovery, footer and session metadata.
 
-So `pi` writes into `~/.pi/agent/models.json`, while `omp` writes into
-`~/.omp/agent/models.yml`. Both use two managed keys: `providers.edgee` for
-Chat Completions and `providers.edgee-anthropic` for Anthropic Messages. Custom
-providers merge into pi's built-in catalog by `provider + id`, so the block is
-purely **additive** — nothing the user already had is overridden. That is what
-makes it safe to leave in place, and why there is no patch-and-revert dance like
-`codex-desktop`: this adds a provider rather than hijacking one the user depends
-on.
+- **Pi's `-e` takes its value as a separate argument and is repeatable.** It has no
+  `--extension=value` form (that spelling is parsed as an unknown flag), so it is passed as
+  `-e <spec>`, ahead of the user's own args.
+- **Credentials never touch argv, Pi settings or `auth.json`.** The context carries the gateway
+  key, console token, org, endpoints, session id and debug-log headers. The extension scrubs it
+  from its environment after reading, so the agent's own shell commands cannot see it.
+  `EDGEE_API_KEY` / `EDGEE_SESSION_ID` / `EDGEE_ORG_SLUG` are still exported for a `pi-edgee`
+  that predates the contract.
+- **A user-level install is reused, not duplicated.** Pi dedupes extensions by canonical path
+  only, so a second copy would register `edgee` twice. `extension_plan` looks at the agent dir's
+  `settings.json` `packages` and `extensions/`, and at the user's own `-e`. It skips `-e` for those
+  (warning when the install's `package.json` lacks `edgee.cliContract`) and injects anyway under
+  `-ne`. Project `.pi/settings.json` is deliberately ignored: Pi only reads it for trusted
+  projects, and skipping injection because of an unread file would leave a run with no Edgee
+  provider at all.
+- **Old `models.json` blocks are cleaned up.** Pi layers `models.json` over extension providers.
+  `edgee` / `edgee-anthropic` entries matching the generated shape are removed after a one-time
+  `models.json.edgee-bak`; anything customised, commented or unparseable is left with a warning.
+- **`EDGEE_PI_EXTENSION`** overrides the pinned spec (a local checkout or another npm spec). The
+  pinned version must already be published when a CLI release is cut.
 
-OMP is Pi-compatible and reuses the `pi` coding-agent key. Sessions therefore
-share Pi's backend attribution and settings rather than provisioning another
-key.
+The rest of this section describes the provider-file launcher that `omp` still uses.
 
-Three details are load-bearing:
+## `omp` - additive provider in OMP's own config
 
-- **Env references are `$NAME`, and this requires pi ≥ 0.79.4.** That release
-  deliberately reversed the syntax (upstream #5661): before it, the *whole value*
-  was the variable name (bare `EDGEE_API_KEY`) and an unset variable fell through
-  to the literal string; from it, bare uppercase values are literals and `$NAME`
-  is the only env reference. The two spellings are mutually exclusive — each is
-  an inert literal on the other side of that boundary — and both fail
-  identically, with the gateway answering 401 because it was handed
-  `EDGEE_API_KEY` or `$EDGEE_API_KEY` as a credential. Check the pi version first
-  when debugging a 401 here.
-- **The Edgee key is therefore never written to disk** — the config stores the
-  references `$EDGEE_API_KEY` / `$EDGEE_SESSION_ID` and launch supplies the
-  values. This is strictly better than the OpenCode and Crush temp configs, which
-  embed the key. The trade-off: a bare `pi` run sees the Edgee models but cannot
-  authenticate them.
-- **An empty gateway model list is fatal here, unlike for OpenCode.** A pi custom
-  provider is defined by its models, so registering one with none opens the
-  session on "No models available". `fetch_gateway_models` is best-effort and
-  returns empty on any failure (an unreachable gateway, e.g. a dev profile
-  pointing at a `localhost` port with nothing on it), so launch bails before
+OMP still uses the provider-file approach that `pi` moved away from. `opencode` and `crush` build
+a merged config in `$TMPDIR` and point the agent at it (`OPENCODE_CONFIG`, `CRUSH_GLOBAL_CONFIG`),
+so the user's files are never touched. OMP has no such lever and no override for its agent
+directory, so `omp` writes into `~/.omp/agent/models.yml`. It uses two managed keys:
+`providers.edgee` for Chat Completions and `providers.edgee-anthropic` for Anthropic Messages.
+Custom providers merge into OMP's built-in catalog by `provider + id`, so the block is purely
+**additive**: nothing the user already had is overridden. That is what makes it safe to leave in
+place, and why there is no patch-and-revert dance like `codex-desktop`: this adds a provider
+rather than hijacking one the user depends on.
+
+OMP is Pi-compatible and reuses the `pi` coding-agent key. Sessions therefore share Pi's backend
+attribution and settings rather than provisioning another key.
+
+Four details are load-bearing:
+
+- **Env references are bare names.** OMP looks up the complete value as an environment variable
+  name, so the blocks store `EDGEE_API_KEY` / `EDGEE_SESSION_ID` (Pi itself needs `$NAME` since
+  0.79.4, which is irrelevant here now that `pi` no longer writes provider blocks).
+- **The Edgee key is therefore never written to disk.** The config stores the names and launch
+  supplies the values. This is strictly better than the OpenCode and Crush temp configs, which
+  embed the key. The trade-off: a bare `omp` run sees the Edgee models but cannot authenticate them.
+- **An empty gateway model list is fatal here, unlike for OpenCode.** A custom provider is defined
+  by its models, so registering one with none opens the session on "No models available".
+  `fetch_gateway_models` is best-effort and returns empty on any failure (an unreachable gateway,
+  e.g. a dev profile pointing at a `localhost` port with nothing on it), so launch bails before
   writing rather than leaving a dead provider in the user's config.
-- **The catalog is split by ingress protocol.** Models whose IDs start with
-  `anthropic/` use `api = "anthropic-messages"` with the gateway root as their
-  base URL, so Pi appends `/v1/messages` and applies its native prompt caching.
-  Every other model uses `api = "openai-completions"` with a `/v1` base URL, so
-  Pi appends `/chat/completions`. Gateway reroutes still work from either
-  ingress.
+- **The catalog is split by ingress protocol.** Models whose IDs start with `anthropic/` use
+  `api = "anthropic-messages"` with the gateway root as their base URL, so OMP appends
+  `/v1/messages` and applies its native prompt caching. Every other model uses
+  `api = "openai-completions"` with a `/v1` base URL, so OMP appends `/chat/completions`. Gateway
+  reroutes still work from either ingress.
 
-Reasoning-capable models are declared with `reasoning: true` and a model-level
-`thinkingLevelMap` generated from the catalog. Unsupported Pi levels are set to
-`null`, so the picker hides and skips them; catalog `none` maps to Pi's `off`
-slot. On the Anthropic provider, `compat.forceAdaptiveThinking` is enabled: Pi
-sends `thinking.type=adaptive` plus the exact effort, and the gateway translates
-that canonical control for whichever provider ultimately serves the request.
+Reasoning-capable models are declared with `reasoning: true` and a model-level `thinkingLevelMap`
+generated from the catalog. Unsupported levels are set to `null`, so the picker hides and skips
+them; catalog `none` maps to the `off` slot. On the Anthropic provider,
+`compat.forceAdaptiveThinking` is enabled: OMP sends `thinking.type=adaptive` plus the exact
+effort, and the gateway translates that canonical control for whichever provider ultimately serves
+the request. OMP's Anthropic transport also keeps its own identity (`User-Agent: omp` and the
+`compat` overrides) so the gateway uses the normal Messages path.
 
 ## `kimi` — the env-only channel Kimi Code leaves open
 
