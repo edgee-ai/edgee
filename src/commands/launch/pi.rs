@@ -297,6 +297,70 @@ fn write_providers(path: &std::path::Path, replacements: &[(&str, Value)]) -> Re
         .with_context(|| format!("Failed to write {}", path.display()))
 }
 
+/// Reads OMP's `mcp.json`, or an empty document when absent. A file that
+/// exists but fails to parse is *not* overwritten — same refuse-to-clobber
+/// discipline as [`read_models_config`]/[`write_providers`]. OMP-only: Pi's
+/// own MCP wiring is handled separately.
+fn read_omp_mcp_config(path: &std::path::Path) -> Result<Option<Value>> {
+    if !path.exists() {
+        return Ok(Some(serde_json::json!({ "mcpServers": {} })));
+    }
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(Some(serde_json::json!({ "mcpServers": {} })));
+    }
+    Ok(serde_json::from_str(&content).ok())
+}
+
+/// Upserts the `edgee` entry under `mcpServers` in OMP's `mcp.json`,
+/// preserving every other server the user has registered. OMP has no
+/// `--mcp-config`-style flag (verified absent from `omp --help`), so this
+/// file is the only registration path — unlike every other agent in this
+/// batch, it is a real, persistent write to a file the user also owns.
+/// Bails rather than clobbering when the existing file does not parse.
+fn write_omp_mcp_config(path: &std::path::Path, token: &str) -> Result<()> {
+    let Some(mut config) = read_omp_mcp_config(path)? else {
+        anyhow::bail!(
+            "{} exists but is not valid JSON.\nFix or remove it, then launch omp again.",
+            path.display(),
+        )
+    };
+    if !config.is_object() {
+        anyhow::bail!(
+            "{} does not contain a JSON object.\nFix or remove it, then launch omp again.",
+            path.display()
+        )
+    }
+
+    let obj = config.as_object_mut().expect("checked above");
+    let servers = obj
+        .entry("mcpServers")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !servers.is_object() {
+        *servers = Value::Object(serde_json::Map::new());
+    }
+    let servers = servers.as_object_mut().expect("just ensured object");
+    servers.insert(
+        "edgee".to_string(),
+        serde_json::json!({
+            "type": "http",
+            "url": crate::config::mcp_base_url(),
+            "headers": {
+                "Authorization": format!("Bearer {token}")
+            }
+        }),
+    );
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&config)?))
+        .with_context(|| format!("Failed to write {}", path.display()))
+}
+
+
 #[derive(Clone, Copy)]
 enum PiTransport {
     ChatCompletions,
@@ -532,6 +596,20 @@ pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Res
         crate::config::write(&creds)?;
     }
 
+    // Step 3b (OMP only): fetch the org once and derive both the gateway URL
+    // and the MCP gate from it, rather than issue a second request later —
+    // the same reuse `resolve_gateway_base_url`'s own doc comment recommends
+    // for callers that need both. Pi's own MCP wiring is handled separately;
+    // only OMP registers Edgee's own MCP tools here, and only OMP's path may
+    // re-read `creds` below (before the long-lived `api_key` borrow starts).
+    let org = super::fetch_active_org(&creds).await;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
+    let mcp_disabled = super::mcp_injection_disabled_with_org(org.as_ref());
+    if matches!(agent, CompatibleAgent::Omp) && !mcp_disabled {
+        crate::commands::auth::login::ensure_mcp_preference().await?;
+        creds = crate::config::read()?;
+    }
+
     let pi = creds.pi.as_ref().unwrap();
     let api_key = &pi.api_key;
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -542,8 +620,6 @@ pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Res
     util::ensure_first_run_installed().await;
 
     // Step 4: register the Edgee provider in the user's models.json
-    let gateway_url = super::resolve_gateway_base_url(&creds).await;
-
     let (models, catalog) = tokio::join!(
         util::fetch_gateway_models(&gateway_url, api_key),
         util::fetch_model_catalog(&creds)
@@ -604,6 +680,20 @@ pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Res
         .context("Could not determine your home directory")?;
     write_providers(&models_path, &providers)?;
 
+    // Step 4b (OMP only): register Edgee's own MCP tools. OMP has no CLI flag
+    // for this — file-based registration into the user's real
+    // `~/.omp/agent/mcp.json` is the only path (see `write_omp_mcp_config`).
+    let use_mcp =
+        matches!(agent, CompatibleAgent::Omp) && creds.enable_mcp.unwrap_or(false) && !mcp_disabled;
+    if use_mcp {
+        if let Some(home) = home_dir() {
+            write_omp_mcp_config(
+                &omp_agent_dir(&home).join("mcp.json"),
+                creds.user_token.as_deref().unwrap_or(""),
+            )?;
+        }
+    }
+
     // Step 5: launch the agent with the values its config refers to by name
     let plugin_report = plugins::sync_for_target(&creds, agent.plugin_target()).await;
     let mut cmd = std::process::Command::new(util::resolve_binary(agent.binary()));
@@ -611,6 +701,25 @@ pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Res
     cmd.env(SESSION_ID_ENV, &session_id);
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
     cmd.args(plugin_args(agent, &plugin_report));
+    if use_mcp {
+        let repo_origin = crate::git::detect_origin();
+        let session_url = match creds.org_slug.as_deref() {
+            Some(slug) if !slug.is_empty() => {
+                format!(
+                    "{}/sessions/{slug}/{session_id}",
+                    crate::config::console_base_url()
+                )
+            }
+            _ => format!(
+                "{}/sessions/{session_id}",
+                crate::config::console_base_url()
+            ),
+        };
+        cmd.arg(format!(
+            "--append-system-prompt={}",
+            super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url)
+        ));
+    }
     cmd.args(&opts.args);
     plugins::report_launch(&plugin_report);
 
@@ -1025,5 +1134,51 @@ mod tests {
             written["providers"]["edgee"]["baseUrl"],
             "https://stg.edgee.io/v1"
         );
+    }
+
+    #[test]
+    fn omp_mcp_upserts_edgee_and_preserves_other_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"linear":{"type":"http","url":"https://linear.example/mcp"}}}"#,
+        )
+        .unwrap();
+
+        write_omp_mcp_config(&path, "tok").unwrap();
+
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            written["mcpServers"]["linear"]["url"],
+            "https://linear.example/mcp"
+        );
+        assert_eq!(written["mcpServers"]["edgee"]["type"], "http");
+        assert_eq!(
+            written["mcpServers"]["edgee"]["headers"]["Authorization"],
+            "Bearer tok"
+        );
+    }
+
+    #[test]
+    fn omp_mcp_creates_the_file_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("mcp.json");
+
+        write_omp_mcp_config(&path, "tok").unwrap();
+
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["mcpServers"]["edgee"]["type"], "http");
+    }
+
+    #[test]
+    fn omp_mcp_refuses_to_clobber_an_unparseable_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        let original = "{ this is not json";
+        std::fs::write(&path, original).unwrap();
+
+        assert!(write_omp_mcp_config(&path, "tok").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 }
