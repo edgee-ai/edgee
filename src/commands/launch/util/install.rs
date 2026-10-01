@@ -37,6 +37,36 @@ pub async fn ensure_first_run_installed() {
     let _ = fs::write(&marker, b"");
 }
 
+/// Kimi Code equivalent of [`ensure_first_run_installed`] — installs the
+/// Kimi statusline integration once per machine, on first
+/// `edgee launch kimi`. No legacy form to heal since this integration is new.
+pub async fn ensure_kimi_first_run_installed() {
+    use crate::commands::statusline::kimi::{install, toggle};
+
+    if toggle::is_disabled() {
+        return;
+    }
+
+    let marker = toggle::installed_marker_path();
+    if marker.is_file() {
+        return;
+    }
+
+    let opts = install::Options { implicit: true };
+    if let Err(e) = install::run(opts).await {
+        eprintln!(
+            "  {} edgee: skipped first-run kimi statusline install: {e}",
+            console::style("⚠").yellow()
+        );
+        return;
+    }
+
+    if let Some(parent) = marker.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&marker, b"");
+}
+
 pub fn spawn_cli_version_report(creds: &crate::config::Credentials, session_id: &str) {
     let token = creds
         .user_token
