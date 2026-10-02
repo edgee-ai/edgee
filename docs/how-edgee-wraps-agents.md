@@ -65,6 +65,9 @@ ENABLE_TOOL_SEARCH      = true                        (only when tool-surface re
 
 Plus, when the user has opted into Edgee's MCP server, three documented CLI flags:
 `--mcp-config=<file>`, `--append-system-prompt <text>`, `--allowedTools=<list>`.
+With it, on Claude Code 2.1.287 or later, `--plugin-dir <dir>` loads the Claude Code mod the CLI
+bundles (`mods/edgee-model`, written to `~/.edgee/mods/`): a `/edgee-model` command and side
+pane that reroute the session through the Edgee MCP server. `EDGEE_MODS_DISABLED=1` turns it off.
 
 **This is Anthropic's own documented gateway configuration.** Anthropic publishes a four-page
 specification for third-party LLM gateways:
