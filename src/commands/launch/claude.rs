@@ -92,7 +92,8 @@ pub async fn run(opts: Options) -> Result<()> {
             )
         })
         .unwrap_or_default();
-    let mut cmd = std::process::Command::new(util::resolve_binary("claude"));
+    let claude_binary = util::resolve_binary("claude");
+    let mut cmd = std::process::Command::new(&claude_binary);
 
     // Set up the environment for the claude CLI to talk to Edgee's gateway instead of Anthropic's API.
     cmd
@@ -166,7 +167,18 @@ pub async fn run(opts: Options) -> Result<()> {
         let system_prompt =
             super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
         let system_prompt_path = write_system_prompt_file(&system_prompt)?;
-        cmd.args(mcp_injection_args(&mcp_config_path, &system_prompt_path));
+
+        // The bundled mods drive the Edgee MCP server, so they ride along with
+        // it: no MCP, no mods.
+        let mod_dirs = super::claude_mods::prepare(claude_binary.as_ref());
+        cmd.args(mcp_injection_args(
+            &mcp_config_path,
+            &system_prompt_path,
+            !mod_dirs.is_empty(),
+        ));
+        for dir in &mod_dirs {
+            cmd.arg("--plugin-dir").arg(dir);
+        }
     }
 
     // Step 6: deliver the org's plugins. `--plugin-dir` loads a directory for
@@ -222,7 +234,14 @@ pub async fn run(opts: Options) -> Result<()> {
 /// mitigation — with the error "batch file arguments are invalid". Routing the
 /// prompt through a file sidesteps that entirely, since the path itself is a
 /// single line.
-fn mcp_injection_args(config_path: &Path, system_prompt_path: &Path) -> Vec<OsString> {
+///
+/// `with_mod_tools` also allows the Edgee MCP tools the bundled mods call
+/// (see `claude_mods`), when they are loaded.
+fn mcp_injection_args(
+    config_path: &Path,
+    system_prompt_path: &Path,
+    with_mod_tools: bool,
+) -> Vec<OsString> {
     // Built as OsString rather than formatted: paths need not be UTF-8.
     let mut mcp_config = OsString::from("--mcp-config=");
     mcp_config.push(config_path);
@@ -230,11 +249,13 @@ fn mcp_injection_args(config_path: &Path, system_prompt_path: &Path) -> Vec<OsSt
     let mut system_prompt_file = OsString::from("--append-system-prompt-file=");
     system_prompt_file.push(system_prompt_path);
 
-    vec![
-        mcp_config,
-        system_prompt_file,
-        OsString::from(format!("--allowedTools={EDGEE_ALLOWED_TOOLS}")),
-    ]
+    let mut allowed_tools = format!("--allowedTools={EDGEE_ALLOWED_TOOLS}");
+    if with_mod_tools {
+        allowed_tools.push(',');
+        allowed_tools.push_str(super::claude_mods::EDGEE_MODEL_TOOLS);
+    }
+
+    vec![mcp_config, system_prompt_file, OsString::from(allowed_tools)]
 }
 
 /// Writes an MCP config file to the Edgee config directory with the user's auth token.
@@ -286,21 +307,38 @@ mod tests {
         let injected = mcp_injection_args(
             Path::new("/tmp/mcp.json"),
             Path::new("/tmp/system-prompt.txt"),
+            true,
         );
 
         assert!(injected.contains(&OsString::from("--mcp-config=/tmp/mcp.json")));
         assert!(injected.contains(&OsString::from(
             "--append-system-prompt-file=/tmp/system-prompt.txt"
         )));
-        assert!(injected
-            .iter()
-            .any(|a| a.to_string_lossy() == format!("--allowedTools={EDGEE_ALLOWED_TOOLS}")));
+        assert!(injected.iter().any(|a| a.to_string_lossy()
+            == format!(
+                "--allowedTools={EDGEE_ALLOWED_TOOLS},{}",
+                super::super::claude_mods::EDGEE_MODEL_TOOLS
+            )));
         assert!(
             !injected.iter().any(|a| a == "--mcp-config"
                 || a == "--allowedTools"
                 || a == "--append-system-prompt-file"),
             "variadic flags must not be passed as a space-separated pair: {injected:?}"
         );
+    }
+
+    // The reroute tools are allowed only when the mod that calls them is loaded.
+    #[test]
+    fn mod_tools_are_allowed_only_with_the_mods() {
+        let allowed = |with_mods| {
+            mcp_injection_args(Path::new("/m"), Path::new("/p"), with_mods)
+                .into_iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .find(|a| a.starts_with("--allowedTools="))
+                .unwrap()
+        };
+        assert_eq!(allowed(false), format!("--allowedTools={EDGEE_ALLOWED_TOOLS}"));
+        assert!(allowed(true).ends_with(",mcp__edgee__clearSessionReroute"));
     }
 
     // Regression test: the system prompt used to be injected inline via
@@ -315,6 +353,7 @@ mod tests {
         let injected = mcp_injection_args(
             Path::new("/tmp/mcp.json"),
             Path::new("/tmp/system-prompt.txt"),
+            true,
         );
 
         for arg in &injected {
