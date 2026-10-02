@@ -466,7 +466,7 @@ fn standalone_args(args: &[String]) -> Vec<String> {
     out
 }
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -513,7 +513,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 4: build merged config from user's existing opencode.json + edgee provider
     let opencode = creds.opencode.as_ref().unwrap();
     let api_key = &opencode.api_key;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "opencode").await?;
     util::spawn_cli_version_report(&creds, &session_id);
 
     // First-run: install the persistent user-level statusline integration

@@ -495,11 +495,15 @@ fn build_anthropic_provider_for(
     )
 }
 
-pub async fn run(opts: Options) -> Result<()> {
-    run_compatible(opts, CompatibleAgent::Pi).await
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    run_compatible(opts, CompatibleAgent::Pi, reroute).await
 }
 
-pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Result<()> {
+pub(crate) async fn run_compatible(
+    opts: Options,
+    agent: CompatibleAgent,
+    reroute: &super::reroute::Reroute,
+) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -534,7 +538,7 @@ pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent) -> Res
 
     let pi = creds.pi.as_ref().unwrap();
     let api_key = &pi.api_key;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "pi").await?;
     util::spawn_cli_version_report(&creds, &session_id);
 
     // First-run: install the persistent user-level statusline integration

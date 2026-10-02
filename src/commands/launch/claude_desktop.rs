@@ -26,6 +26,6 @@ use anyhow::Result;
 #[derive(Debug, clap::Parser)]
 pub struct Options {}
 
-pub async fn run(_opts: Options) -> Result<()> {
-    crate::commands::relay::run_for_agent("claude-desktop").await
+pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    crate::commands::relay::run_for_agent("claude-desktop", reroute).await
 }

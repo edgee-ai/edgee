@@ -21,6 +21,7 @@ pub mod kilo;
 pub mod opencode;
 pub mod omp;
 pub mod pi;
+pub(crate) mod reroute;
 pub(crate) mod util;
 
 use anyhow::Result;
@@ -76,28 +77,36 @@ enum Command {
 
 #[derive(Debug, clap::Parser)]
 pub struct Options {
+    #[command(flatten)]
+    reroute: reroute::Options,
     #[command(subcommand)]
     command: Command,
 }
 
 pub async fn run(opts: Options) -> anyhow::Result<()> {
+    if opts.reroute.target.is_some() && matches!(opts.command, Command::Cursor(_)) {
+        anyhow::bail!(
+            "Cursor launch does not attach a session ID. Choose another launch target to use --reroute."
+        );
+    }
+    let reroute = &opts.reroute.resolve().await?;
     match opts.command {
-        Command::Claude(o) => claude::run(o).await,
-        Command::CodeBuddy(o) => codebuddy::run(o).await,
-        Command::Codex(o) => codex::run(o).await,
-        Command::OpenCode(o) => opencode::run(o).await,
-        Command::Crush(o) => crush::run(o).await,
-        Command::Pi(o) => pi::run(o).await,
-        Command::Omp(o) => omp::run(o).await,
-        Command::Kimi(o) => kimi::run(o).await,
-        Command::Kilo(o) => kilo::run(o).await,
-        Command::CopilotCli(o) => copilot_cli::run(o).await,
-        Command::Intellij(o) => intellij::run(o).await,
-        Command::CopilotDesktop(o) => copilot_desktop::run(o).await,
+        Command::Claude(o) => claude::run(o, reroute).await,
+        Command::CodeBuddy(o) => codebuddy::run(o, reroute).await,
+        Command::Codex(o) => codex::run(o, reroute).await,
+        Command::OpenCode(o) => opencode::run(o, reroute).await,
+        Command::Crush(o) => crush::run(o, reroute).await,
+        Command::Pi(o) => pi::run(o, reroute).await,
+        Command::Omp(o) => omp::run(o, reroute).await,
+        Command::Kimi(o) => kimi::run(o, reroute).await,
+        Command::Kilo(o) => kilo::run(o, reroute).await,
+        Command::CopilotCli(o) => copilot_cli::run(o, reroute).await,
+        Command::Intellij(o) => intellij::run(o, reroute).await,
+        Command::CopilotDesktop(o) => copilot_desktop::run(o, reroute).await,
         Command::Cursor(o) => cursor::run(o).await,
-        Command::CopilotVscode(o) => copilot_vscode::run(o).await,
-        Command::ClaudeDesktop(o) => claude_desktop::run(o).await,
-        Command::CodexDesktop(o) => codex_desktop::run(o).await,
+        Command::CopilotVscode(o) => copilot_vscode::run(o, reroute).await,
+        Command::ClaudeDesktop(o) => claude_desktop::run(o, reroute).await,
+        Command::CodexDesktop(o) => codex_desktop::run(o, reroute).await,
     }
 }
 
@@ -267,6 +276,95 @@ mod tests {
     use clap::Parser;
 
     use super::*;
+
+    #[test]
+    fn reroute_flags_stay_before_the_target() {
+        let opts = crate::Options::try_parse_from([
+            "edgee",
+            "launch",
+            "--reroute",
+            "openai/gpt-5",
+            "--reroute-from",
+            "anthropic/claude-sonnet",
+            "--reroute-provider",
+            "openai",
+            "--reroute-effort",
+            "low",
+            "--reroute-duration",
+            "120",
+            "claude",
+            "-p",
+            "hello",
+        ])
+        .unwrap();
+        let crate::commands::Command::Launch(launch) = opts.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(launch.reroute.target.as_deref(), Some("openai/gpt-5"));
+        let Command::Claude(agent) = launch.command else {
+            panic!("wrong target")
+        };
+        assert_eq!(agent.args, ["-p", "hello"]);
+
+        for flag in [
+            "--reroute",
+            "--reroute-from",
+            "--reroute-provider",
+            "--reroute-effort",
+            "--reroute-duration",
+        ] {
+            assert_eq!(
+                claude_args(&["edgee", "launch", "claude", flag, "value"]),
+                [flag, "value"]
+            );
+        }
+    }
+
+    #[test]
+    fn reroute_requires_target_and_limits_duration() {
+        for flag in [
+            "--reroute-from",
+            "--reroute-provider",
+            "--reroute-effort",
+            "--reroute-duration",
+        ] {
+            assert!(
+                crate::Options::try_parse_from(["edgee", "launch", flag, "60", "claude"]).is_err()
+            );
+        }
+        for duration in ["0", "1441", "invalid"] {
+            assert!(crate::Options::try_parse_from([
+                "edgee",
+                "launch",
+                "--reroute",
+                "openai/gpt-5",
+                "--reroute-duration",
+                duration,
+                "claude",
+            ])
+            .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn cursor_rejects_session_reroute_before_setup() {
+        let opts = crate::Options::try_parse_from([
+            "edgee",
+            "launch",
+            "--reroute",
+            "openai/gpt-5",
+            "cursor",
+        ])
+        .unwrap();
+        let crate::commands::Command::Launch(launch) = opts.command else {
+            panic!("wrong command")
+        };
+        assert!(run(launch)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not attach a session ID"));
+    }
 
     fn claude_args(argv: &[&str]) -> Vec<String> {
         let opts = crate::Options::try_parse_from(argv).expect("parses");

@@ -187,6 +187,29 @@ edgee launch opencode -c                   # continue the last OpenCode session
 edgee launch codebuddy --resume <id>       # resume a CodeBuddy session
 ```
 
+### Reroute a session at launch
+
+Put Edgee reroute options **before the agent name**:
+
+```bash
+edgee launch --reroute openai/gpt-5 claude
+edgee launch --reroute openai/gpt-5 --reroute-effort low --reroute-duration 120 codex
+```
+
+Edgee validates the target against your organization's model catalog, including
+any provider and effort selection, then creates the session reroute before starting
+the agent. Model aliases are accepted. If the API rejects
+the reroute or cannot be reached, the agent does not start. This requires an API
+deployment that accepts reroutes before session traffic exists.
+
+By default, all source models reroute for 60 minutes. Use `--reroute-from MODEL`
+to restrict the source model, `--reroute-provider PROVIDER` to pin a catalog
+provider, and `--reroute-duration MINUTES` to set a lifetime from 1 to 1440 minutes.
+After expiry, normal routing resumes, even if the agent is still running.
+The override is scoped to this launch's session and agent API key. Desktop targets
+only cover traffic they already route through Edgee; Cursor's current launcher
+does not support session reroutes.
+
 ### Route plain `claude` / desktop apps through Edgee (`edgee alias`)
 
 ```bash

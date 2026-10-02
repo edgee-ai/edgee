@@ -56,7 +56,7 @@ const MANAGED_END: &str = "# <<< edgee managed block";
 #[derive(Debug, clap::Parser)]
 pub struct Options {}
 
-pub async fn run(_opts: Options) -> Result<()> {
+pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Its own key, so the desktop app reports separately from the `codex` CLI.
@@ -79,7 +79,7 @@ pub async fn run(_opts: Options) -> Result<()> {
         .ok_or_else(|| {
             anyhow::anyhow!("no Edgee API key for 'codex_desktop'; run `edgee auth login`")
         })?;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "codex_desktop").await?;
 
     util::ensure_first_run_installed().await;
     util::spawn_cli_version_report(&creds, &session_id);
