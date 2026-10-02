@@ -642,6 +642,13 @@ impl ApiClient {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_base_url(token: &str, base_url: &str) -> Result<Self> {
+        let mut client = Self::new(token)?;
+        client.base_url = base_url.to_string();
+        Ok(client)
+    }
+
     pub async fn list_organizations(&self) -> Result<Vec<Organization>> {
         let url = format!("{}/v1/organizations", self.base_url);
         let resp = self

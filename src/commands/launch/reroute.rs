@@ -72,7 +72,10 @@ impl Options {
             .as_deref()
             .filter(|s| !s.is_empty())
             .context("Select an organization with `edgee auth login` before using --reroute")?;
-        let client = ApiClient::new(token)?;
+        self.validate(&ApiClient::new(token)?, org_id).await
+    }
+
+    async fn validate(&self, client: &ApiClient, org_id: &str) -> Result<Reroute> {
         let models = client.list_available_models(org_id).await.context(
             "Agent was not launched. Could not validate the reroute catalog; retry when the API is available",
         )?;
@@ -144,10 +147,9 @@ impl Reroute {
     /// Reserve the exact session ID that the launcher will attach to requests.
     /// An explicitly requested reroute must succeed before the agent can start.
     pub async fn create_session(&self, creds: &Credentials, provider: &str) -> Result<String> {
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let Some(reroute) = &self.0 else {
-            return Ok(session_id);
-        };
+        if self.0.is_none() {
+            return Ok(uuid::Uuid::new_v4().to_string());
+        }
         let token = creds
             .user_token
             .as_deref()
@@ -163,6 +165,14 @@ impl Reroute {
             .and_then(|p| p.api_key_id.as_deref())
             .filter(|s| !s.is_empty())
             .context("Missing agent API key ID; run `edgee auth login` and retry")?;
+        self.reserve(&ApiClient::new(token)?, org_id, key_id).await
+    }
+
+    async fn reserve(&self, client: &ApiClient, org_id: &str, key_id: &str) -> Result<String> {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let Some(reroute) = &self.0 else {
+            return Ok(session_id);
+        };
         let expires_at = (OffsetDateTime::now_utc()
             + time::Duration::minutes(i64::from(reroute.duration)))
         .format(&Rfc3339)?;
@@ -174,7 +184,7 @@ impl Reroute {
             effort: reroute.effort.as_deref(),
             expires_at: &expires_at,
         };
-        ApiClient::new(token)?
+        client
             .put_session_reroute(org_id, &session_id, &request)
             .await
             .context(
@@ -199,13 +209,16 @@ fn find_model<'a>(models: &'a [GatewayModel], name: &str) -> Option<&'a GatewayM
 mod tests {
     use super::*;
 
-    fn catalog() -> Vec<GatewayModel> {
-        serde_json::from_value(serde_json::json!([{
+    fn catalog_json() -> serde_json::Value {
+        serde_json::json!([{
             "author_id": "openai", "model_id": "gpt-5", "active": true,
             "aliases": ["gpt-5"], "providers": {"openai": {}},
             "reasoning_efforts": ["low", "high"]
-        }]))
-        .unwrap()
+        }])
+    }
+
+    fn catalog() -> Vec<GatewayModel> {
+        serde_json::from_value(catalog_json()).unwrap()
     }
 
     #[test]
@@ -255,6 +268,161 @@ mod tests {
         assert!(opts.validate_target(&models).is_err());
     }
 
+    type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>;
+
+    /// Minimal console API: answers the first route whose `"METHOD /path"` prefixes
+    /// the request line (404 otherwise) and records each request line and body.
+    async fn mock_api(
+        routes: Vec<(&'static str, &'static str, serde_json::Value)>,
+    ) -> (String, Seen) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Seen::default();
+        let log = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut data = Vec::new();
+                let (head, body) = loop {
+                    let mut buf = [0; 4096];
+                    let count = stream.read(&mut buf).await.unwrap();
+                    data.extend_from_slice(&buf[..count]);
+                    let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head = String::from_utf8(data[..end].to_vec()).unwrap();
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if data.len() >= end + 4 + length {
+                        let body = serde_json::from_slice(&data[end + 4..end + 4 + length])
+                            .unwrap_or(serde_json::Value::Null);
+                        break (head, body);
+                    }
+                };
+                let line = head.lines().next().unwrap().trim_end_matches(" HTTP/1.1");
+                let (status, reply) = routes
+                    .iter()
+                    .find(|(route, _, _)| line.starts_with(route))
+                    .map(|(_, status, reply)| (*status, reply.to_string()))
+                    .unwrap_or(("404 Not Found", "{}".into()));
+                log.lock().unwrap().push((line.to_string(), body));
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (base_url, seen)
+    }
+
+    #[tokio::test]
+    async fn reroute_from_resolves_source_against_full_catalog() {
+        let sonnet = serde_json::json!([{
+            "author_id": "anthropic", "model_id": "claude-sonnet", "active": true,
+            "aliases": ["sonnet"], "providers": {"anthropic": {}}
+        }]);
+        let (base_url, seen) = mock_api(vec![
+            (
+                "GET /v1/organizations/org/available-models",
+                "200 OK",
+                catalog_json(),
+            ),
+            ("GET /v1/models", "200 OK", sonnet),
+        ])
+        .await;
+        let client = ApiClient::with_base_url("token", &base_url).unwrap();
+        let opts = Options {
+            target: Some("openai/gpt-5".into()),
+            source: Some("sonnet".into()),
+            ..Default::default()
+        };
+        let Reroute(Some(reroute)) = opts.validate(&client, "org").await.unwrap() else {
+            panic!("reroute not validated")
+        };
+        assert_eq!(reroute.source, "anthropic/claude-sonnet");
+        let lines: Vec<_> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(l, _)| l.clone())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "GET /v1/organizations/org/available-models",
+                "GET /v1/models"
+            ]
+        );
+
+        let opts = Options {
+            source: Some("unknown".into()),
+            ..opts
+        };
+        let err = opts.validate(&client, "org").await.unwrap_err();
+        assert!(err.to_string().contains("Unknown source model 'unknown'"));
+    }
+
+    fn validated() -> Reroute {
+        Reroute(Some(Validated {
+            source: "*".into(),
+            target: "openai/gpt-5".into(),
+            provider: Some("openai".into()),
+            effort: Some("low".into()),
+            duration: 60,
+        }))
+    }
+
+    #[tokio::test]
+    async fn reserve_puts_the_session_id_it_returns() {
+        let (base_url, seen) = mock_api(vec![(
+            "PUT /v1/organizations/org/sessions/",
+            "200 OK",
+            serde_json::json!({}),
+        )])
+        .await;
+        let client = ApiClient::with_base_url("token", &base_url).unwrap();
+        let session = validated().reserve(&client, "org", "key").await.unwrap();
+
+        let seen = seen.lock().unwrap();
+        let [(line, body)] = seen.as_slice() else {
+            panic!("expected one request, got {seen:?}")
+        };
+        assert_eq!(
+            line,
+            &format!("PUT /v1/organizations/org/sessions/{session}/reroute")
+        );
+        assert_eq!(body["api_key_id"], "key");
+        assert_eq!(body["source_model"], "*");
+        assert_eq!(body["target_model"], "openai/gpt-5");
+        assert_eq!(body["target_provider"], "openai");
+        assert_eq!(body["effort"], "low");
+    }
+
+    #[tokio::test]
+    async fn rejected_reroute_blocks_the_launch() {
+        let (base_url, _) = mock_api(vec![(
+            "PUT /v1/organizations/org/sessions/",
+            "403 Forbidden",
+            serde_json::json!({}),
+        )])
+        .await;
+        let client = ApiClient::with_base_url("token", &base_url).unwrap();
+        let err = validated()
+            .reserve(&client, "org", "key")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Agent was not launched"));
+    }
+
     #[tokio::test]
     async fn ordinary_launch_needs_no_reroute_credentials() {
         let reroute = Options::default().resolve().await.unwrap();
@@ -267,13 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn requested_reroute_fails_without_credentials() {
-        let reroute = Reroute(Some(Validated {
-            source: "*".into(),
-            target: "openai/gpt-5".into(),
-            provider: None,
-            effort: None,
-            duration: 60,
-        }));
+        let reroute = validated();
         assert!(reroute
             .create_session(&Credentials::default(), "claude")
             .await
