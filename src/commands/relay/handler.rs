@@ -454,10 +454,6 @@ async fn filter_copilot_models_response(res: Response<Body>) -> Response<Body> {
     if removed == 0 {
         return Response::from_parts(parts, Body::from(raw));
     }
-    println!(
-        "Removed {removed} Copilot WebSocket Responses endpoint(s) from models: {}. Using HTTP instead.",
-        affected_models.join(", ")
-    );
 
     let Ok(filtered) = serde_json::to_vec(&catalog) else {
         return Response::from_parts(parts, Body::from(raw));
