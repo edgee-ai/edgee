@@ -43,6 +43,7 @@ pub struct Profile {
     pub opencode: Option<ProviderConfig>,
     pub crush: Option<ProviderConfig>,
     pub pi: Option<ProviderConfig>,
+    pub deepseek: Option<ProviderConfig>,
     pub kimi: Option<ProviderConfig>,
     pub kilo: Option<ProviderConfig>,
     pub copilot: Option<ProviderConfig>,
@@ -52,7 +53,7 @@ pub struct Profile {
 impl Profile {
     /// The provider config for a canonical provider key (`claude`,
     /// `claude_desktop`, `codebuddy`, `codex`, `codex_desktop`, `opencode`,
-    /// `crush`, `pi`, `kimi`, `kilo`, `copilot`, `cursor`), if present.
+    /// `crush`, `pi`, `deepseek`, `kimi`, `kilo`, `copilot`, `cursor`), if present.
     pub fn provider(&self, key: &str) -> Option<&ProviderConfig> {
         match key {
             "claude" => self.claude.as_ref(),
@@ -63,6 +64,7 @@ impl Profile {
             "opencode" => self.opencode.as_ref(),
             "crush" => self.crush.as_ref(),
             "pi" => self.pi.as_ref(),
+            "deepseek" => self.deepseek.as_ref(),
             "kimi" => self.kimi.as_ref(),
             "kilo" => self.kilo.as_ref(),
             "copilot" => self.copilot.as_ref(),
@@ -95,6 +97,7 @@ impl Profile {
         self.opencode = None;
         self.crush = None;
         self.pi = None;
+        self.deepseek = None;
         self.kilo = None;
         self.copilot = None;
         self.cursor = None;
@@ -446,6 +449,27 @@ pub fn debug_log_e2ee_passphrase_profile_override() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deepseek_credentials_round_trip_and_clear() {
+        let mut profile = Profile {
+            deepseek: Some(ProviderConfig {
+                api_key: "test-key".to_string(),
+                api_key_id: Some("test-id".to_string()),
+                connection: Some("api".to_string()),
+            }),
+            ..Default::default()
+        };
+        let encoded = toml::to_string(&profile).unwrap();
+        let decoded: Profile = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.provider_api_key("deepseek"), Some("test-key"));
+        assert_eq!(
+            decoded.provider("deepseek").unwrap().connection.as_deref(),
+            Some("api")
+        );
+        profile.clear_provider_keys();
+        assert!(!profile.provider_configured("deepseek"));
+    }
 
     // Helper: migrate and unwrap, for concise test assertions.
     fn do_migrate(content: &str) -> (CredentialsFile, bool) {
