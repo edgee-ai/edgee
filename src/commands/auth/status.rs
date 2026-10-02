@@ -43,6 +43,7 @@ const PROVIDERS: &[(&str, &str)] = &[
     ("opencode", "OpenCode"),
     ("crush", "Crush"),
     ("pi", "Pi"),
+    ("deepseek", "DeepSeek Harness"),
     ("kimi", "Kimi Code"),
     ("kilo", "Kilo Code"),
 ];

@@ -35,11 +35,12 @@ const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch openc
 const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush --");
 const PI_ALIAS: AliasSpec = AliasSpec::new("pi", "edgee launch pi --");
 const OMP_ALIAS: AliasSpec = AliasSpec::new("omp", "edgee launch omp --");
+const DEEPSEEK_ALIAS: AliasSpec = AliasSpec::new("dsh", "edgee launch deepseek --");
 const KIMI_ALIAS: AliasSpec = AliasSpec::new("kimi", "edgee launch kimi --");
 const KILO_ALIAS: AliasSpec = AliasSpec::new("kilo", "edgee launch kilo --");
 const COPILOT_CLI_ALIAS: AliasSpec = AliasSpec::new("copilot", "edgee launch copilot-cli --");
 
-const ALL_ALIASES: [AliasSpec; 10] = [
+const ALL_ALIASES: [AliasSpec; 11] = [
     CLAUDE_ALIAS,
     CODEBUDDY_ALIAS,
     CODEX_ALIAS,
@@ -47,6 +48,7 @@ const ALL_ALIASES: [AliasSpec; 10] = [
     CRUSH_ALIAS,
     PI_ALIAS,
     OMP_ALIAS,
+    DEEPSEEK_ALIAS,
     KIMI_ALIAS,
     KILO_ALIAS,
     COPILOT_CLI_ALIAS,
@@ -68,6 +70,7 @@ pub enum Agent {
     Crush,
     Pi,
     Omp,
+    Deepseek,
     Kimi,
     Kilo,
     /// GitHub Copilot CLI shim (installed as `copilot`)
@@ -100,6 +103,7 @@ impl Agent {
             Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
             Self::Pi => std::slice::from_ref(&PI_ALIAS),
             Self::Omp => std::slice::from_ref(&OMP_ALIAS),
+            Self::Deepseek => std::slice::from_ref(&DEEPSEEK_ALIAS),
             Self::Kimi => std::slice::from_ref(&KIMI_ALIAS),
             Self::Kilo => std::slice::from_ref(&KILO_ALIAS),
             Self::CopilotCli => std::slice::from_ref(&COPILOT_CLI_ALIAS),
@@ -130,6 +134,7 @@ impl Agent {
             Self::Crush => "crush",
             Self::Pi => "pi",
             Self::Omp => "omp",
+            Self::Deepseek => "deepseek",
             Self::Kimi => "kimi",
             Self::Kilo => "kilo",
             Self::CopilotCli => "copilot-cli",
@@ -139,7 +144,7 @@ impl Agent {
             Self::CopilotDesktop => "copilot-desktop",
             Self::Intellij => "intellij",
             Self::All => {
-                "claude, codebuddy, codex, opencode, crush, pi, omp, kimi, kilo, copilot-cli, cursor, copilot-vscode, intellij, copilot-desktop, and claude-desktop"
+                "claude, codebuddy, codex, opencode, crush, pi, omp, deepseek, kimi, kilo, copilot-cli, cursor, copilot-vscode, intellij, copilot-desktop, and claude-desktop"
             }
         }
     }
@@ -643,6 +648,14 @@ exec {launch_command} \"$@\"\n"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deepseek_alias_wraps_dsh() {
+        let aliases = Agent::Deepseek.aliases();
+        assert_eq!(aliases.len(), 1);
+        let block = render_alias_block(aliases, ShellSyntax::Posix);
+        assert!(block.contains("alias dsh='edgee launch deepseek --'"));
+    }
 
     fn claude_only() -> Vec<AliasSpec> {
         vec![CLAUDE_ALIAS]

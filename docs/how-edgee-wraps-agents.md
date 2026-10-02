@@ -211,6 +211,29 @@ config still wins, as Crush intends.
 introduced a `crushrc` format and now describes the JSON config as deprecated. That makes this the
 least future-proof of the Transport A integrations, and it should be migrated.
 
+### DeepSeek Harness (`edgee launch deepseek`)
+
+Implementation: [`src/commands/launch/deepseek.rs`](../src/commands/launch/deepseek.rs)
+
+Launches `dsh` with a private temporary `--patch` overlay. The
+[`llm-pi-ai` provider](https://github.com/deepseek-ai/deepseek-harness/blob/HEAD/packages/llm/llm-pi-ai/README.md)
+uses OpenAI Chat Completions, the gateway's `/v1` root, child-only
+`EDGEE_API_KEY`, and Edgee session/repo/debug headers. Launch provisions and
+validates a dedicated `deepseek` key through Edgee authentication and onboarding;
+key settings come from `edgee settings deepseek`. The console backend must
+support the `deepseek` coding-assistant identifier. `agent-default-model`
+selects the Edgee provider for new sessions; existing sessions keep their saved
+selection. Other configured providers remain available and are not routed.
+
+No Edgee edits to harness profiles or credentials; the overlay is deleted on child
+exit. Default surface: `web`. Explicit profile names and `--profile` work;
+plugin management passes through without an overlay. Default model:
+`deepseek/deepseek-v4-pro`, overridden by `EDGEE_DEEPSEEK_MODEL`. Gateway
+`/v1/models` populates the picker at launch; catalog metadata supplies context
+windows, text/image inputs, and reasoning efforts. Known app-subscription-only
+models are filtered out. Discovery failure falls back to the selected default;
+the override remains selectable even when absent from the listing.
+
 ### Kimi Code (`edgee launch kimi`)
 
 Implementation: [`src/commands/launch/kimi.rs`](../src/commands/launch/kimi.rs)

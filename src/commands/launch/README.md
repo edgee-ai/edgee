@@ -99,6 +99,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `crush` | Crush CLI | `crush` |
 | `pi` | Pi CLI | `pi` |
 | `omp` | Oh My Pi CLI | `pi` |
+| `deepseek` | DeepSeek Harness (`dsh`) | `deepseek` |
 | `kimi` | Kimi Code CLI | `kimi` |
 | `kilo` | Kilo Code CLI | `kilo` |
 
@@ -328,6 +329,38 @@ Reasoning-capable models are declared with `reasoning: true` and a model-level
 slot. On the Anthropic provider, `compat.forceAdaptiveThinking` is enabled: Pi
 sends `thinking.type=adaptive` plus the exact effort, and the gateway translates
 that canonical control for whichever provider ultimately serves the request.
+
+## `deepseek` — DeepSeek Harness (`dsh`)
+
+Install with `npm install -g @deepseek-ai/dsh`. `edgee launch deepseek` boots
+`web`; pass `headless "task"`, a profile name, or `--profile <name>` to select
+another harness surface. Arguments otherwise pass through unchanged, including
+`plugin --profile web add <package>`.
+
+A private temporary `--patch` YAML overlay configures `llm-pi-ai` with an
+`edgee` OpenAI Chat Completions provider and selects it through
+`agent-default-model`. Requests use the gateway's `/v1` root, Edgee API key,
+session/repo attribution, and optional encrypted debug headers. The API key is
+also supplied through child-only `EDGEE_API_KEY`; the overlay is removed when
+`dsh` exits. Harness profiles and credentials are not edited by Edgee.
+
+Default model: `deepseek/deepseek-v4-pro`. Override with
+`EDGEE_DEEPSEEK_MODEL`. At launch, Edgee fetches the gateway's `/v1/models` and
+console catalog concurrently. The picker lists gateway models except known
+app-subscription-only models, with context windows, text/image capabilities,
+and supported reasoning efforts from the catalog. The selected default is
+always included, including when discovery fails. DeepSeek thinking wire format
+is scoped to DeepSeek models, not applied to other providers' models. Restart
+the harness to refresh the list. Existing
+sessions retain their saved provider/model, and selecting another configured
+provider bypasses Edgee. Start a new session with the Edgee provider to route
+through the gateway. Plugin management runs unchanged without an overlay.
+
+Launch provisions and validates a dedicated `deepseek` key using the standard
+Edgee authentication and onboarding flow. Configure it with
+`edgee settings deepseek`. The console backend must support the `deepseek`
+coding-assistant identifier. `edgee alias deepseek` wraps `dsh`, not a binary
+named `deepseek`.
 
 ## `kimi` — the env-only channel Kimi Code leaves open
 
