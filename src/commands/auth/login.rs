@@ -347,6 +347,7 @@ pub fn agent_label(provider: &str) -> &'static str {
         "opencode" => "OpenCode",
         "crush" => "Crush",
         "pi" => "Pi",
+        "deepseek" => "DeepSeek Harness",
         "kimi" => "Kimi Code",
         "kilo" => "Kilo Code",
         "copilot" => "GitHub Copilot",
@@ -490,6 +491,7 @@ fn coding_assistant_name(provider: &str) -> Result<&'static str> {
         "opencode" => Ok("opencode"),
         "crush" => Ok("crush"),
         "pi" => Ok("pi"),
+        "deepseek" => Ok("deepseek"),
         "kimi" => Ok("kimi"),
         "kilo" => Ok("kilo"),
         "copilot" => Ok("copilot"),
@@ -511,6 +513,7 @@ fn provider_config_mut<'a>(
         "opencode" => Ok(&mut creds.opencode),
         "crush" => Ok(&mut creds.crush),
         "pi" => Ok(&mut creds.pi),
+        "deepseek" => Ok(&mut creds.deepseek),
         "kimi" => Ok(&mut creds.kimi),
         "kilo" => Ok(&mut creds.kilo),
         "copilot" => Ok(&mut creds.copilot),
@@ -711,7 +714,19 @@ mod tests {
             "codex_desktop"
         );
         assert_eq!(coding_assistant_name("opencode").unwrap(), "opencode");
+        assert_eq!(coding_assistant_name("deepseek").unwrap(), "deepseek");
+        assert_eq!(agent_label("deepseek"), "DeepSeek Harness");
         assert!(coding_assistant_name("unknown").is_err());
+    }
+
+    #[test]
+    fn deepseek_uses_dedicated_provider_slot() {
+        let mut creds = crate::config::Credentials::default();
+        provider_config_mut(&mut creds, "deepseek").unwrap().replace(
+            crate::config::ProviderConfig { api_key: "test-key".to_string(), ..Default::default() }
+        );
+        assert_eq!(creds.provider_api_key("deepseek"), Some("test-key"));
+        assert!(creds.kimi.is_none());
     }
 
     #[test]
