@@ -37,8 +37,8 @@ pub(crate) fn binary() -> Result<PathBuf> {
     anyhow::bail!("GitHub Copilot desktop launch is currently supported on macOS only. Use `edgee launch copilot-cli` or `edgee launch copilot-vscode` on this platform.")
 }
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
     // Resolve before login so unsupported platforms and missing installs fail early.
     binary()?;
-    crate::commands::relay::run_for_agent_with_args("copilot-desktop", &opts.args).await
+    crate::commands::relay::run_for_agent_with_args("copilot-desktop", &opts.args, reroute).await
 }

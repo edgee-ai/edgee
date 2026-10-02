@@ -58,7 +58,7 @@ fn developer_instructions_arg(session_id: &str, repo: Option<&str>, session_url:
     )
 }
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -101,7 +101,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 3: launch codex with the correct env vars
     let codex = creds.codex.as_ref().unwrap();
     let api_key = &codex.api_key;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "codex").await?;
 
     // First-run: install the persistent user-level statusline integration
     // exactly once. Codex itself doesn't render an Edgee statusline today,

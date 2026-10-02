@@ -609,7 +609,40 @@ pub struct ToolCompressionStat {
     pub after: u64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SessionRerouteRequest<'a> {
+    pub api_key_id: &'a str,
+    pub source_model: &'a str,
+    pub target_model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_provider: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<&'a str>,
+    pub expires_at: &'a str,
+}
+
 impl ApiClient {
+    pub async fn put_session_reroute(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        request: &SessionRerouteRequest<'_>,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/v1/organizations/{}/sessions/{}/reroute",
+            self.base_url, org_id, session_id
+        );
+        let resp = self
+            .http
+            .put(url)
+            .json(request)
+            .send()
+            .await
+            .context("Failed to create session reroute")?;
+        check_status(&resp, "create session reroute")?;
+        Ok(())
+    }
+
     pub fn new(token: &str) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -770,6 +803,24 @@ impl ApiClient {
             .context("Failed to list models")?;
         check_status(&resp, "list models")?;
         resp.json().await.context("Invalid models response")
+    }
+
+    /// Catalog filtered by the organization's enabled models and providers.
+    pub async fn list_available_models(&self, org_id: &str) -> Result<Vec<GatewayModel>> {
+        let url = format!(
+            "{}/v1/organizations/{org_id}/available-models",
+            self.base_url
+        );
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Failed to load available models")?;
+        check_status(&resp, "load available models")?;
+        resp.json()
+            .await
+            .context("Invalid available models response")
     }
 
     /// Lists the org plugins that target the signed-in user, without the
@@ -988,6 +1039,70 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn session_reroute_sends_authenticated_put_and_propagates_rejection() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for status in ["200 OK", "403 Forbidden", "404 Not Found"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut data = Vec::new();
+                let (headers, body) = loop {
+                    let mut buf = [0; 4096];
+                    let count = stream.read(&mut buf).await.unwrap();
+                    assert!(count > 0);
+                    data.extend_from_slice(&buf[..count]);
+                    if let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8(data[..end].to_vec()).unwrap();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (key, value) = line.split_once(':')?;
+                                key.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse().unwrap())
+                            })
+                            .unwrap();
+                        if data.len() >= end + 4 + length {
+                            let body: serde_json::Value =
+                                serde_json::from_slice(&data[end + 4..end + 4 + length]).unwrap();
+                            break (headers, body);
+                        }
+                    }
+                };
+                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").as_bytes()).await.unwrap();
+                (headers, body)
+            });
+            let mut client = super::ApiClient::new("test-token").unwrap();
+            client.base_url = format!("http://{address}");
+            let request = super::SessionRerouteRequest {
+                api_key_id: "key",
+                source_model: "*",
+                target_model: "openai/gpt-5",
+                target_provider: None,
+                effort: None,
+                expires_at: "2026-10-02T12:00:00Z",
+            };
+            let result = client.put_session_reroute("org", "session", &request).await;
+            assert_eq!(result.is_ok(), status == "200 OK");
+            let (headers, body) = server.await.unwrap();
+            assert!(
+                headers.starts_with("PUT /v1/organizations/org/sessions/session/reroute HTTP/1.1")
+            );
+            assert!(headers
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-token"));
+            assert_eq!(
+                body,
+                serde_json::json!({
+                    "api_key_id": "key", "source_model": "*", "target_model": "openai/gpt-5",
+                    "expires_at": "2026-10-02T12:00:00Z"
+                })
+            );
+        }
+    }
+
     #[test]
     fn latest_request_preserves_unknown_routing_and_filters_keys() {
         let row: super::LastRequest =

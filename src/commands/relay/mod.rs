@@ -217,6 +217,10 @@ setup_command! {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
+    run_with_reroute(opts, &crate::commands::launch::reroute::Options::default()).await
+}
+
+async fn run_with_reroute(opts: Options, reroute: &crate::commands::launch::reroute::Options) -> Result<()> {
     let raw = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
     if opts.untrust {
         let agent = canonicalize_target(&raw)
@@ -280,7 +284,7 @@ pub async fn run(opts: Options) -> Result<()> {
     } else {
         None
     };
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, &provider).await?;
     let org_slug = creds.org_slug.clone().unwrap_or_default();
     let repo = crate::git::detect_origin();
 
@@ -517,15 +521,15 @@ pub async fn run(opts: Options) -> Result<()> {
 
 /// Run the relay for `agent` with default options. Entry point for
 /// `edgee launch <agent> --relay`.
-pub async fn run_for_agent(agent: &str) -> Result<()> {
-    run_for_agent_with_args(agent, &[]).await
+pub async fn run_for_agent(agent: &str, reroute: &crate::commands::launch::reroute::Options) -> Result<()> {
+    run_for_agent_with_args(agent, &[], reroute).await
 }
 
 /// Run the relay for `agent`, forwarding `extra_args` to the spawned agent's
 /// binary. Used by CLI launch targets that relay (currently `copilot-cli`), so
 /// flags the user passes after the target reach the agent unchanged.
-pub async fn run_for_agent_with_args(agent: &str, extra_args: &[String]) -> Result<()> {
-    run(Options {
+pub async fn run_for_agent_with_args(agent: &str, extra_args: &[String], reroute: &crate::commands::launch::reroute::Options) -> Result<()> {
+    run_with_reroute(Options {
         agent: Some(agent.to_string()),
         no_launch: false,
         port: None,
@@ -533,7 +537,7 @@ pub async fn run_for_agent_with_args(agent: &str, extra_args: &[String]) -> Resu
         untrust: false,
         non_interactive: false,
         extra_args: extra_args.to_vec(),
-    })
+    }, reroute)
     .await
 }
 

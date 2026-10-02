@@ -81,7 +81,7 @@ fn resolve_model() -> String {
     pick_model(raw.as_deref()).to_string()
 }
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -116,7 +116,7 @@ pub async fn run(opts: Options) -> Result<()> {
 
     let kimi = creds.kimi.as_ref().unwrap();
     let api_key = &kimi.api_key;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "kimi").await?;
 
     // First-run: install the persistent user-level statusline integration
     // exactly once (Claude Code-targeted; honors the disable marker).

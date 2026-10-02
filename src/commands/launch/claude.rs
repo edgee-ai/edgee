@@ -21,9 +21,9 @@ pub struct Options {
 
 const EDGEE_ALLOWED_TOOLS: &str = "mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitRepo";
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
     if opts.relay {
-        return crate::commands::relay::run_for_agent("claude").await;
+        return crate::commands::relay::run_for_agent("claude", reroute).await;
     }
 
     let mut creds = crate::config::read()?;
@@ -69,7 +69,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 4: launch claude with the correct env vars
     let claude = creds.claude.as_ref().unwrap();
     let api_key = &claude.api_key;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "claude").await?;
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
         .as_ref()
