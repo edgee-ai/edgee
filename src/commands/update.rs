@@ -64,6 +64,12 @@ pub async fn run(_opts: Options) -> anyhow::Result<()> {
 
         println!("Checking latest released version...");
         let latest = builder.build()?.get_latest_release()?;
+        // Pinning a tag skips self_update's own version comparison, so check
+        // here: never reinstall the current version or downgrade a newer build.
+        if !self_update::version::bump_is_greater(current, &latest.version)? {
+            println!("Already up to date ({})", current.green());
+            return anyhow::Ok(());
+        }
         // CLI release tags are `v{version}` (see the release workflow).
         let tag = format!("v{}", latest.version);
         println!("Installing latest release: v{} → v{}", current, latest.version);
