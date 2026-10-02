@@ -396,6 +396,12 @@ pub fn plugins_disabled_env_override() -> Option<bool> {
     parse_bool_flag(&std::env::var("EDGEE_PLUGINS_DISABLED").ok()?)
 }
 
+/// Local kill switch for the Claude Code mods the CLI bundles
+/// (`EDGEE_MODS_DISABLED=1`). See `commands::launch::claude_mods`.
+pub fn mods_disabled_env_override() -> Option<bool> {
+    parse_bool_flag(&std::env::var("EDGEE_MODS_DISABLED").ok()?)
+}
+
 /// Edgee's home-anchored directory (`~/.edgee`), already the home of the
 /// `edgee launch` PATH shims.
 ///
