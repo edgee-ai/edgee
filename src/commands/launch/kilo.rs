@@ -182,7 +182,7 @@ fn build_config_content(edgee_provider: Value) -> Value {
     })
 }
 
-pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated

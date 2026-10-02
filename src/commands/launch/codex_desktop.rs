@@ -56,7 +56,7 @@ const MANAGED_END: &str = "# <<< edgee managed block";
 #[derive(Debug, clap::Parser)]
 pub struct Options {}
 
-pub async fn run(_opts: Options, reroute: &super::reroute::Options) -> Result<()> {
+pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Its own key, so the desktop app reports separately from the `codex` CLI.

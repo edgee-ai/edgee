@@ -12,7 +12,7 @@ pub struct Options {
     pub args: Vec<String>,
 }
 
-pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     // Fail before authentication if there is no IDE to launch.
     binary()?;
     crate::commands::relay::run_for_agent_with_args("intellij", &opts.args, reroute).await

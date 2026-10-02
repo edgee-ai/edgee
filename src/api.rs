@@ -622,27 +622,6 @@ pub struct SessionRerouteRequest<'a> {
 }
 
 impl ApiClient {
-    pub async fn put_session_reroute(
-        &self,
-        org_id: &str,
-        session_id: &str,
-        request: &SessionRerouteRequest<'_>,
-    ) -> Result<()> {
-        let url = format!(
-            "{}/v1/organizations/{}/sessions/{}/reroute",
-            self.base_url, org_id, session_id
-        );
-        let resp = self
-            .http
-            .put(url)
-            .json(request)
-            .send()
-            .await
-            .context("Failed to create session reroute")?;
-        check_status(&resp, "create session reroute")?;
-        Ok(())
-    }
-
     pub fn new(token: &str) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -965,6 +944,27 @@ impl ApiClient {
             .await
             .map(Some)
             .context("Invalid API key response")
+    }
+
+    pub async fn put_session_reroute(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        request: &SessionRerouteRequest<'_>,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/v1/organizations/{}/sessions/{}/reroute",
+            self.base_url, org_id, session_id
+        );
+        let resp = self
+            .http
+            .put(url)
+            .json(request)
+            .send()
+            .await
+            .context("Failed to create session reroute")?;
+        check_status(&resp, "create session reroute")?;
+        Ok(())
     }
 
     pub async fn set_session_cli_version(

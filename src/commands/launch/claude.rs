@@ -21,7 +21,7 @@ pub struct Options {
 
 const EDGEE_ALLOWED_TOOLS: &str = "mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitRepo";
 
-pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     if opts.relay {
         return crate::commands::relay::run_for_agent("claude", reroute).await;
     }

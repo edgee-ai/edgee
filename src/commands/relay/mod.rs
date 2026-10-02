@@ -217,10 +217,13 @@ setup_command! {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    run_with_reroute(opts, &crate::commands::launch::reroute::Options::default()).await
+    run_with_reroute(opts, &crate::commands::launch::reroute::Reroute::default()).await
 }
 
-async fn run_with_reroute(opts: Options, reroute: &crate::commands::launch::reroute::Options) -> Result<()> {
+async fn run_with_reroute(
+    opts: Options,
+    reroute: &crate::commands::launch::reroute::Reroute,
+) -> Result<()> {
     let raw = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
     if opts.untrust {
         let agent = canonicalize_target(&raw)
@@ -521,23 +524,33 @@ async fn run_with_reroute(opts: Options, reroute: &crate::commands::launch::rero
 
 /// Run the relay for `agent` with default options. Entry point for
 /// `edgee launch <agent> --relay`.
-pub async fn run_for_agent(agent: &str, reroute: &crate::commands::launch::reroute::Options) -> Result<()> {
+pub async fn run_for_agent(
+    agent: &str,
+    reroute: &crate::commands::launch::reroute::Reroute,
+) -> Result<()> {
     run_for_agent_with_args(agent, &[], reroute).await
 }
 
 /// Run the relay for `agent`, forwarding `extra_args` to the spawned agent's
 /// binary. Used by CLI launch targets that relay (currently `copilot-cli`), so
 /// flags the user passes after the target reach the agent unchanged.
-pub async fn run_for_agent_with_args(agent: &str, extra_args: &[String], reroute: &crate::commands::launch::reroute::Options) -> Result<()> {
-    run_with_reroute(Options {
-        agent: Some(agent.to_string()),
-        no_launch: false,
-        port: None,
-        log_output: None,
-        untrust: false,
-        non_interactive: false,
-        extra_args: extra_args.to_vec(),
-    }, reroute)
+pub async fn run_for_agent_with_args(
+    agent: &str,
+    extra_args: &[String],
+    reroute: &crate::commands::launch::reroute::Reroute,
+) -> Result<()> {
+    run_with_reroute(
+        Options {
+            agent: Some(agent.to_string()),
+            no_launch: false,
+            port: None,
+            log_output: None,
+            untrust: false,
+            non_interactive: false,
+            extra_args: extra_args.to_vec(),
+        },
+        reroute,
+    )
     .await
 }
 

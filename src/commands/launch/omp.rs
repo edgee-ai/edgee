@@ -9,6 +9,6 @@ use anyhow::Result;
 
 pub use super::pi::Options;
 
-pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     super::pi::run_compatible(opts, super::pi::CompatibleAgent::Omp, reroute).await
 }

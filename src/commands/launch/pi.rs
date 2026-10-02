@@ -495,11 +495,15 @@ fn build_anthropic_provider_for(
     )
 }
 
-pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     run_compatible(opts, CompatibleAgent::Pi, reroute).await
 }
 
-pub(crate) async fn run_compatible(opts: Options, agent: CompatibleAgent, reroute: &super::reroute::Options) -> Result<()> {
+pub(crate) async fn run_compatible(
+    opts: Options,
+    agent: CompatibleAgent,
+    reroute: &super::reroute::Reroute,
+) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated

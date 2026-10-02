@@ -11,7 +11,7 @@ pub struct Options {
     pub args: Vec<String>,
 }
 
-pub async fn run(opts: Options, reroute: &super::reroute::Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
