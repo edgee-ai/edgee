@@ -23,6 +23,7 @@ declare module "claude-code" {
       models: Record<string, EdgeeModelTotals>;
       catalog: string[];
       picker: EdgeePicker;
+      minimized: boolean;
     };
   }
 }

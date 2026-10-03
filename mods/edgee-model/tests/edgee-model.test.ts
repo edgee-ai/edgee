@@ -3,6 +3,8 @@ import { describe, expect, mock, test } from "claude-code/testing";
 
 const PANE_PROPS = { title: "Edgee requests", isFocused: true, bodyColumns: 80, placement: "dock" } as unknown as RenderPropsOf["Pane"];
 
+const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120 } as unknown as RenderPropsOf["AbovePrompt"];
+
 const MODELS = ["anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5", "qwen/qwen3-coder-next", "qwen/qwen3-max"];
 
 function text(value: unknown) {
@@ -210,5 +212,46 @@ describe("edgee-model", () => {
     expect(await ui.find({ type: "Select", key: "model" })).toBeDefined();
     expect(await ui.find({ type: "Text", text: /MCP call failed/ })).toBeUndefined();
     await ui.unmount();
+  });
+  test("the pane minimizes to a line above the prompt and back, remembered across sessions", async ($, on) => {
+    const opens: string[] = [];
+    const closes: string[] = [];
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("command.register", ($, e) => ({ value: { command: e.name } }));
+    on("env.get", () => ({ value: "sess-1" }));
+    on("clock.now", () => ({ value: Date.UTC(2026, 9, 2, 10, 0) }));
+    on("ui.status", () => ({ value: undefined }));
+    on("mcp.call", () => text({ models: MODELS }));
+    on("ui.open", ($, e) => {
+      opens.push(e.id);
+      return { value: { isPlaced: true } };
+    });
+    on("ui.close", ($, e) => {
+      closes.push(e.id);
+    });
+    on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Box({ children: [] })); // the band without the mod: empty
+    mock.store(on);
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    expect(opens).toEqual(["edgee-requests"]);
+    const band = await $.ui.mount({ plugin: "edgee-model", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS });
+    expect(await band.find({ type: "Text", text: /Edgee/ })).toBeUndefined(); // the pane is open: no line
+
+    const pane = await $.ui.mount({ plugin: "edgee-model", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    await pane.press({ key: "minimize" });
+    expect(closes).toEqual(["edgee-requests"]);
+    expect(await band.find({ type: "Text", text: /● direct/ })).toBeDefined();
+    expect(await band.find({ type: "Button", key: "expand" })).toBeDefined();
+
+    // A new session starts minimized: no pane, the line instead.
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    expect(opens).toEqual(["edgee-requests"]);
+    expect(await band.find({ type: "Text", text: /● direct/ })).toBeDefined();
+
+    await band.press({ key: "expand" });
+    expect(opens).toEqual(["edgee-requests", "edgee-requests"]);
+    expect(await band.find({ type: "Text", text: /Edgee/ })).toBeUndefined();
+    await pane.unmount();
+    await band.unmount();
   });
 });

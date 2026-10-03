@@ -7,6 +7,7 @@
 //   /edgee-model <model> [minutes]  reroute the session (default 60, max 1440)
 //   /edgee-model off                route normally again
 //   /edgee-model panel              focus the side pane (open from the start): a model selector, each API request and the model that served it
+//   /edgee-model minimize           fold the pane into one line above the prompt (its [–] does too; the line's [+] unfolds it)
 
 import type { EngineInterface, On, RenderElement, TextProps, BoxProps, TurnStepInput, TurnStepResult } from "claude-code";
 import type { EdgeeModelTotals, EdgeePicker, EdgeeRequest, EdgeeReroute } from "../types/index.d.ts";
@@ -33,6 +34,9 @@ const requests = { plugin: "edgee-model", key: "requests" } as const; // the las
 const models = { plugin: "edgee-model", key: "models" } as const; // session totals per served model
 const catalog = { plugin: "edgee-model", key: "catalog" } as const; // models the selector offers
 const picker = { plugin: "edgee-model", key: "picker" } as const; // the selector's filter, duration and last notice
+const minimized = { plugin: "edgee-model", key: "minimized" } as const; // the pane folded into a line above the prompt
+// Kept across sessions: a person who minimized the pane starts the next session minimized.
+const MINIMIZED_KEY = "minimized";
 
 export function register(on: On) {
   on("session.start", async ($, e, next) => {
@@ -40,12 +44,15 @@ export function register(on: On) {
     await $.command.register({
       name: COMMAND,
       description: "Route this session to another model through Edgee",
-      argumentHint: "[list [filter] | <model> [minutes] | off | panel]",
+      argumentHint: "[list [filter] | <model> [minutes] | off | panel | minimize]",
     });
     await refreshStatus($);
+    const folded = (await storedMinimized($)) === true;
+    await $.state.set(minimized, folded);
     // Shown from the start, without the keyboard: the prompt keeps it. On a
     // narrow terminal the pane waits unplaced until the window is wide enough.
-    await openPane($, { focus: false });
+    // Minimized last time, the line above the prompt stands in for it.
+    if (!folded) await openPane($, { focus: false });
     return result;
   });
 
@@ -103,9 +110,37 @@ export function register(on: On) {
     return result;
   });
 
+  // The pane's [–] folds it into one line above the prompt; that line's [+] unfolds it.
+  on("ui.press", { plugin: "edgee-model", element: "minimize" }, async ($, e, next) => {
+    const result = await next(e);
+    await minimize($);
+    return result;
+  });
+
+  on("ui.press", { plugin: "edgee-model", element: "expand" }, async ($, e, next) => {
+    const result = await next(e);
+    await openPane($, { focus: false });
+    return result;
+  });
+
+  on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
+    if (e.props.hasSurvey || !(await $.state.get(minimized)).value) return next(e);
+    return bandView($.ui.resolve(e), {
+      active: await current($),
+      catalog: (await $.state.get(catalog)).value ?? [],
+      recent: (await $.state.get(requests)).value ?? [],
+      totals: (await $.state.get(models)).value ?? {},
+      columns: e.props.bodyColumns,
+    });
+  });
+
   on("command.run", { command: COMMAND }, async ($, e) => {
     const [verb = "", ...rest] = e.args.trim().split(/\s+/).filter(Boolean);
     if (verb === "panel") return { text: await openPane($) };
+    if (verb === "minimize") {
+      await minimize($);
+      return { text: `Edgee pane minimized: /${COMMAND} panel restores it.` };
+    }
     const sessionId = await $.env.get("EDGEE_SESSION_ID");
     if (!sessionId) {
       return { text: "Not running under Edgee. Start Claude Code with `edgee launch claude`." };
@@ -229,9 +264,33 @@ async function refreshStatus($: $): Promise<void> {
 }
 
 async function openPane($: $, { focus = true } = {}): Promise<string> {
+  await setMinimized($, false);
   await loadCatalog($);
   const opened = await $.ui.open({ id: PANE, title: "Edgee requests", ...(focus ? { focus: true } : {}) });
   return opened.isPlaced ? "Edgee requests pane opened." : `Edgee requests pane waits: ${opened.reason}`;
+}
+
+async function minimize($: $): Promise<void> {
+  await setMinimized($, true);
+  await $.ui.close({ id: PANE });
+}
+
+async function setMinimized($: $, value: boolean): Promise<void> {
+  if ((await $.state.get(minimized)).value === value) return;
+  await $.state.set(minimized, value);
+  try {
+    await $.store.set(MINIMIZED_KEY, value);
+  } catch {
+    // A preference: losing it only means the next session opens the pane.
+  }
+}
+
+async function storedMinimized($: $): Promise<unknown> {
+  try {
+    return await $.store.get(MINIMIZED_KEY);
+  } catch {
+    return undefined;
+  }
 }
 
 // Loads the selector's models; a failure leaves the requests view working.
@@ -336,7 +395,7 @@ type PaneData = {
 };
 
 function paneView(elements: Elements, { sessionId, active, catalog, picker, recent, totals, columns }: PaneData): RenderElement {
-  const { Box, Text } = elements;
+  const { Box, Text, Button } = elements;
   // Input and Select are on every surface but mobile; without them the pane only reports.
   const pickers = "Input" in elements && "Select" in elements ? elements : null;
   const inner = Math.max(24, columns - 4); // inside a card's border and padding
@@ -353,7 +412,11 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
       row(
         [
           row([span("◆ EDGEE", { color: ACCENT, bold: true }), span(`  session ${sessionId ? sessionId.slice(0, 8) : "—"}`, { dimColor: true })]),
-          active ? span(" ⇄ REROUTED ", { backgroundColor: "#7C3AED", color: "white", bold: true }) : span(" ● DIRECT ", { backgroundColor: "#065F46", color: "white", bold: true }),
+          row([
+            active ? span(" ⇄ REROUTED ", { backgroundColor: "#7C3AED", color: "white", bold: true }) : span(" ● DIRECT ", { backgroundColor: "#065F46", color: "white", bold: true }),
+            span(" "),
+            Button({ key: "minimize", label: "–", hotkey: "m", onPress: () => {} }),
+          ]),
         ],
         { justifyContent: "space-between" },
       ),
@@ -370,13 +433,10 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
   );
 
   // ── Totals as tiles, then how much of the input the prompt cache served.
-  const sum = Object.values(totals).reduce(
-    (s, t) => ({ requests: s.requests + t.requests, input: s.input + t.input, cached: s.cached + t.cached, output: s.output + t.output }),
-    { requests: 0, input: 0, cached: 0, output: 0 },
-  );
+  const sum = sumTotals(totals);
   const tile = (label: string, value: string, color: string) =>
     Box({ flexDirection: "column", flexGrow: 1, alignItems: "center", borderStyle: "single", borderColor: color, borderDimColor: true, children: [span(value, { color, bold: true }), span(label, { dimColor: true })] });
-  const hit = sum.input + sum.cached > 0 ? sum.cached / (sum.input + sum.cached) : 0;
+  const hit = cacheHit(sum);
   const barWidth = Math.max(10, inner - 16);
   const stats = [
     row([tile("requests", String(sum.requests), ACCENT), tile("input", short(sum.input), "cyan"), tile("cached", short(sum.cached), "green"), tile("output", short(sum.output), "yellow")]),
@@ -474,9 +534,51 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
       Box({ flexDirection: "column", paddingX: 1, children: served }),
       rule("Recent requests"),
       Box({ flexDirection: "column", paddingX: 1, children: timeline }),
-      row([span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" back", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
+      row([span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("m", { color: ACCENT, bold: true }), span(" minimize  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" back", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
     ],
   });
+}
+
+type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns">;
+
+// The minimized pane: one line above the prompt, where requests go and what they cost.
+function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, totals, columns }: BandData): RenderElement {
+  const sum = sumTotals(totals);
+  const lastServed = [...recent].reverse().find((r) => r.served)?.served;
+  const served = lastServed ? withProvider(lastServed, catalog) : undefined;
+  const facts = [`${sum.requests} req`, `${short(sum.input + sum.cached)}↑ ${short(sum.output)}↓`, `${Math.round(cacheHit(sum) * 100)}% cache`].join(" · ");
+  return Box({
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: columns,
+    children: [
+      Box({
+        flexDirection: "row",
+        flexShrink: 1,
+        children: [
+          Text({ color: ACCENT, bold: true, children: "◆ Edgee  " }),
+          active
+            ? Text({ color: ACCENT, bold: true, children: `⇄ ${bare(active.model)} until ${clockTime(active.expiresAt)}` })
+            : Text({ color: "green", children: "● direct" }),
+          ...(served ? [Text({ dimColor: true, children: " · " }), Text({ color: providerColor(served), children: bare(served) })] : []),
+          Text({ dimColor: true, wrap: "truncate-end", children: ` · ${facts}` }),
+        ],
+      }),
+      Button({ key: "expand", label: "+", hotkey: "o", onPress: () => {} }),
+    ],
+  });
+}
+
+function sumTotals(totals: Record<string, EdgeeModelTotals>): EdgeeModelTotals {
+  return Object.values(totals).reduce(
+    (s, t) => ({ requests: s.requests + t.requests, input: s.input + t.input, cached: s.cached + t.cached, output: s.output + t.output }),
+    { requests: 0, input: 0, cached: 0, output: 0 },
+  );
+}
+
+// The share of the input the prompt cache served.
+function cacheHit({ input, cached }: EdgeeModelTotals): number {
+  return input + cached > 0 ? cached / (input + cached) : 0;
 }
 
 // The gateway may name the served model without its provider (`qwen3-coder-next`):

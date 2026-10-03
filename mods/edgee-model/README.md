@@ -10,6 +10,7 @@ Edgee gateway. It calls the session reroute tools of the Edgee MCP server that
 /edgee-model <model> [minutes]  reroute the session (default 60, max 1440)
 /edgee-model off                route normally again
 /edgee-model panel              focus the side pane (it opens with the session)
+/edgee-model minimize           fold the pane into one line above the prompt
 ```
 
 `<model>` matches an exact id (`qwen/qwen3-coder-next`), a bare name
@@ -42,7 +43,16 @@ The pane takes the keyboard when it opens (or with `ctrl+x tab`, or a click).
 Then Tab moves between the filter, the model and the duration; typing in the
 filter narrows the models and Enter there picks the first match; ↑/↓ move
 through a picker's options and Enter picks;
+`m` (or the `[–]` button in the header) minimizes the pane;
 Esc hands the keyboard back to the prompt.
+
+### Minimized
+
+Minimized, the pane closes and one line above the prompt stands in for it:
+where requests go (`● direct`, or `⇄ <model> until HH:MM`), the last model
+served, and the session's requests, tokens and cache hit. Its `[+]` button, or
+`/edgee-model panel`, brings the pane back. The choice is remembered: a session
+started after minimizing starts minimized.
 
 ## Shipping
 
