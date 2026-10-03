@@ -1,7 +1,0 @@
-{
-  "name": "edgee-model",
-  "version": "0.1.0",
-  "description": "Pick the model that serves this Claude Code session through the Edgee gateway: /edgee-model.",
-  "author": { "name": "Edgee" },
-  "types": "./types/index.d.ts"
-}

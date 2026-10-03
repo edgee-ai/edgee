@@ -2,12 +2,12 @@
 // gateway, using the session reroute tools of the Edgee MCP server that
 // `edgee launch claude` injects.
 //
-//   /edgee-model                    show the active reroute
-//   /edgee-model list [filter]      models this session's API key can use
-//   /edgee-model <model> [minutes]  reroute the session (default 60, max 1440)
-//   /edgee-model off                route normally again
-//   /edgee-model panel              focus the side pane (open from the start): a model selector, each API request and the model that served it
-//   /edgee-model minimize           fold the pane into one line above the prompt (its [–] does too; the line's [+] unfolds it)
+//   /edgee                    show the active reroute
+//   /edgee list [filter]      models this session's API key can use
+//   /edgee <model> [minutes]  reroute the session (default 60, max 1440)
+//   /edgee off                route normally again
+//   /edgee panel              focus the side pane (open from the start): a model selector, each API request and the model that served it
+//   /edgee minimize           fold the pane into one line above the prompt (its [–] does too; the line's [+] unfolds it)
 
 import type { EngineInterface, On, RenderElement, TextProps, BoxProps, TurnStepInput, TurnStepResult } from "claude-code";
 import type { EdgeeModelTotals, EdgeePicker, EdgeeRequest, EdgeeReroute } from "../types/index.d.ts";
@@ -16,7 +16,7 @@ type $ = EngineInterface;
 type Elements = ReturnType<$["ui"]["resolve"]>;
 
 const SERVER = "edgee";
-const COMMAND = "edgee-model";
+const COMMAND = "edgee";
 const DEFAULT_MINUTES = 60;
 const MAX_MINUTES = 1440;
 const LIST_LIMIT = 40;
@@ -29,12 +29,12 @@ const CATALOG_ATTEMPTS = 20;
 const CATALOG_RETRY_MS = 1_000;
 
 // Held by the host, so they survive a hot reload of this file.
-const reroute = { plugin: "edgee-model", key: "reroute" } as const;
-const requests = { plugin: "edgee-model", key: "requests" } as const; // the last RECENT requests
-const models = { plugin: "edgee-model", key: "models" } as const; // session totals per served model
-const catalog = { plugin: "edgee-model", key: "catalog" } as const; // models the selector offers
-const picker = { plugin: "edgee-model", key: "picker" } as const; // the selector's filter, duration and last notice
-const minimized = { plugin: "edgee-model", key: "minimized" } as const; // the pane folded into a line above the prompt
+const reroute = { plugin: "edgee", key: "reroute" } as const;
+const requests = { plugin: "edgee", key: "requests" } as const; // the last RECENT requests
+const models = { plugin: "edgee", key: "models" } as const; // session totals per served model
+const catalog = { plugin: "edgee", key: "catalog" } as const; // models the selector offers
+const picker = { plugin: "edgee", key: "picker" } as const; // the selector's filter, duration and last notice
+const minimized = { plugin: "edgee", key: "minimized" } as const; // the pane folded into a line above the prompt
 // Kept across sessions: a person who minimized the pane starts the next session minimized.
 const MINIMIZED_KEY = "minimized";
 
@@ -86,7 +86,7 @@ export function register(on: On) {
   // The selector's elements: hooks rather than closures, so the work has `$`.
   // Each passes first, then acts: the work redraws the pane, and the element
   // `next` hands the event to would no longer be the one that raised it.
-  on("ui.input", { plugin: "edgee-model", element: "filter" }, async ($, e, next) => {
+  on("ui.input", { plugin: "edgee", element: "filter" }, async ($, e, next) => {
     const result = await next(e);
     await updatePicker($, { filter: e.value });
     if (e.kind === "submit") {
@@ -98,26 +98,26 @@ export function register(on: On) {
     return result;
   });
 
-  on("ui.select", { plugin: "edgee-model", element: "duration" }, async ($, e, next) => {
+  on("ui.select", { plugin: "edgee", element: "duration" }, async ($, e, next) => {
     const result = await next(e);
     await updatePicker($, { minutes: Number(e.value) });
     return result;
   });
 
-  on("ui.select", { plugin: "edgee-model", element: "model" }, async ($, e, next) => {
+  on("ui.select", { plugin: "edgee", element: "model" }, async ($, e, next) => {
     const result = await next(e);
     await pickModel($, e.value);
     return result;
   });
 
   // The pane's [–] folds it into one line above the prompt; that line's [+] unfolds it.
-  on("ui.press", { plugin: "edgee-model", element: "minimize" }, async ($, e, next) => {
+  on("ui.press", { plugin: "edgee", element: "minimize" }, async ($, e, next) => {
     const result = await next(e);
     await minimize($);
     return result;
   });
 
-  on("ui.press", { plugin: "edgee-model", element: "expand" }, async ($, e, next) => {
+  on("ui.press", { plugin: "edgee", element: "expand" }, async ($, e, next) => {
     const result = await next(e);
     await openPane($, { focus: false });
     return result;

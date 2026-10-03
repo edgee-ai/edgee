@@ -23,34 +23,34 @@ struct Mod {
     files: &'static [(&'static str, &'static str)],
 }
 
-/// `/edgee-model`: pick the model serving the session through the session
+/// `/edgee`: pick the model serving the session through the session
 /// reroute tools of the Edgee MCP server, and a pane of the session's requests.
 /// Needs the Edgee MCP server and `EDGEE_SESSION_ID`.
-const EDGEE_MODEL: Mod = Mod {
-    name: "edgee-model",
+const EDGEE_MOD: Mod = Mod {
+    name: "edgee",
     files: &[
         (
             ".claude-plugin/plugin.json",
-            include_str!("../../../mods/edgee-model/.claude-plugin/plugin.json"),
+            include_str!("../../../mods/edgee/.claude-plugin/plugin.json"),
         ),
         (
             "hooks/hooks.json",
-            include_str!("../../../mods/edgee-model/hooks/hooks.json"),
+            include_str!("../../../mods/edgee/hooks/hooks.json"),
         ),
         (
-            "hooks/edgee-model.ts",
-            include_str!("../../../mods/edgee-model/hooks/edgee-model.ts"),
+            "hooks/edgee.ts",
+            include_str!("../../../mods/edgee/hooks/edgee.ts"),
         ),
         (
             "types/index.d.ts",
-            include_str!("../../../mods/edgee-model/types/index.d.ts"),
+            include_str!("../../../mods/edgee/types/index.d.ts"),
         ),
     ],
 };
 
-/// The tools `edgee-model` calls on the Edgee MCP server, pre-allowed so the
+/// The tools `edgee` calls on the Edgee MCP server, pre-allowed so the
 /// pane's first pick does not stop on a permission prompt.
-pub(super) const EDGEE_MODEL_TOOLS: &str =
+pub(super) const EDGEE_MOD_TOOLS: &str =
     "mcp__edgee__listSessionModels,mcp__edgee__setSessionReroute,mcp__edgee__clearSessionReroute";
 
 /// Writes the bundled mods and returns their directories for `--plugin-dir`.
@@ -68,7 +68,7 @@ pub(super) fn prepare(claude: &OsStr) -> Vec<PathBuf> {
     let Some(root) = crate::config::edgee_home().map(|home| home.join("mods")) else {
         return Vec::new();
     };
-    match write_mod(&root, &EDGEE_MODEL) {
+    match write_mod(&root, &EDGEE_MOD) {
         Ok(dir) => vec![dir],
         Err(e) => {
             eprintln!(
@@ -143,21 +143,21 @@ mod tests {
     #[test]
     fn writes_the_mod_and_leaves_unchanged_files_alone() {
         let root = tempfile::tempdir().unwrap();
-        let dir = write_mod(root.path(), &EDGEE_MODEL).unwrap();
-        for (relative, contents) in EDGEE_MODEL.files {
+        let dir = write_mod(root.path(), &EDGEE_MOD).unwrap();
+        for (relative, contents) in EDGEE_MOD.files {
             assert_eq!(&std::fs::read_to_string(dir.join(relative)).unwrap(), contents);
         }
 
         // A second launch must not touch the files, or running sessions would hot-reload.
-        let module = dir.join("hooks/edgee-model.ts");
+        let module = dir.join("hooks/edgee.ts");
         let before = std::fs::metadata(&module).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        write_mod(root.path(), &EDGEE_MODEL).unwrap();
+        write_mod(root.path(), &EDGEE_MOD).unwrap();
         assert_eq!(std::fs::metadata(&module).unwrap().modified().unwrap(), before);
 
         // A stale file (an older CLI's mod) is replaced.
         std::fs::write(&module, "stale").unwrap();
-        write_mod(root.path(), &EDGEE_MODEL).unwrap();
+        write_mod(root.path(), &EDGEE_MOD).unwrap();
         assert_ne!(std::fs::read_to_string(&module).unwrap(), "stale");
         assert!(!std::fs::read_dir(dir.join("hooks"))
             .unwrap()
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn the_bundle_lists_the_module_hooks_json_names() {
-        let hooks = EDGEE_MODEL
+        let hooks = EDGEE_MOD
             .files
             .iter()
             .find(|(path, _)| *path == "hooks/hooks.json")
@@ -176,7 +176,7 @@ mod tests {
         for module in json["modules"].as_array().unwrap() {
             let path = format!("hooks/{}", module.as_str().unwrap().trim_start_matches("./"));
             assert!(
-                EDGEE_MODEL.files.iter().any(|(p, _)| *p == path),
+                EDGEE_MOD.files.iter().any(|(p, _)| *p == path),
                 "{path} is not bundled"
             );
         }

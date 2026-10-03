@@ -252,7 +252,7 @@ fn mcp_injection_args(
     let mut allowed_tools = format!("--allowedTools={EDGEE_ALLOWED_TOOLS}");
     if with_mod_tools {
         allowed_tools.push(',');
-        allowed_tools.push_str(super::claude_mods::EDGEE_MODEL_TOOLS);
+        allowed_tools.push_str(super::claude_mods::EDGEE_MOD_TOOLS);
     }
 
     vec![mcp_config, system_prompt_file, OsString::from(allowed_tools)]
@@ -317,7 +317,7 @@ mod tests {
         assert!(injected.iter().any(|a| a.to_string_lossy()
             == format!(
                 "--allowedTools={EDGEE_ALLOWED_TOOLS},{}",
-                super::super::claude_mods::EDGEE_MODEL_TOOLS
+                super::super::claude_mods::EDGEE_MOD_TOOLS
             )));
         assert!(
             !injected.iter().any(|a| a == "--mcp-config"

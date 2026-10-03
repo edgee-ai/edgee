@@ -11,7 +11,7 @@ function text(value: unknown) {
   return { value: { content: [{ type: "text", text: JSON.stringify(value) }], isError: false } };
 }
 
-describe("edgee-model", () => {
+describe("edgee", () => {
   test("reroutes the session through the Edgee MCP server and clears it", async ($, on) => {
     // Hooks registered here run after the mod and stub what Claude Code would answer.
     const calls: { tool: string; args: Record<string, unknown> }[] = [];
@@ -35,10 +35,10 @@ describe("edgee-model", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
 
-    const ambiguous = await $.command.run({ command: "edgee-model", args: "qwen" } as any);
+    const ambiguous = await $.command.run({ command: "edgee", args: "qwen" } as any);
     expect(ambiguous.text).toMatch(/matches 2 models/);
 
-    const set = await $.command.run({ command: "edgee-model", args: "coder 30" } as any);
+    const set = await $.command.run({ command: "edgee", args: "coder 30" } as any);
     expect(set.text).toMatch(/rerouted to qwen\/qwen3-coder-next for 30 min/);
     expect(calls.at(-1)).toEqual({
       tool: "setSessionReroute",
@@ -51,7 +51,7 @@ describe("edgee-model", () => {
     await $.turn.complete({ reason: "answer", answer: "ok", durationMs: 1 } as any);
     expect(statuses.at(-1)).toBeUndefined();
 
-    const cleared = await $.command.run({ command: "edgee-model", args: "off" } as any);
+    const cleared = await $.command.run({ command: "edgee", args: "off" } as any);
     expect(cleared.text).toMatch(/Reroute cleared/);
     expect(calls.at(-1)).toEqual({ tool: "clearSessionReroute", args: { sessionId: "sess-1" } });
   });
@@ -65,10 +65,10 @@ describe("edgee-model", () => {
     on("mcp.call", () => text({ models: MODELS }));
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    const all = await $.command.run({ command: "edgee-model", args: "list" } as any);
+    const all = await $.command.run({ command: "edgee", args: "list" } as any);
     expect(all.text).toMatch(/4 models available/);
     expect(all.text).toMatch(/qwen \(2\)/);
-    const some = await $.command.run({ command: "edgee-model", args: "list sonnet" } as any);
+    const some = await $.command.run({ command: "edgee", args: "list sonnet" } as any);
     expect(some.text).toBe("  anthropic/claude-sonnet-5-5");
   });
 
@@ -80,7 +80,7 @@ describe("edgee-model", () => {
     on("ui.status", () => ({ value: undefined }));
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    const r = await $.command.run({ command: "edgee-model", args: "list" } as any);
+    const r = await $.command.run({ command: "edgee", args: "list" } as any);
     expect(r.text).toMatch(/Not running under Edgee/);
   });
 
@@ -106,10 +106,10 @@ describe("edgee-model", () => {
     });
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    const opened = await $.command.run({ command: "edgee-model", args: "panel" } as any);
+    const opened = await $.command.run({ command: "edgee", args: "panel" } as any);
     expect(opened.text).toMatch(/pane opened/);
 
-    const ui = await $.ui.mount({ plugin: "edgee-model", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    const ui = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
     expect(await ui.find({ type: "Text", text: /none yet/ })).toBeDefined();
 
     for (const index of [0, 1]) {
@@ -142,8 +142,8 @@ describe("edgee-model", () => {
     });
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    await $.command.run({ command: "edgee-model", args: "panel" } as any);
-    const ui = await $.ui.mount({ plugin: "edgee-model", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    await $.command.run({ command: "edgee", args: "panel" } as any);
+    const ui = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
 
     await ui.input({ key: "filter", text: "qwen", kind: "change" });
     expect(calls.at(-1)?.tool).toBe("listSessionModels"); // typing alone reroutes nothing
@@ -186,7 +186,7 @@ describe("edgee-model", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
     expect(opens).toEqual([{ id: "edgee-requests", focus: undefined }]);
 
-    await $.command.run({ command: "edgee-model", args: "panel" } as any);
+    await $.command.run({ command: "edgee", args: "panel" } as any);
     expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: true });
   });
 
@@ -204,7 +204,7 @@ describe("edgee-model", () => {
     const clock = mock.clock(on);
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    const ui = await $.ui.mount({ plugin: "edgee-model", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    const ui = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
     expect(await ui.find({ type: "Text", text: /Loading models/ })).toBeDefined();
 
     connected = true;
@@ -234,10 +234,10 @@ describe("edgee-model", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
     expect(opens).toEqual(["edgee-requests"]);
-    const band = await $.ui.mount({ plugin: "edgee-model", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS });
+    const band = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS });
     expect(await band.find({ type: "Text", text: /Edgee/ })).toBeUndefined(); // the pane is open: no line
 
-    const pane = await $.ui.mount({ plugin: "edgee-model", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    const pane = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
     await pane.press({ key: "minimize" });
     expect(closes).toEqual(["edgee-requests"]);
     expect(await band.find({ type: "Text", text: /● direct/ })).toBeDefined();

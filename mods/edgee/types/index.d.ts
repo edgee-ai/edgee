@@ -17,7 +17,7 @@ export type EdgeeModelTotals = { requests: number; input: number; cached: number
 
 declare module "claude-code" {
   interface PluginState {
-    "edgee-model": {
+    "edgee": {
       reroute: EdgeeReroute | null;
       requests: EdgeeRequest[];
       models: Record<string, EdgeeModelTotals>;
