@@ -16,6 +16,7 @@ pub mod intellij;
 pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
+pub mod deepseek;
 pub mod kimi;
 pub mod kilo;
 pub mod opencode;
@@ -48,6 +49,8 @@ enum Command {
     Pi(pi::Options),
     /// Oh My Pi CLI
     Omp(omp::Options),
+    /// DeepSeek Harness (dsh)
+    Deepseek(deepseek::Options),
     /// Kimi Code CLI
     Kimi(kimi::Options),
     /// Kilo Code CLI
@@ -98,6 +101,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Crush(o) => crush::run(o, reroute).await,
         Command::Pi(o) => pi::run(o, reroute).await,
         Command::Omp(o) => omp::run(o, reroute).await,
+        Command::Deepseek(o) => deepseek::run(o, reroute).await,
         Command::Kimi(o) => kimi::run(o, reroute).await,
         Command::Kilo(o) => kilo::run(o, reroute).await,
         Command::CopilotCli(o) => copilot_cli::run(o, reroute).await,
@@ -548,6 +552,26 @@ mod tests {
             copilot_cli_args(&["edgee", "launch", "copilot-cli", "--", "--yolo"]),
             ["--yolo"],
         );
+    }
+
+    #[test]
+    fn deepseek_preserves_agent_arguments() {
+        for args in [
+            vec!["web", "--no-open"],
+            vec!["--profile", "custom", "-p", "prompt"],
+            vec!["headless", "task", "--help"],
+        ] {
+            let argv = [vec!["edgee", "launch", "deepseek"], args.clone()].concat();
+            let opts = crate::Options::try_parse_from(argv).expect("parses");
+            assert!(opts.profile.is_none());
+            match opts.command {
+                crate::commands::Command::Launch(launch) => match launch.command {
+                    Command::Deepseek(c) => assert_eq!(c.args, args),
+                    other => panic!("wrong target: {other:?}"),
+                },
+                other => panic!("wrong command: {other:?}"),
+            }
+        }
     }
 
     #[test]
