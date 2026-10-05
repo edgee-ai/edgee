@@ -267,7 +267,7 @@ edgee settings claude    # go straight to one agent's key
 ### Usage tracking
 
 Real-time visibility into token consumption and compression savings per session, via `edgee stats`
-and the Claude Code statusline. Team-wide cost and usage reporting lives in the
+and the Claude Code mod. Team-wide cost and usage reporting lives in the
 [Edgee console](https://www.edgee.ai).
 
 ---
@@ -289,78 +289,25 @@ routed through Edgee, more of your spend under policy, more of your usage visibl
 
 ---
 
-## Statusline
+## Claude Code mod
 
-When you run `edgee launch claude`, Claude Code shows a live statusline with the current session's
-five token categories (input, cache read, cache write, output, and reasoning), cost, request count,
-and active fallback warning. **No setup required:** the first launch auto-installs the integration
-into `~/.claude/settings.json`, and subsequent launches reuse it.
+`edgee launch claude` loads Edgee's bundled mod on Claude Code 2.1.287 or newer
+when Edgee MCP is enabled. Its pane shows observed requests, served models, and
+token counts, and lets you reroute the session. Use `/edgee minimize` for a compact
+line above the prompt or `/edgee panel` to reopen the pane.
 
-### Manage it
+The mod replaces Edgee's old statusline integration. Launching Claude removes old
+Edgee statusline settings and hooks from user settings and project-local settings,
+restoring commands wrapped by Edgee. Shared project settings are not modified;
+remove legacy Edgee entries there manually if warned.
 
-```bash
-edgee statusline claude install   # run the install manually (idempotent)
-edgee statusline claude disable   # turn it off
-edgee statusline claude enable    # turn it back on
-edgee statusline claude doctor    # diagnose project-level conflicts
-edgee statusline claude fix       # overlay Edgee on a conflicting project
-```
+Mod totals cover observed turn requests only; they do not include all gateway
+traffic, gateway cost, or fallback alerts. Use the [Edgee console](https://www.edgee.ai)
+for gateway reporting. When mods or MCP are disabled, or Claude Code is older,
+there is no Edgee inline display. Custom statuslines remain supported by Claude Code.
 
-The install writes two things to `~/.claude/settings.json`:
-
-- `statusLine.command = "edgee statusline render"`: only if you don't already have a statusLine; we
-  never overwrite yours. (Older Edgee versions wrote `edgee statusline` without the explicit
-  subcommand; that form now prints help, and is auto-migrated to `edgee statusline render` on next
-  launch.)
-- A `SessionStart` hook running `edgee statusline claude doctor --warn-only`, which prints a
-  one-line warning when you open a project that shadows Edgee.
-
-State is tracked with two empty marker files in `~/.config/edgee/`:
-
-- `statusline-claude.installed`: set after the first auto-install; gates repeats.
-- `statusline-claude.disabled`: set by `disable`; tells the launch flow to skip auto-install too.
-
-### Coexistence with project-level statuslines
-
-Claude Code only renders **one** `statusLine`, picked by strict precedence: enterprise > project
-`.claude/settings.local.json` > project `.claude/settings.json` > user `~/.claude/settings.json`.
-Any project that defines its own `statusLine` (via project hooks, in-house scripts, or third-party
-statusline tools) will completely shadow Edgee's user-level statusline.
-
-Edgee ships a generic merge wrapper so the two can coexist:
-
-```bash
-# In any project where Edgee is shadowed by a project-level statusLine:
-edgee statusline claude doctor   # report: NONE / WRAPPED / SHADOWED
-edgee statusline claude fix      # write .claude/settings.local.json with an Edgee overlay
-```
-
-`edgee statusline claude fix` writes a `statusLine.command` of the form
-`edgee statusline wrap '<original>'` into `.claude/settings.local.json` (per-user, gitignored). The
-shared `.claude/settings.json` is **never** touched. Each Claude Code refresh then runs Edgee's
-renderer and the wrapped command in parallel and merges their outputs into a single line.
-
-**Precedence guarantee:** Edgee's segment is always emitted and is never the one that gets
-truncated. The wrapped command's output is truncated with `…` to fit the remaining `COLUMNS` budget,
-ANSI- and Unicode-aware (CJK and emoji are correctly counted as wide). If the wrapped command times
-out, errors, or returns nothing, only Edgee's segment renders.
-
-The `SessionStart` hook installed by `edgee statusline claude install` (or by the auto-install on
-first launch) prints a single warning line whenever the current project's statusLine shadows Edgee,
-and stays silent otherwise.
-
-### Environment variables
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `EDGEE_STATUSLINE_TIMEOUT_MS` | `2000` | Total timeout for the wrap merge (Edgee + wrapped command). |
-| `EDGEE_STATUSLINE_SEPARATOR` | `" │ "` | String inserted between Edgee's segment and the wrapped output. |
-| `EDGEE_STATUSLINE_POSITION` | `left` | Either `left` (Edgee on the left, wrapped truncated on the right; recommended) or `right`. |
-| `EDGEE_STATUSLINE_PASS_STDERR` | unset | Set to `1` to forward the wrapped command's stderr to the terminal (off by default). |
-| `EDGEE_STATUSLINE_MIN_WRAPPED_WIDTH` | `10` | When the wrapped budget falls below this many cells, drop the wrapped output rather than show a stub. |
-| `EDGEE_NO_AUTO_OVERLAY` | unset | Set to `1` to make `edgee statusline claude fix` print the suggested overlay instead of writing it (for users who manage `.claude` via dotfiles). |
-| `EDGEE_SILENCE_CONFLICT_WARNING` | unset | Set to `1` to silence the `SessionStart` warning. Per-user via shell env, or per-project via `.claude/settings.local.json`'s `env` block. |
-| `EDGEE_NO_UPDATE_CHECK` | unset | Set to `1` to skip the background check for a newer CLI release. |
+See [mod commands and limits](mods/edgee/README.md). Set `EDGEE_MODS_DISABLED=1`
+to disable the mod, or `EDGEE_NO_UPDATE_CHECK=1` to skip CLI update checks.
 
 ---
 
@@ -419,7 +366,7 @@ This repo is a single Rust binary crate (`edgee-cli`, binary name `edgee`).
 | `src/commands/launch/` | One module per launch target, plus [naming rules](src/commands/launch/README.md) |
 | `src/commands/auth/` | `login`, `status`, `list`, `switch` |
 | `src/commands/settings/` | Per-key agent settings |
-| `src/commands/statusline/` | Statusline renderer, wrap/merge logic, Claude integration |
+| `mods/edgee/` | Claude Code model selector and request pane |
 | `src/commands/alias/` | Shell aliases, PATH shims, desktop app wrappers |
 | `src/commands/relay/` | Local MITM relay powering the app launch targets |
 

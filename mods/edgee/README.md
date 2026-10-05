@@ -65,6 +65,10 @@ pre-allows the three reroute tools the mod calls (`listSessionModels`,
 
 ## Limits
 
+The mod replaces Edgee's legacy statusline. Without mod support or Edgee MCP,
+there is no Edgee inline display. Gateway cost, reasoning-token totals, and
+fallback alerts are not shown by this mod; consult the Edgee console.
+
 - No tool reads a reroute back, so the status line reflects only what this mod
   set in this session. A reroute changed elsewhere leaves it stale.
 - The reroute has no `sourceModel`: every request of the session goes to the

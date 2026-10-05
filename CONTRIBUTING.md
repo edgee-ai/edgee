@@ -6,7 +6,7 @@ welcome bug reports, feature requests, and pull requests.
 ## Scope: what belongs in this repo
 
 This repository ships the **`edgee` command-line tool** — launching coding agents through Edgee,
-authentication, profiles, settings, session stats, the statusline integration, and the local relay
+authentication, profiles, settings, session stats, the Claude Code mod, and the local relay
 for GUI apps. It is the only open-source Edgee repository, and it will stay open source.
 
 The **gateway** — routing, Strategies, token compression, metering, billing, observability — is a
@@ -14,7 +14,7 @@ separate, Edgee-operated service and is not built from this repo. If your idea i
 are routed or compressed, it belongs there, not here. Self-hosting the gateway is not supported.
 
 Good contributions here: new launch targets, platform fixes (especially Windows and Linux), better
-CLI ergonomics and error messages, statusline and alias improvements, docs.
+CLI ergonomics and error messages, Claude Code mod and alias improvements, docs.
 
 [`AGENTS.md`](AGENTS.md) has the fuller picture: product context, CLI surface, repo map, and
 conventions. It's worth a read before your first PR.

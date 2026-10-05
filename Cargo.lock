@@ -685,7 +685,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "unicode-width",
  "uuid",
  "which",
  "x25519-dalek",

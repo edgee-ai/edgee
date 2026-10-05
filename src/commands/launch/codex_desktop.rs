@@ -81,7 +81,6 @@ pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()
         })?;
     let session_id = reroute.create_session(&creds, "codex_desktop").await?;
 
-    util::ensure_first_run_installed().await;
     util::spawn_cli_version_report(&creds, &session_id);
 
     let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);

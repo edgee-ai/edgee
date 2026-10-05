@@ -118,10 +118,6 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let api_key = &kimi.api_key;
     let session_id = reroute.create_session(&creds, "kimi").await?;
 
-    // First-run: install the persistent user-level statusline integration
-    // exactly once (Claude Code-targeted; honors the disable marker).
-    util::ensure_first_run_installed().await;
-
     util::spawn_cli_version_report(&creds, &session_id);
 
     let gateway_url = super::resolve_gateway_base_url(&creds).await;

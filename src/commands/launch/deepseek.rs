@@ -125,7 +125,6 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let api_key = creds.provider_api_key("deepseek")
         .context("DeepSeek key missing. Retry `edgee launch deepseek` to provision it.")?;
     let session_id = reroute.create_session(&creds, "deepseek").await?;
-    util::ensure_first_run_installed().await;
     util::spawn_cli_version_report(&creds, &session_id);
 
     let gateway_url = super::resolve_gateway_base_url(&creds).await;

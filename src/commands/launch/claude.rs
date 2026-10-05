@@ -22,6 +22,7 @@ pub struct Options {
 const EDGEE_ALLOWED_TOOLS: &str = "mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitRepo";
 
 pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    crate::commands::claude_settings::remove_legacy_statusline();
     if opts.relay {
         return crate::commands::relay::run_for_agent("claude", reroute).await;
     }
@@ -75,10 +76,6 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         .as_ref()
         .map(|url| format!("\nx-edgee-repo: {url}"))
         .unwrap_or_default();
-
-    // First-run: install the persistent user-level statusline integration
-    // exactly once (honors the disable marker).
-    util::ensure_first_run_installed().await;
 
     util::spawn_cli_version_report(&creds, &session_id);
 
