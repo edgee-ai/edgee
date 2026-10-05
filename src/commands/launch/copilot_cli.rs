@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::commands::relay::AgentExtras;
+use crate::commands::util::plugins;
 
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
@@ -94,6 +95,12 @@ pub(crate) async fn prepare(
         session_dir = Some(dir);
     }
 
+    // Org plugins. `--plugin-dir` loads a bundle for this session only, so
+    // nothing lands in the user's `~/.copilot`.
+    let report = plugins::sync_for_target(&creds, plugins::Target::CopilotCli).await;
+    extras.args.extend(plugin_dir_args(&report.plugin_dirs));
+    plugins::report_launch(&report);
+
     Ok((extras, CopilotSession { session_dir }))
 }
 
@@ -107,6 +114,16 @@ fn mcp_injection_args(config_path: &Path) -> Vec<OsString> {
         config,
         OsString::from(format!("--allow-tool={MCP_SERVER_NAME}")),
     ]
+}
+
+fn plugin_dir_args(dirs: &[PathBuf]) -> Vec<OsString> {
+    dirs.iter()
+        .map(|dir| {
+            let mut arg = OsString::from("--plugin-dir=");
+            arg.push(dir);
+            arg
+        })
+        .collect()
 }
 
 fn mcp_config(token: &str) -> serde_json::Value {
@@ -162,6 +179,14 @@ mod tests {
                 OsString::from("--additional-mcp-config=@/tmp/edgee-copilot-x/mcp.json"),
                 OsString::from("--allow-tool=edgee-session"),
             ]
+        );
+    }
+
+    #[test]
+    fn plugin_dirs_use_equals_form() {
+        assert_eq!(
+            plugin_dir_args(&[PathBuf::from("/p/a"), PathBuf::from("/p/b")]),
+            vec![OsString::from("--plugin-dir=/p/a"), OsString::from("--plugin-dir=/p/b")]
         );
     }
 

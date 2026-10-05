@@ -535,6 +535,7 @@ gaps rather than bugs.
 | `kimi` | ⏳ | ❌ | ❌ | ❌ | not yet wired — see below |
 | `pi` | ✅ | ❌ | ❌ | ❌ | repeatable `--skill`; other kinds require extension code or have no configuration surface |
 | `omp` | ✅ | ✅ | ✅ | ✅ | Claude-compatible bundle via repeatable `--plugin-dir` |
+| `copilot-cli` | ✅ | ✅ | ✅ | ✅ | the Claude bundle via repeatable `--plugin-dir`, injected by the relay; subagents surface as `<plugin>:<name>` |
 | `cursor`, `copilot-vscode`, `claude-desktop` | ❌ | ❌ | ❌ | ❌ | GUI targets with no supported session-scoped plugin injection path |
 | `codex-desktop` | ❌ | ❌ | ❌ | ❌ | launched, but reads the real Codex config root that Edgee patches only for the handoff and reverts; it cannot use the symlink mirror because `auth.json` holds a single-use rotating token |
 
