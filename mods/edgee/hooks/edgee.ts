@@ -24,10 +24,10 @@ const PANE = "edgee-requests";
 const RECENT = 30;
 const OFF = "__off"; // the selector's "no reroute" option
 const DURATIONS = [15, 60, 240, 1440];
-const PICKER_LIMIT = 63; // a Select takes 1 to 64 options, one being the "no reroute" entry
 const CATALOG_ATTEMPTS = 20;
 const CATALOG_RETRY_MS = 1_000;
-const PREVIEW = 6; // filter matches listed under the field: the Select below them is a folded dropdown
+const ROWS = 8; // model rows under the filter; past that, typing narrows
+const SUGGESTED_PROVIDERS = 8; // provider chips shown on an empty filter
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_MS = 80;
 
@@ -93,23 +93,25 @@ export function register(on: On) {
     const result = await next(e);
     await updatePicker($, { filter: e.value });
     if (e.kind === "submit") {
-      // Enter picks the row the list marks `▸`: the first match, or Claude Code's choice on an empty filter.
+      // Enter picks the first match; on an empty filter it steps into the list.
       const { value: models = [] } = await $.state.get(catalog);
-      const target = e.value.trim() ? matching(models, e.value.trim())[0] : OFF;
-      if (target) await pickModel($, target);
+      const [first] = e.value.trim() ? matching(models, e.value.trim()) : [];
+      if (first) await pickModel($, first);
+      else if (!e.value.trim()) await $.ui.focus({ requestId: PANE, key: `pick:${OFF}` });
     }
     return result;
   });
 
-  on("ui.select", { plugin: "edgee", element: "duration" }, async ($, e, next) => {
+  // The list's rows: plain Buttons, so ↑↓ (or Tab) walk them and Enter picks.
+  on("ui.press", { plugin: "edgee", element: /^(pick|provider|for):/ }, async ($, e, next) => {
     const result = await next(e);
-    await updatePicker($, { minutes: Number(e.value) });
-    return result;
-  });
-
-  on("ui.select", { plugin: "edgee", element: "model" }, async ($, e, next) => {
-    const result = await next(e);
-    await pickModel($, e.value);
+    const [kind, value = ""] = splitOnce(e.element, ":");
+    if (kind === "pick") await pickModel($, value);
+    else if (kind === "for") await updatePicker($, { minutes: Number(value) });
+    else if (kind === "provider") {
+      await updatePicker($, { filter: `${value}/` });
+      await $.ui.focus({ requestId: PANE, key: "filter" });
+    }
     return result;
   });
 
@@ -402,8 +404,6 @@ type PaneData = {
 
 function paneView(elements: Elements, { sessionId, active, catalog, picker, recent, totals, columns, clickable, isFocused }: PaneData): RenderElement {
   const { Box, Text, Button } = elements;
-  // Input and Select are on every surface but mobile; without them the pane only reports.
-  const pickers = "Input" in elements && "Select" in elements ? elements : null;
   const inner = Math.max(24, columns - 4); // inside a card's border and padding
   const span = (children: string, props: Omit<TextProps, "children"> = {}) => Text({ ...props, children });
   const row = (children: RenderElement[], props: Omit<BoxProps, "children"> = {}) => Box({ flexDirection: "row", ...props, children });
@@ -454,33 +454,14 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
 
   // ── Route: the selector.
   const route: RenderElement[] = [];
-  if (pickers && catalog.length > 0) {
-    const { Input, Select } = pickers;
+  if (catalog.length > 0) {
     const filter = (picker.filter ?? "").trim().toLowerCase();
-    const hits = matching(catalog, filter);
-    // The active model stays an option whatever the filter, so the Select can show it.
-    const pinned = active ? [active.model] : [];
-    const shown = [...pinned, ...hits.filter((m) => m !== active?.model).slice(0, PICKER_LIMIT - pinned.length)];
-    route.push(Input({ key: "filter", label: "⌕ Filter", placeholder: "qwen, opus, gpt-5…", value: picker.filter ?? "", submitLabel: "pick", autoFocus: true, onSubmit: () => {} }));
-    route.push(...routeList(span, row, { hits, filter, active, total: catalog.length, inner }));
-    route.push(
-      Select({
-        key: "model",
-        label: "◇ Browse",
-        value: picker.pending ?? active?.model ?? OFF,
-        options: [{ value: OFF, label: "● Claude Code's choice (no reroute)" }, ...shown.map((m) => ({ value: m }))],
-        onSelect: () => {},
-      }),
-    );
-    route.push(
-      Select({
-        key: "duration",
-        label: "⏱ For",
-        value: String(picker.minutes ?? DEFAULT_MINUTES),
-        options: DURATIONS.map((m) => ({ value: String(m), label: m < 60 ? `${m} min` : `${m / 60} h` })),
-        onSelect: () => {},
-      }),
-    );
+    if ("Input" in elements) {
+      route.push(elements.Input({ key: "filter", label: "⌕", placeholder: "search 200+ models: qwen, opus, gpt-5…", value: picker.filter ?? "", submitLabel: "pick first", autoFocus: true, onSubmit: () => {} }));
+      route.push(span("┄".repeat(inner), { color: ACCENT, dimColor: true }));
+    }
+    route.push(...modelList(elements, { catalog, filter, active, totals, pending: picker.pending, inner }));
+    route.push(durationRow(elements, picker.minutes ?? DEFAULT_MINUTES));
   } else {
     const waiting = sessionId ? (picker.failed ? "Models unavailable: is the Edgee MCP enabled?" : "Loading models from the Edgee MCP…") : "Launch with `edgee launch claude` to pick a model";
     route.push(span(waiting, { dimColor: true, italic: true }));
@@ -555,60 +536,85 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
 }
 
 // The models containing `filter`, those whose provider or name starts with it
-// first: "qwen" lists qwen/… before deepseek/…-qwen-14b.
+// first ("qwen" lists qwen/… before deepseek/…-qwen-14b), newest version first.
 function matching(models: string[], filter: string): string[] {
   const f = filter.toLowerCase();
   const rank = (m: string) => {
     const [provider = "", name = m] = m.toLowerCase().split("/");
     return provider.startsWith(f) ? 0 : name.startsWith(f) ? 1 : 2;
   };
-  return models.filter((m) => m.toLowerCase().includes(f)).sort((a, b) => rank(a) - rank(b));
+  return models.filter((m) => m.toLowerCase().includes(f)).sort((a, b) => rank(a) - rank(b) || b.localeCompare(a, undefined, { numeric: true }));
 }
 
 function spinner(picker: EdgeePicker): string {
   return SPINNER[(picker.frame ?? 0) % SPINNER.length]!;
 }
 
-// The list under the filter: Claude Code's choice pinned first, then the
-// filter's first matches with the match highlighted. `▸` marks what Enter picks.
-function routeList(
-  span: (children: string, props?: Omit<TextProps, "children">) => RenderElement,
-  row: (children: RenderElement[], props?: Omit<BoxProps, "children">) => RenderElement,
-  { hits, filter, active, total, inner }: { hits: string[]; filter: string; active: EdgeeReroute | null; total: number; inner: number },
-): RenderElement[] {
-  const mark = (picked: boolean, chosen: boolean) => [
-    span(picked ? "▸ " : "  ", { color: ACCENT, bold: true }),
-    span(chosen ? "✓ " : "  ", { color: "green", bold: true }),
-  ];
-  const enter = (picked: boolean) => (picked ? [span("  ⏎", { color: ACCENT, dimColor: true })] : []);
-  const lines = [
-    span("┄".repeat(Math.max(0, inner)), { color: ACCENT, dimColor: true }),
-    row([...mark(!filter, !active), span("● Claude Code's choice", { color: "green", bold: !active }), span(" · no reroute", { dimColor: true }), ...enter(!filter)]),
-  ];
+type ListData = { catalog: string[]; filter: string; active: EdgeeReroute | null; totals: Record<string, EdgeeModelTotals>; pending: string | undefined; inner: number };
+
+// The picker's rows, each a plain Button: ↑↓ move the highlight, Enter picks.
+// Claude Code's choice is always first. An empty filter offers the active and
+// recently served models, then providers to narrow by; a filter, its matches.
+function modelList({ Box, Text, Button }: Elements, { catalog, filter, active, totals, pending, inner }: ListData): RenderElement[] {
+  const span = (children: string, props: Omit<TextProps, "children"> = {}) => Text({ ...props, children });
+  const chosen = pending ?? active?.model ?? OFF;
+  const option = (value: string, label: string, color: string, note = "") =>
+    Box({
+      flexDirection: "row",
+      children: [
+        span(value === chosen ? "● " : "○ ", { color: value === chosen ? "green" : color, bold: value === chosen }),
+        Button({ key: `pick:${value}`, label: fit(label, Math.max(12, inner - 4 - note.length)).trimEnd(), plain: true, dimColor: value !== chosen, onPress: () => {} }),
+        span(note, { dimColor: true }),
+      ],
+    });
+  const rows = [option(OFF, "Claude Code's choice", "green", "  no reroute")];
+
   if (!filter) {
-    if (active) lines.push(row([...mark(false, true), span(active.model, { color: providerColor(active.model), bold: true })]));
-    lines.push(span(`    type to filter ${total} models · tab to the list below`, { dimColor: true, italic: true }));
-    return lines;
-  }
-  if (hits.length === 0) return [...lines, span(`    No model matches "${filter}"`, { color: "red", italic: true })];
-  hits.slice(0, PREVIEW).forEach((m, i) => {
-    const at = m.toLowerCase().indexOf(filter);
-    const color = providerColor(m);
-    const name = fit(m, inner - 10).trimEnd();
-    const end = Math.min(at + filter.length, name.length);
-    lines.push(
-      row([
-        ...mark(i === 0, m === active?.model),
-        span(name.slice(0, at), { color }),
-        span(name.slice(at, end), { color: ACCENT, bold: true, underline: true }),
-        span(name.slice(end), { color }),
-        ...enter(i === 0),
-      ]),
+    const served = Object.keys(totals).filter((m) => m !== "failed").map((m) => withProvider(m, catalog));
+    const suggested = [...new Set([...(active ? [active.model] : []), ...served])].filter((m) => catalog.includes(m) || m === active?.model);
+    for (const m of suggested.slice(0, ROWS)) rows.push(option(m, m, providerColor(m), m === active?.model ? "  active" : "  used"));
+    const providers = [...countBy(catalog, (m) => m.split("/")[0] ?? m)].sort((a, b) => b[1] - a[1]).slice(0, SUGGESTED_PROVIDERS);
+    rows.push(
+      Box({
+        flexDirection: "row",
+        flexWrap: "wrap",
+        columnGap: 1,
+        marginTop: 1,
+        children: [span("browse", { dimColor: true }), ...providers.map(([p, n]) => Button({ key: `provider:${p}`, label: `${p} ${n}`, plain: true, onPress: () => {} }))],
+      }),
     );
+    return rows;
+  }
+
+  const hits = matching(catalog, filter);
+  if (hits.length === 0) return [...rows, span(`  no model matches "${filter}"`, { color: "red", italic: true })];
+  for (const m of hits.slice(0, ROWS)) rows.push(option(m, m, providerColor(m), m === active?.model ? "  active" : ""));
+  if (hits.length > ROWS) rows.push(span(`  +${hits.length - ROWS} more · keep typing to narrow`, { dimColor: true, italic: true }));
+  return rows;
+}
+
+// How long a pick lasts: one press, the current one highlighted.
+function durationRow({ Box, Text, Button }: Elements, minutes: number): RenderElement {
+  return Box({
+    flexDirection: "row",
+    columnGap: 1,
+    marginTop: 1,
+    children: [
+      Text({ dimColor: true, children: "⏱ for" }),
+      ...DURATIONS.map((m) => Button({ key: `for:${m}`, label: m < 60 ? `${m} min` : `${m / 60} h`, variant: m === minutes ? "primary" : undefined, dimColor: m !== minutes, onPress: () => {} })),
+    ],
   });
-  const rest = hits.length - PREVIEW;
-  lines.push(span(`    ${hits.length} match${hits.length === 1 ? "" : "es"}${rest > 0 ? ` · +${rest} more, tab to browse` : ""}`, { dimColor: true, italic: true }));
-  return lines;
+}
+
+function countBy<T>(items: T[], key: (item: T) => string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(key(item), (counts.get(key(item)) ?? 0) + 1);
+  return counts;
+}
+
+function splitOnce(text: string, sep: string): [string, string] {
+  const at = text.indexOf(sep);
+  return at < 0 ? [text, ""] : [text.slice(0, at), text.slice(at + sep.length)];
 }
 
 type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns" | "clickable">;

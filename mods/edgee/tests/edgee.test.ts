@@ -154,24 +154,25 @@ describe("edgee", () => {
     await $.command.run({ command: "edgee", args: "panel" } as any);
     const ui = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
 
+    // An empty filter offers Claude Code's choice, then providers to browse.
+    const rows = async () => (await ui.findAll({ type: "Button" })).map((b) => b.props.key).filter((k) => String(k).startsWith("pick:"));
+    expect(await rows()).toEqual(["pick:__off"]);
+    await ui.press({ key: "provider:qwen" });
+    expect((await ui.find({ type: "Input", key: "filter" }))?.props.value).toBe("qwen/");
+
     await ui.input({ key: "filter", text: "qwen", kind: "change" });
     expect(calls.at(-1)?.tool).toBe("listSessionModels"); // typing alone reroutes nothing
-    const select = await ui.find({ type: "Select", key: "model" });
-    expect((select?.props.options as { value: string }[]).map((o) => o.value)).toEqual(["__off", "qwen/qwen3-coder-next", "qwen/qwen3-max"]);
-    // The folded dropdown hides the matches: the pane lists them under the filter,
-    // Claude Code's choice pinned first whatever the filter.
-    expect(await ui.find({ type: "Text", text: "● Claude Code's choice" })).toBeDefined();
-    expect(await ui.find({ type: "Text", text: /2 matches/ })).toBeDefined();
-    expect(await ui.find({ type: "Text", text: "3-coder-next" })).toBeDefined();
+    // One row per match, newest first, Claude Code's choice pinned on top.
+    expect(await rows()).toEqual(["pick:__off", "pick:qwen/qwen3-max", "pick:qwen/qwen3-coder-next"]);
     await ui.input({ key: "filter", text: "nope", kind: "change" });
-    expect(await ui.find({ type: "Text", text: /No model matches "nope"/ })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: /no model matches "nope"/ })).toBeDefined();
     await ui.input({ key: "filter", text: "qwen", kind: "change" });
 
     // While the gateway applies a pick, the pane says so.
     let answer!: () => void;
     gate = new Promise<void>((resolve) => (answer = resolve));
-    await ui.select({ key: "duration", value: "240" });
-    const picking = ui.select({ key: "model", value: "qwen/qwen3-max" });
+    await ui.press({ key: "for:240" });
+    const picking = ui.press({ key: "pick:qwen/qwen3-max" });
     // Let the pick reach the gate: it crosses the host, so a real tick, not a microtask.
     await new Promise((resolve) => (globalThis as unknown as { setTimeout(fn: () => void, ms: number): void }).setTimeout(() => resolve(undefined), 10));
     expect(await ui.find({ type: "Text", text: /APPLYING/ })).toBeDefined();
@@ -190,13 +191,7 @@ describe("edgee", () => {
     await ui.input({ key: "filter", text: "coder", kind: "submit" });
     expect(calls.at(-1)?.args).toMatchObject({ targetModel: "qwen/qwen3-coder-next" });
 
-    // Enter on an empty filter picks the pinned row: Claude Code's choice.
-    await ui.input({ key: "filter", text: "", kind: "submit" });
-    expect(calls.at(-1)?.tool).toBe("clearSessionReroute");
-    await ui.input({ key: "filter", text: "max", kind: "submit" });
-    expect(calls.at(-1)?.args).toMatchObject({ targetModel: "qwen/qwen3-max" });
-
-    await ui.select({ key: "model", value: "__off" });
+    await ui.press({ key: "pick:__off" });
     expect(calls.at(-1)?.tool).toBe("clearSessionReroute");
     expect(await ui.find({ type: "Text", text: /● DIRECT/ })).toBeDefined();
     expect(await ui.find({ type: "Text", text: /Reroute cleared/ })).toBeDefined();
@@ -248,7 +243,7 @@ describe("edgee", () => {
 
     connected = true;
     await clock.advance(1_000);
-    expect(await ui.find({ type: "Select", key: "model" })).toBeDefined();
+    expect(await ui.find({ type: "Button", key: "pick:__off" })).toBeDefined();
     expect(await ui.find({ type: "Text", text: /MCP call failed/ })).toBeUndefined();
     await ui.unmount();
   });

@@ -24,11 +24,12 @@ docked beside the transcript on a wide terminal, waiting unplaced on a narrow
 one until the window is wide enough. It shows:
 
 - the Edgee session id and the active reroute;
-- a model selector: a filter field with its list right under it, "Claude
-  Code's choice" (no reroute) pinned first, then the filter's first matches
-  (provider and name prefixes first); a Browse dropdown with up to 63 matches;
-  and a duration picker. Picking a model reroutes at once; a spinner shows
-  until the gateway confirms;
+- a model picker: a search field over a list of rows. "Claude Code's choice"
+  (no reroute) is always first; on an empty search, the active and recently
+  served models follow, then providers to browse; while searching, the first 8
+  matches (provider and name prefixes first, newest version first). `●` marks
+  the model in use. Below, how long a pick lasts (15 min to 24 h). Picking
+  reroutes at once; a spinner shows until the gateway confirms;
 - session totals: requests, input, cached and output tokens;
 - per served model: request count and tokens;
 - the last 30 API requests, newest first: time, served model, tokens in→out,
@@ -42,10 +43,9 @@ shown, and Claude Code side calls outside the turn loop are not seen.
 ### Keys
 
 The pane takes the keyboard when it opens (or with `ctrl+x tab`, or a click).
-Then Tab moves between the filter, the model and the duration; typing in the
-filter narrows the list and Enter there picks the row marked `▸` (the first
-match, or Claude Code's choice when the filter is empty); ↑/↓ move
-through a picker's options and Enter picks;
+Type to search; ↑/↓ (or Tab) move the highlight from the search field down
+the rows and the durations, Enter picks the highlighted row (in the search
+field, the first match). Picking a provider fills the search with it;
 `m` (or the `[–]` button in the header) minimizes the pane;
 Esc hands the keyboard back to the prompt.
 
