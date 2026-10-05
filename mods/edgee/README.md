@@ -15,7 +15,7 @@ Edgee gateway. It calls the session reroute tools of the Edgee MCP server that
 
 `<model>` matches an exact id (`qwen/qwen3-coder-next`), a bare name
 (`qwen3-coder-next`) or a unique substring (`coder-next`). While a reroute is
-active, a status line under the prompt shows `⇄ Edgee: <model> until HH:MM`.
+active, the pane's header and the minimized band show `⇄ <model> until HH:MM`.
 
 ## Requests pane
 
@@ -72,7 +72,7 @@ The mod replaces Edgee's legacy statusline. Without mod support or Edgee MCP,
 there is no Edgee inline display. Gateway cost, reasoning-token totals, and
 fallback alerts are not shown by this mod; consult the Edgee console.
 
-- No tool reads a reroute back, so the status line reflects only what this mod
+- No tool reads a reroute back, so the pane reflects only what this mod
   set in this session. A reroute changed elsewhere leaves it stale.
 - The reroute has no `sourceModel`: every request of the session goes to the
   target, Claude Code's background Haiku calls included.

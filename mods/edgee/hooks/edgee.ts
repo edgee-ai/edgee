@@ -49,7 +49,6 @@ export function register(on: On) {
       description: "Route this session to another model through Edgee",
       argumentHint: "[list [filter] | <model> [minutes] | off | panel | minimize]",
     });
-    await refreshStatus($);
     const folded = (await storedMinimized($)) !== false;
     await $.state.set(minimized, folded);
     // Start with the compact line unless the user last left the pane expanded.
@@ -60,7 +59,7 @@ export function register(on: On) {
 
   on("turn.complete", async ($, e, next) => {
     const result = await next(e);
-    if (!e.agentId) await refreshStatus($); // drop the status once the reroute expires
+    if (!e.agentId) await current($); // drop the reroute once expired, so the pane and band redraw
     return result;
   });
 
@@ -202,14 +201,12 @@ async function applyReroute($: $, sessionId: string, model: string, minutes: num
   await callEdgee($, "setSessionReroute", { sessionId, targetModel: model, durationMinutes: minutes });
   const expiresAt = (await $.clock.now()) + minutes * 60_000;
   await $.state.set(reroute, { model, expiresAt });
-  await refreshStatus($);
   return `Session rerouted to ${model} for ${minutes} min (until ${clockTime(expiresAt)}).`;
 }
 
 async function clear($: $, sessionId: string): Promise<string> {
   await callEdgee($, "clearSessionReroute", { sessionId });
   await $.state.set(reroute, null);
-  await refreshStatus($);
   return "Reroute cleared: requests go to the model Claude Code asks for.";
 }
 
@@ -261,11 +258,6 @@ async function current($: $): Promise<EdgeeReroute | null> {
     return null;
   }
   return value;
-}
-
-async function refreshStatus($: $): Promise<void> {
-  const active = await current($);
-  $.ui.status(active ? `⇄ Edgee: ${active.model} until ${clockTime(active.expiresAt)}` : undefined);
 }
 
 async function openPane($: $, { focus = true } = {}): Promise<string> {

@@ -18,12 +18,12 @@ describe("edgee", () => {
   test("reroutes the session through the Edgee MCP server and clears it", async ($, on) => {
     // Hooks registered here run after the mod and stub what Claude Code would answer.
     const calls: { tool: string; args: Record<string, unknown> }[] = [];
-    const statuses: (string | undefined)[] = [];
     let now = Date.UTC(2026, 9, 2, 10, 0);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
     on("env.get", () => ({ value: "sess-1" }));
     on("clock.now", () => ({ value: now }));
+    const statuses: unknown[] = [];
     on("ui.status", ($, e) => {
       statuses.push(e.text);
       return { value: undefined };
@@ -47,12 +47,14 @@ describe("edgee", () => {
       tool: "setSessionReroute",
       args: { sessionId: "sess-1", targetModel: "qwen/qwen3-coder-next", durationMinutes: 30 },
     });
-    expect(statuses.at(-1)).toMatch(/qwen\/qwen3-coder-next/);
+    expect((await $.command.run({ command: "edgee", args: "" } as any)).text).toMatch(/Rerouted to qwen\/qwen3-coder-next/);
+    // The pane and the band show the reroute: no status line under the prompt too.
+    expect(statuses).toEqual([]);
 
-    // Past expiry, the next turn drops the status line.
+    // Past expiry, the reroute is gone.
     now += 31 * 60_000;
     await $.turn.complete({ reason: "answer", answer: "ok", durationMs: 1 } as any);
-    expect(statuses.at(-1)).toBeUndefined();
+    expect((await $.command.run({ command: "edgee", args: "" } as any)).text).toMatch(/No reroute/);
 
     const cleared = await $.command.run({ command: "edgee", args: "off" } as any);
     expect(cleared.text).toMatch(/Reroute cleared/);
