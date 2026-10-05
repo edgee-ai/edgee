@@ -22,9 +22,9 @@ const MAX_MINUTES = 1440;
 const LIST_LIMIT = 40;
 const PANE = "edgee-requests";
 const RECENT = 30;
-const PICKER_LIMIT = 12;
 const OFF = "__off"; // the selector's "no reroute" option
 const DURATIONS = [15, 60, 240, 1440];
+const PICKER_LIMIT = 63; // a Select takes 1 to 64 options, one being the "no reroute" entry
 const CATALOG_ATTEMPTS = 20;
 const CATALOG_RETRY_MS = 1_000;
 
@@ -79,6 +79,8 @@ export function register(on: On) {
       recent: (await $.state.get(requests)).value ?? [],
       totals: (await $.state.get(models)).value ?? {},
       columns: e.props.bodyColumns,
+      clickable: e.viewport?.isFullscreen === true,
+      isFocused: e.props.isFocused,
     });
   });
 
@@ -89,10 +91,11 @@ export function register(on: On) {
     const result = await next(e);
     await updatePicker($, { filter: e.value });
     if (e.kind === "submit") {
-      // Enter in the filter picks its first match.
+      // Enter in the filter picks the model only when one matches; otherwise it moves on to the list.
       const { value: models = [] } = await $.state.get(catalog);
-      const first = models.find((m) => m.toLowerCase().includes(e.value.toLowerCase()));
-      if (first) await pickModel($, first);
+      const hits = models.filter((m) => m.toLowerCase().includes(e.value.toLowerCase()));
+      if (hits.length === 1) await pickModel($, hits[0]);
+      else if (hits.length > 1) await $.ui.focus({ requestId: PANE, key: "model" });
     }
     return result;
   });
@@ -393,9 +396,11 @@ type PaneData = {
   recent: EdgeeRequest[];
   totals: Record<string, EdgeeModelTotals>;
   columns: number;
+  clickable: boolean; // the surface reports mouse clicks (fullscreen only): buttons are drawn only there
+  isFocused: boolean;
 };
 
-function paneView(elements: Elements, { sessionId, active, catalog, picker, recent, totals, columns }: PaneData): RenderElement {
+function paneView(elements: Elements, { sessionId, active, catalog, picker, recent, totals, columns, clickable, isFocused }: PaneData): RenderElement {
   const { Box, Text, Button } = elements;
   // Input and Select are on every surface but mobile; without them the pane only reports.
   const pickers = "Input" in elements && "Select" in elements ? elements : null;
@@ -415,8 +420,7 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
           row([span("◆ EDGEE", { color: ACCENT, bold: true }), span(`  session ${sessionId ? sessionId.slice(0, 8) : "—"}`, { dimColor: true })]),
           row([
             active ? span(" ⇄ REROUTED ", { backgroundColor: "#7C3AED", color: "white", bold: true }) : span(" ● DIRECT ", { backgroundColor: "#065F46", color: "white", bold: true }),
-            span(" "),
-            Button({ key: "minimize", label: "–", onPress: () => {} }),
+            ...(clickable ? [span(" "), Button({ key: "minimize", label: "–", onPress: () => {} })] : []),
           ]),
         ],
         { justifyContent: "space-between" },
@@ -451,8 +455,9 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
     const filter = (picker.filter ?? "").toLowerCase();
     const hits = catalog.filter((m) => m.toLowerCase().includes(filter));
     // The active model stays an option whatever the filter, so the Select can show it.
-    const shown = [...new Set([...(active ? [active.model] : []), ...hits.slice(0, PICKER_LIMIT)])];
-    route.push(Input({ key: "filter", label: "⌕ Filter", placeholder: "qwen, opus, gpt-5…", value: picker.filter ?? "", submitLabel: "pick first", autoFocus: true, onSubmit: () => {} }));
+    const pinned = active ? [active.model] : [];
+    const shown = [...pinned, ...hits.filter((m) => m !== active?.model).slice(0, PICKER_LIMIT - pinned.length)];
+    route.push(Input({ key: "filter", label: "⌕ Filter", placeholder: "qwen, opus, gpt-5…", value: picker.filter ?? "", submitLabel: "choose", autoFocus: true, onSubmit: () => {} }));
     route.push(
       Select({
         key: "model",
@@ -535,13 +540,14 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
       Box({ flexDirection: "column", paddingX: 1, children: served }),
       rule("Recent requests"),
       Box({ flexDirection: "column", paddingX: 1, children: timeline }),
-      row([span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span("  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" back", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
+      row(isFocused
+        ? [span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span("  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" back", { dimColor: true })]
+        : [span("/edgee panel", { color: ACCENT, bold: true }), span(" focus  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span(" fold", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
     ],
   });
 }
 
-// `clickable`: the surface reports mouse clicks (fullscreen only); otherwise the band names its keys.
-type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns"> & { clickable: boolean };
+type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns" | "clickable">;
 
 // The minimized pane: one line above the prompt, where requests go and what they cost.
 function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, totals, columns, clickable }: BandData): RenderElement {
@@ -570,8 +576,9 @@ function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, to
         flexDirection: "row",
         flexShrink: 0,
         children: [
-          ...(clickable ? [] : [Text({ dimColor: true, children: "ctrl+x tab, o  " })]),
-          Button({ key: "expand", label: "+", hotkey: "o", onPress: () => {} }),
+          clickable
+            ? Button({ key: "expand", label: "+", hotkey: "o", onPress: () => {} })
+            : Text({ dimColor: true, children: "/edgee panel" }),
         ],
       }),
     ],
