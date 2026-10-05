@@ -62,7 +62,17 @@ pub(super) fn prepare(claude: &OsStr) -> Vec<PathBuf> {
     if crate::config::mods_disabled_env_override() == Some(true) {
         return Vec::new();
     }
-    if !detect_mod_support(claude) {
+    // An unreadable version stays silent: it is not worth a warning on every launch.
+    let Some(version) = claude_version(claude) else {
+        return Vec::new();
+    };
+    if version < MIN_CLAUDE_VERSION {
+        let (major, minor, patch) = MIN_CLAUDE_VERSION;
+        let (found_major, found_minor, found_patch) = version;
+        eprintln!(
+            "{} needs Claude Code {major}.{minor}.{patch}+ (found {found_major}.{found_minor}.{found_patch}). Run `claude update` to enable it.",
+            console::style("Edgee mod not loaded:").yellow()
+        );
         return Vec::new();
     }
     let Some(root) = crate::config::edgee_home().map(|home| home.join("mods")) else {
@@ -80,14 +90,13 @@ pub(super) fn prepare(claude: &OsStr) -> Vec<PathBuf> {
     }
 }
 
-fn detect_mod_support(claude: &OsStr) -> bool {
+fn claude_version(claude: &OsStr) -> Option<(u64, u64, u64)> {
     std::process::Command::new(claude)
         .arg("--version")
         .output()
         .ok()
         .filter(|out| out.status.success())
         .and_then(|out| parse_version(&String::from_utf8_lossy(&out.stdout)))
-        .is_some_and(|version| version >= MIN_CLAUDE_VERSION)
 }
 
 /// `2.1.287 (Claude Code)` → `(2, 1, 287)`; a pre-release suffix is ignored.

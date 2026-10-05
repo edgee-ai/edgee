@@ -305,7 +305,7 @@ remove legacy Edgee entries there manually if warned.
 Mod totals cover observed turn requests only; they do not include all gateway
 traffic, gateway cost, or fallback alerts. Use the [Edgee console](https://www.edgee.ai)
 for gateway reporting. When mods or MCP are disabled, or Claude Code is older,
-there is no Edgee inline display. Custom statuslines remain supported by Claude Code.
+there is no Edgee inline display; an older Claude Code gets a hint to run `claude update`. Custom statuslines remain supported by Claude Code.
 
 See [mod commands and limits](mods/edgee/README.md). Set `EDGEE_MODS_DISABLED=1`
 to disable the mod, or `EDGEE_NO_UPDATE_CHECK=1` to skip CLI update checks.
