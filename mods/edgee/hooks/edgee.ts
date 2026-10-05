@@ -264,8 +264,9 @@ async function refreshStatus($: $): Promise<void> {
 
 async function openPane($: $, { focus = true } = {}): Promise<string> {
   await setMinimized($, false);
-  await loadCatalog($);
   const opened = await $.ui.open({ id: PANE, title: "Edgee requests", ...(focus ? { focus: true } : {}) });
+  // Not awaited: the MCP server may still be connecting; the picker shows a loading state meanwhile.
+  void loadCatalog($);
   return opened.isPlaced ? "Edgee requests pane opened." : `Edgee requests pane waits: ${opened.reason}`;
 }
 
