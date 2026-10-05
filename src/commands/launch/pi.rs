@@ -541,9 +541,6 @@ pub(crate) async fn run_compatible(
     let session_id = reroute.create_session(&creds, "pi").await?;
     util::spawn_cli_version_report(&creds, &session_id);
 
-    // First-run: install the persistent user-level statusline integration
-    // exactly once (Claude Code-targeted; honors the disable marker).
-    util::ensure_first_run_installed().await;
 
     // Step 4: register the Edgee provider in the user's models.json
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
