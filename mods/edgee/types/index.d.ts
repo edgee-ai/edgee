@@ -13,7 +13,6 @@ export type EdgeeRequest = {
 
 export type EdgeePicker = {
   filter?: string;
-  minutes?: number;
   notice?: string;
   failed?: boolean;
   pending?: string; // the model a pick is applying (OFF to clear), until the gateway answers

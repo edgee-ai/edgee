@@ -18,12 +18,12 @@ type Elements = ReturnType<$["ui"]["resolve"]>;
 const SERVER = "edgee";
 const COMMAND = "edgee";
 const DEFAULT_MINUTES = 60;
+const PANE_MINUTES = 1440; // a pick in the pane lasts the longest reroute the gateway allows
 const MAX_MINUTES = 1440;
 const LIST_LIMIT = 40;
 const PANE = "edgee-requests";
 const RECENT = 30;
 const OFF = "__off"; // the selector's "no reroute" option
-const DURATIONS = [15, 60, 240, 1440];
 const CATALOG_ATTEMPTS = 20;
 const CATALOG_RETRY_MS = 1_000;
 const ROWS = 8; // model rows under the filter; past that, typing narrows
@@ -103,11 +103,10 @@ export function register(on: On) {
   });
 
   // The list's rows: plain Buttons, so ↑↓ (or Tab) walk them and Enter picks.
-  on("ui.press", { plugin: "edgee", element: /^(pick|provider|for):/ }, async ($, e, next) => {
+  on("ui.press", { plugin: "edgee", element: /^(pick|provider):/ }, async ($, e, next) => {
     const result = await next(e);
     const [kind, value = ""] = splitOnce(e.element, ":");
     if (kind === "pick") await pickModel($, value);
-    else if (kind === "for") await updatePicker($, { minutes: Number(value) });
     else if (kind === "provider") {
       await updatePicker($, { filter: `${value}/` });
       await $.ui.focus({ requestId: PANE, key: "filter" });
@@ -203,7 +202,8 @@ async function applyReroute($: $, sessionId: string, model: string, minutes: num
   await callEdgee($, "setSessionReroute", { sessionId, targetModel: model, durationMinutes: minutes });
   const expiresAt = (await $.clock.now()) + minutes * 60_000;
   await $.state.set(reroute, { model, expiresAt });
-  return `Session rerouted to ${model} for ${minutes} min (until ${clockTime(expiresAt)}).`;
+  const span = minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`;
+  return `Session rerouted to ${model} for ${span} (until ${clockTime(expiresAt)}).`;
 }
 
 async function clear($: $, sessionId: string): Promise<string> {
@@ -326,8 +326,7 @@ async function pickModel($: $, model: string): Promise<void> {
     try {
       if (model === OFF) notice = await clear($, sessionId);
       else {
-        const { value } = await $.state.get(picker);
-        notice = await applyReroute($, sessionId, model, value?.minutes ?? DEFAULT_MINUTES);
+        notice = await applyReroute($, sessionId, model, PANE_MINUTES);
       }
     } catch (err) {
       [notice, failed] = [`Edgee MCP call failed: ${errorText(err)}`, true];
@@ -461,7 +460,6 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
       route.push(span("┄".repeat(inner), { color: ACCENT, dimColor: true }));
     }
     route.push(...modelList(elements, { catalog, filter, active, totals, pending: picker.pending, inner }));
-    route.push(durationRow(elements, picker.minutes ?? DEFAULT_MINUTES));
   } else {
     const waiting = sessionId ? (picker.failed ? "Models unavailable: is the Edgee MCP enabled?" : "Loading models from the Edgee MCP…") : "Launch with `edgee launch claude` to pick a model";
     route.push(span(waiting, { dimColor: true, italic: true }));
@@ -591,19 +589,6 @@ function modelList({ Box, Text, Button }: Elements, { catalog, filter, active, t
   for (const m of hits.slice(0, ROWS)) rows.push(option(m, m, providerColor(m), m === active?.model ? "  active" : ""));
   if (hits.length > ROWS) rows.push(span(`  +${hits.length - ROWS} more · keep typing to narrow`, { dimColor: true, italic: true }));
   return rows;
-}
-
-// How long a pick lasts: one press, the current one highlighted.
-function durationRow({ Box, Text, Button }: Elements, minutes: number): RenderElement {
-  return Box({
-    flexDirection: "row",
-    columnGap: 1,
-    marginTop: 1,
-    children: [
-      Text({ dimColor: true, children: "⏱ for" }),
-      ...DURATIONS.map((m) => Button({ key: `for:${m}`, label: m < 60 ? `${m} min` : `${m / 60} h`, variant: m === minutes ? "primary" : undefined, dimColor: m !== minutes, onPress: () => {} })),
-    ],
-  });
 }
 
 function countBy<T>(items: T[], key: (item: T) => string): Map<string, number> {

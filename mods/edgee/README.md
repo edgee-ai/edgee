@@ -28,8 +28,8 @@ one until the window is wide enough. It shows:
   (no reroute) is always first; on an empty search, the active and recently
   served models follow, then providers to browse; while searching, the first 8
   matches (provider and name prefixes first, newest version first). `●` marks
-  the model in use. Below, how long a pick lasts (15 min to 24 h). Picking
-  reroutes at once; a spinner shows until the gateway confirms;
+  the model in use. Picking reroutes at once, for 24 h; a spinner shows until
+  the gateway confirms;
 - session totals: requests, input, cached and output tokens;
 - per served model: request count and tokens;
 - the last 30 API requests, newest first: time, served model, tokens in→out,
@@ -44,7 +44,7 @@ shown, and Claude Code side calls outside the turn loop are not seen.
 
 The pane takes the keyboard when it opens (or with `ctrl+x tab`, or a click).
 Type to search; ↑/↓ (or Tab) move the highlight from the search field down
-the rows and the durations, Enter picks the highlighted row (in the search
+the rows, Enter picks the highlighted row (in the search
 field, the first match). Picking a provider fills the search with it;
 `m` (or the `[–]` button in the header) minimizes the pane;
 Esc hands the keyboard back to the prompt.

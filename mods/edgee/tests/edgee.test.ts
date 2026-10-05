@@ -133,7 +133,7 @@ describe("edgee", () => {
     await ui.unmount();
   });
 
-  test("the pane's selector filters, picks a duration and reroutes", async ($, on) => {
+  test("the pane's selector filters and reroutes for 24 h", async ($, on) => {
     const calls: { tool: string; args: Record<string, unknown> }[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
@@ -171,7 +171,6 @@ describe("edgee", () => {
     // While the gateway applies a pick, the pane says so.
     let answer!: () => void;
     gate = new Promise<void>((resolve) => (answer = resolve));
-    await ui.press({ key: "for:240" });
     const picking = ui.press({ key: "pick:qwen/qwen3-max" });
     // Let the pick reach the gate: it crosses the host, so a real tick, not a microtask.
     await new Promise((resolve) => (globalThis as unknown as { setTimeout(fn: () => void, ms: number): void }).setTimeout(() => resolve(undefined), 10));
@@ -182,10 +181,11 @@ describe("edgee", () => {
     expect(await ui.find({ type: "Text", text: /APPLYING/ })).toBeUndefined();
     expect(calls.at(-1)).toEqual({
       tool: "setSessionReroute",
-      args: { sessionId: "sess-1", targetModel: "qwen/qwen3-max", durationMinutes: 240 },
+      args: { sessionId: "sess-1", targetModel: "qwen/qwen3-max", durationMinutes: 1440 },
     });
+    expect(await ui.find({ type: "Button", key: "for:60" })).toBeUndefined(); // a pane pick always lasts 24 h
     expect(await ui.find({ type: "Text", text: /⇄ REROUTED/ })).toBeDefined();
-    expect(await ui.find({ type: "Text", text: /Session rerouted to qwen\/qwen3-max for 240 min/ })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: /Session rerouted to qwen\/qwen3-max for 24 h/ })).toBeDefined();
 
     // Enter in the filter picks its first match.
     await ui.input({ key: "filter", text: "coder", kind: "submit" });
