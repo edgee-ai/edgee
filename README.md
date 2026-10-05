@@ -293,8 +293,9 @@ routed through Edgee, more of your spend under policy, more of your usage visibl
 
 `edgee launch claude` loads Edgee's bundled mod on Claude Code 2.1.287 or newer
 when Edgee MCP is enabled. Its pane shows observed requests, served models, and
-token counts, and lets you reroute the session. Use `/edgee minimize` for a compact
-line above the prompt or `/edgee panel` to reopen the pane.
+token counts, and lets you reroute the session. Sessions start with a compact line
+above the prompt by default. Use `/edgee panel` to expand or `/edgee minimize` to
+collapse; subsequent sessions remember your choice.
 
 The mod replaces Edgee's old statusline integration. Launching Claude removes old
 Edgee statusline settings and hooks from user settings and project-local settings,

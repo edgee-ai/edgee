@@ -170,7 +170,7 @@ describe("edgee", () => {
     await ui.unmount();
   });
 
-  test("the pane opens at session start without taking the keyboard", async ($, on) => {
+  test("starts minimized by default and opens the pane on request", async ($, on) => {
     const opens: { id: string; focus?: true }[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
@@ -178,16 +178,21 @@ describe("edgee", () => {
     on("clock.now", () => ({ value: 0 }));
     on("ui.status", () => ({ value: undefined }));
     on("mcp.call", () => text({ models: MODELS }));
+    mock.store(on);
     on("ui.open", ($, e) => {
       opens.push({ id: e.id, focus: e.focus });
       return { value: { isPlaced: true } };
     });
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    expect(opens).toEqual([{ id: "edgee-requests", focus: undefined }]);
+    expect(opens).toEqual([]);
+
 
     await $.command.run({ command: "edgee", args: "panel" } as any);
     expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: true });
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: undefined });
   });
 
   test("retries the model list until the Edgee MCP server connects", async ($, on) => {
@@ -204,6 +209,7 @@ describe("edgee", () => {
     const clock = mock.clock(on);
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.command.run({ command: "edgee", args: "panel" } as any);
     const ui = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
     expect(await ui.find({ type: "Text", text: /Loading models/ })).toBeDefined();
 
@@ -233,6 +239,8 @@ describe("edgee", () => {
     mock.store(on);
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    expect(opens).toEqual([]);
+    await $.command.run({ command: "edgee", args: "panel" } as any);
     expect(opens).toEqual(["edgee-requests"]);
     const band = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS });
     expect(await band.find({ type: "Text", text: /Edgee/ })).toBeUndefined(); // the pane is open: no line

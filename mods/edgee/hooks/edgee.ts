@@ -6,7 +6,7 @@
 //   /edgee list [filter]      models this session's API key can use
 //   /edgee <model> [minutes]  reroute the session (default 60, max 1440)
 //   /edgee off                route normally again
-//   /edgee panel              focus the side pane (open from the start): a model selector, each API request and the model that served it
+//   /edgee panel              open and focus the side pane: a model selector, each API request and the model that served it
 //   /edgee minimize           fold the pane into one line above the prompt (its [–] does too; the line's [+] unfolds it)
 
 import type { EngineInterface, On, RenderElement, TextProps, BoxProps, TurnStepInput, TurnStepResult } from "claude-code";
@@ -35,7 +35,7 @@ const models = { plugin: "edgee", key: "models" } as const; // session totals pe
 const catalog = { plugin: "edgee", key: "catalog" } as const; // models the selector offers
 const picker = { plugin: "edgee", key: "picker" } as const; // the selector's filter, duration and last notice
 const minimized = { plugin: "edgee", key: "minimized" } as const; // the pane folded into a line above the prompt
-// Kept across sessions: a person who minimized the pane starts the next session minimized.
+// Start minimized by default; remember an explicit choice across sessions.
 const MINIMIZED_KEY = "minimized";
 
 export function register(on: On) {
@@ -47,11 +47,10 @@ export function register(on: On) {
       argumentHint: "[list [filter] | <model> [minutes] | off | panel | minimize]",
     });
     await refreshStatus($);
-    const folded = (await storedMinimized($)) === true;
+    const folded = (await storedMinimized($)) !== false;
     await $.state.set(minimized, folded);
-    // Shown from the start, without the keyboard: the prompt keeps it. On a
-    // narrow terminal the pane waits unplaced until the window is wide enough.
-    // Minimized last time, the line above the prompt stands in for it.
+    // Start with the compact line unless the user last left the pane expanded.
+    // Restoring the pane does not take the keyboard.
     if (!folded) await openPane($, { focus: false });
     return result;
   });
@@ -281,7 +280,7 @@ async function setMinimized($: $, value: boolean): Promise<void> {
   try {
     await $.store.set(MINIMIZED_KEY, value);
   } catch {
-    // A preference: losing it only means the next session opens the pane.
+    // A preference: losing it means the next session starts minimized.
   }
 }
 

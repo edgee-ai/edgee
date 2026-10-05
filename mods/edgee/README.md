@@ -9,7 +9,7 @@ Edgee gateway. It calls the session reroute tools of the Edgee MCP server that
 /edgee list [filter]      models this session's API key can use
 /edgee <model> [minutes]  reroute the session (default 60, max 1440)
 /edgee off                route normally again
-/edgee panel              focus the side pane (it opens with the session)
+/edgee panel              open and focus the side pane
 /edgee minimize           fold the pane into one line above the prompt
 ```
 
@@ -19,9 +19,9 @@ active, a status line under the prompt shows `⇄ Edgee: <model> until HH:MM`.
 
 ## Requests pane
 
-The pane opens with the session, without taking the keyboard: docked beside the
-transcript on a wide terminal, waiting unplaced on a narrow one until the window
-is wide enough. `/edgee panel` focuses it. It shows:
+Sessions start minimized by default. `/edgee panel` opens and focuses the pane:
+docked beside the transcript on a wide terminal, waiting unplaced on a narrow
+one until the window is wide enough. It shows:
 
 - the Edgee session id and the active reroute;
 - a model selector: a filter field, a model picker (the first 12 matches, plus
@@ -51,8 +51,8 @@ Esc hands the keyboard back to the prompt.
 Minimized, the pane closes and one line above the prompt stands in for it:
 where requests go (`● direct`, or `⇄ <model> until HH:MM`), the last model
 served, and the session's requests, tokens and cache hit. Its `[+]` button, or
-`/edgee panel`, brings the pane back. The choice is remembered: a session
-started after minimizing starts minimized.
+`/edgee panel`, brings the pane back. The choice is remembered: subsequent
+sessions restore the last minimized or expanded state.
 
 ## Shipping
 
