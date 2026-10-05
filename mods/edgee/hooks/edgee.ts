@@ -27,6 +27,9 @@ const DURATIONS = [15, 60, 240, 1440];
 const PICKER_LIMIT = 63; // a Select takes 1 to 64 options, one being the "no reroute" entry
 const CATALOG_ATTEMPTS = 20;
 const CATALOG_RETRY_MS = 1_000;
+const PREVIEW = 6; // filter matches listed under the field, so a filter shows what it found
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_MS = 80;
 
 // Held by the host, so they survive a hot reload of this file.
 const reroute = { plugin: "edgee", key: "reroute" } as const;
@@ -91,11 +94,10 @@ export function register(on: On) {
     const result = await next(e);
     await updatePicker($, { filter: e.value });
     if (e.kind === "submit") {
-      // Enter in the filter picks the model only when one matches; otherwise it moves on to the list.
+      // Enter in the filter picks its first match, the one the preview marks.
       const { value: models = [] } = await $.state.get(catalog);
-      const hits = models.filter((m) => m.toLowerCase().includes(e.value.toLowerCase()));
-      if (hits.length === 1) await pickModel($, hits[0]);
-      else if (hits.length > 1) await $.ui.focus({ requestId: PANE, key: "model" });
+      const [first] = matching(models, e.value);
+      if (first) await pickModel($, first);
     }
     return result;
   });
@@ -316,13 +318,17 @@ async function loadCatalog($: $, attemptsLeft = CATALOG_ATTEMPTS): Promise<void>
   }
 }
 
-// A pick in the pane: reroute to `model`, or clear on OFF; the outcome shows under the selector.
+// A pick in the pane: reroute to `model`, or clear on OFF; a spinner shows
+// while the gateway applies it, then the outcome shows under the selector.
 async function pickModel($: $, model: string): Promise<void> {
   const sessionId = await $.env.get("EDGEE_SESSION_ID");
   let notice: string;
   let failed = false;
   if (!sessionId) [notice, failed] = ["Not running under Edgee.", true];
   else {
+    await updatePicker($, { pending: model, frame: 0, notice: undefined, failed: false });
+    let frame = 0;
+    const spin = $.clock.every(SPINNER_MS, () => void updatePicker($, { frame: ++frame }));
     try {
       if (model === OFF) notice = await clear($, sessionId);
       else {
@@ -331,9 +337,11 @@ async function pickModel($: $, model: string): Promise<void> {
       }
     } catch (err) {
       [notice, failed] = [`Edgee MCP call failed: ${errorText(err)}`, true];
+    } finally {
+      spin.cancel();
     }
   }
-  await updatePicker($, { notice, failed });
+  await updatePicker($, { notice, failed, pending: undefined });
 }
 
 async function updatePicker($: $, change: Partial<EdgeePicker>): Promise<void> {
@@ -419,7 +427,11 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
         [
           row([span("◆ EDGEE", { color: ACCENT, bold: true }), span(`  session ${sessionId ? sessionId.slice(0, 8) : "—"}`, { dimColor: true })]),
           row([
-            active ? span(" ⇄ REROUTED ", { backgroundColor: "#7C3AED", color: "white", bold: true }) : span(" ● DIRECT ", { backgroundColor: "#065F46", color: "white", bold: true }),
+            picker.pending
+              ? span(` ${spinner(picker)} APPLYING `, { backgroundColor: "#92400E", color: "white", bold: true })
+              : active
+                ? span(" ⇄ REROUTED ", { backgroundColor: "#7C3AED", color: "white", bold: true })
+                : span(" ● DIRECT ", { backgroundColor: "#065F46", color: "white", bold: true }),
             ...(clickable ? [span(" "), Button({ key: "minimize", label: "–", onPress: () => {} })] : []),
           ]),
         ],
@@ -453,16 +465,18 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
   if (pickers && catalog.length > 0) {
     const { Input, Select } = pickers;
     const filter = (picker.filter ?? "").toLowerCase();
-    const hits = catalog.filter((m) => m.toLowerCase().includes(filter));
+    const hits = matching(catalog, filter);
     // The active model stays an option whatever the filter, so the Select can show it.
     const pinned = active ? [active.model] : [];
     const shown = [...pinned, ...hits.filter((m) => m !== active?.model).slice(0, PICKER_LIMIT - pinned.length)];
-    route.push(Input({ key: "filter", label: "⌕ Filter", placeholder: "qwen, opus, gpt-5…", value: picker.filter ?? "", submitLabel: "choose", autoFocus: true, onSubmit: () => {} }));
+    route.push(Input({ key: "filter", label: "⌕ Filter", placeholder: "qwen, opus, gpt-5…", value: picker.filter ?? "", submitLabel: "pick", autoFocus: true, onSubmit: () => {} }));
+    // The Select below is a folded dropdown: list what the filter found so it is visible while typing.
+    if (filter) route.push(...matchPreview(span, row, hits, filter, inner));
     route.push(
       Select({
         key: "model",
         label: "◇ Model",
-        value: active?.model ?? OFF,
+        value: picker.pending ?? active?.model ?? OFF,
         options: [{ value: OFF, label: "● Claude Code's choice (no reroute)" }, ...shown.map((m) => ({ value: m }))],
         onSelect: () => {},
       }),
@@ -481,7 +495,10 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
     const waiting = sessionId ? (picker.failed ? "Models unavailable: is the Edgee MCP enabled?" : "Loading models from the Edgee MCP…") : "Launch with `edgee launch claude` to pick a model";
     route.push(span(waiting, { dimColor: true, italic: true }));
   }
-  if (picker.notice) route.push(row([span(picker.failed ? "✗ " : "✓ ", { color: picker.failed ? "red" : "green", bold: true }), span(picker.notice, { color: picker.failed ? "red" : undefined, dimColor: !picker.failed })], { marginTop: 1 }));
+  if (picker.pending) {
+    const target = picker.pending === OFF ? "Claude Code's choice" : picker.pending;
+    route.push(row([span(`${spinner(picker)} `, { color: ACCENT, bold: true }), span(picker.pending === OFF ? "Clearing the reroute → " : "Rerouting to ", { dimColor: true }), span(target, { color: providerColor(target), bold: true }), span(" …", { dimColor: true })], { marginTop: 1 }));
+  } else if (picker.notice) route.push(row([span(picker.failed ? "✗ " : "✓ ", { color: picker.failed ? "red" : "green", bold: true }), span(picker.notice, { color: picker.failed ? "red" : undefined, dimColor: !picker.failed })], { marginTop: 1 }));
 
   // ── Models served: a share bar per model, in its provider's color.
   const entries = Object.entries(totals).sort((a, b) => b[1].requests - a[1].requests);
@@ -545,6 +562,48 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
         : [span("/edgee panel", { color: ACCENT, bold: true }), span(" focus  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span(" fold", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
     ],
   });
+}
+
+// The models containing `filter`, those whose provider or name starts with it
+// first: "qwen" lists qwen/… before deepseek/…-qwen-14b.
+function matching(models: string[], filter: string): string[] {
+  const f = filter.toLowerCase();
+  const rank = (m: string) => {
+    const [provider = "", name = m] = m.toLowerCase().split("/");
+    return provider.startsWith(f) ? 0 : name.startsWith(f) ? 1 : 2;
+  };
+  return models.filter((m) => m.toLowerCase().includes(f)).sort((a, b) => rank(a) - rank(b));
+}
+
+function spinner(picker: EdgeePicker): string {
+  return SPINNER[(picker.frame ?? 0) % SPINNER.length]!;
+}
+
+// The filter's first matches, the match highlighted; the first is what Enter picks.
+function matchPreview(
+  span: (children: string, props?: Omit<TextProps, "children">) => RenderElement,
+  row: (children: RenderElement[], props?: Omit<BoxProps, "children">) => RenderElement,
+  hits: string[],
+  filter: string,
+  inner: number,
+): RenderElement[] {
+  if (hits.length === 0) return [span(`  No model matches "${filter}"`, { color: "red", italic: true })];
+  const lines = hits.slice(0, PREVIEW).map((m, i) => {
+    const at = m.toLowerCase().indexOf(filter);
+    const color = providerColor(m);
+    const name = fit(m, inner - 8).trimEnd();
+    const end = Math.min(at + filter.length, name.length);
+    return row([
+      span(i === 0 ? "  ▸ " : "    ", { color: ACCENT, bold: true }),
+      span(name.slice(0, at), { color }),
+      span(name.slice(at, end), { color: ACCENT, bold: true, underline: true }),
+      span(name.slice(end), { color }),
+      ...(i === 0 ? [span("  ⏎", { color: ACCENT, dimColor: true })] : []),
+    ]);
+  });
+  const rest = hits.length - PREVIEW;
+  const footer = `  ${hits.length} match${hits.length === 1 ? "" : "es"}${rest > 0 ? ` · +${rest} not shown` : ""} · tab to browse them in the list`;
+  return [...lines, span(footer, { dimColor: true, italic: true })];
 }
 
 type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns" | "clickable">;

@@ -24,9 +24,10 @@ docked beside the transcript on a wide terminal, waiting unplaced on a narrow
 one until the window is wide enough. It shows:
 
 - the Edgee session id and the active reroute;
-- a model selector: a filter field, a model picker (the first 12 matches, plus
-  "Claude Code's choice" to clear the reroute) and a duration picker. Picking a
-  model reroutes at once;
+- a model selector: a filter field that lists its first matches under it
+  (provider and name prefixes first), a model picker (the first 63 matches,
+  plus "Claude Code's choice" to clear the reroute) and a duration picker.
+  Picking a model reroutes at once; a spinner shows until the gateway confirms;
 - session totals: requests, input, cached and output tokens;
 - per served model: request count and tokens;
 - the last 30 API requests, newest first: time, served model, tokens in→out,
@@ -41,7 +42,7 @@ shown, and Claude Code side calls outside the turn loop are not seen.
 
 The pane takes the keyboard when it opens (or with `ctrl+x tab`, or a click).
 Then Tab moves between the filter, the model and the duration; typing in the
-filter narrows the models and Enter there picks the first match; ↑/↓ move
+filter narrows the models and Enter there picks the first match (marked `▸`); ↑/↓ move
 through a picker's options and Enter picks;
 `m` (or the `[–]` button in the header) minimizes the pane;
 Esc hands the keyboard back to the prompt.

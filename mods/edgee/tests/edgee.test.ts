@@ -5,6 +5,9 @@ const PANE_PROPS = { title: "Edgee requests", isFocused: true, bodyColumns: 80, 
 
 const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120 } as unknown as RenderPropsOf["AbovePrompt"];
 
+// Buttons are drawn only where clicks reach the mod.
+const FULLSCREEN = { columns: 120, rows: 40, isFullscreen: true };
+
 const MODELS = ["anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5", "qwen/qwen3-coder-next", "qwen/qwen3-max"];
 
 function text(value: unknown) {
@@ -136,9 +139,13 @@ describe("edgee", () => {
     on("clock.now", () => ({ value: Date.UTC(2026, 9, 2, 10, 0) }));
     on("ui.status", () => ({ value: undefined }));
     on("ui.open", () => ({ value: { isPlaced: true } }));
-    on("mcp.call", ($, e) => {
+    on("clock.every", () => ({}) as never); // no spinner frames: the test reads the first one
+    let gate: Promise<void> = Promise.resolve();
+    on("mcp.call", async ($, e) => {
       calls.push({ tool: e.tool, args: e.args });
-      return e.tool === "listSessionModels" ? text({ models: MODELS }) : text({ ok: true });
+      if (e.tool === "listSessionModels") return text({ models: MODELS });
+      await gate;
+      return text({ ok: true });
     });
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
@@ -149,9 +156,25 @@ describe("edgee", () => {
     expect(calls.at(-1)?.tool).toBe("listSessionModels"); // typing alone reroutes nothing
     const select = await ui.find({ type: "Select", key: "model" });
     expect((select?.props.options as { value: string }[]).map((o) => o.value)).toEqual(["__off", "qwen/qwen3-coder-next", "qwen/qwen3-max"]);
+    // The folded dropdown hides the matches: the pane lists them under the filter.
+    expect(await ui.find({ type: "Text", text: /2 matches/ })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: "3-coder-next" })).toBeDefined();
+    await ui.input({ key: "filter", text: "nope", kind: "change" });
+    expect(await ui.find({ type: "Text", text: /No model matches "nope"/ })).toBeDefined();
+    await ui.input({ key: "filter", text: "qwen", kind: "change" });
 
+    // While the gateway applies a pick, the pane says so.
+    let answer!: () => void;
+    gate = new Promise<void>((resolve) => (answer = resolve));
     await ui.select({ key: "duration", value: "240" });
-    await ui.select({ key: "model", value: "qwen/qwen3-max" });
+    const picking = ui.select({ key: "model", value: "qwen/qwen3-max" });
+    // Let the pick reach the gate: it crosses the host, so a real tick, not a microtask.
+    await new Promise((resolve) => (globalThis as unknown as { setTimeout(fn: () => void, ms: number): void }).setTimeout(() => resolve(undefined), 10));
+    expect(await ui.find({ type: "Text", text: /APPLYING/ })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: /Rerouting to/ })).toBeDefined();
+    answer();
+    await picking;
+    expect(await ui.find({ type: "Text", text: /APPLYING/ })).toBeUndefined();
     expect(calls.at(-1)).toEqual({
       tool: "setSessionReroute",
       args: { sessionId: "sess-1", targetModel: "qwen/qwen3-max", durationMinutes: 240 },
@@ -242,10 +265,10 @@ describe("edgee", () => {
     expect(opens).toEqual([]);
     await $.command.run({ command: "edgee", args: "panel" } as any);
     expect(opens).toEqual(["edgee-requests"]);
-    const band = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS });
+    const band = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS, viewport: FULLSCREEN });
     expect(await band.find({ type: "Text", text: /Edgee/ })).toBeUndefined(); // the pane is open: no line
 
-    const pane = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    const pane = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS, viewport: FULLSCREEN });
     await pane.press({ key: "minimize" });
     expect(closes).toEqual(["edgee-requests"]);
     expect(await band.find({ type: "Text", text: /● direct/ })).toBeDefined();

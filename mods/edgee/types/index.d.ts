@@ -11,7 +11,14 @@ export type EdgeeRequest = {
   subagent: boolean;
 };
 
-export type EdgeePicker = { filter?: string; minutes?: number; notice?: string; failed?: boolean };
+export type EdgeePicker = {
+  filter?: string;
+  minutes?: number;
+  notice?: string;
+  failed?: boolean;
+  pending?: string; // the model a pick is applying (OFF to clear), until the gateway answers
+  frame?: number; // the pending spinner's frame
+};
 
 export type EdgeeModelTotals = { requests: number; input: number; cached: number; output: number };
 
