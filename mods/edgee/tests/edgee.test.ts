@@ -156,7 +156,9 @@ describe("edgee", () => {
     expect(calls.at(-1)?.tool).toBe("listSessionModels"); // typing alone reroutes nothing
     const select = await ui.find({ type: "Select", key: "model" });
     expect((select?.props.options as { value: string }[]).map((o) => o.value)).toEqual(["__off", "qwen/qwen3-coder-next", "qwen/qwen3-max"]);
-    // The folded dropdown hides the matches: the pane lists them under the filter.
+    // The folded dropdown hides the matches: the pane lists them under the filter,
+    // Claude Code's choice pinned first whatever the filter.
+    expect(await ui.find({ type: "Text", text: "● Claude Code's choice" })).toBeDefined();
     expect(await ui.find({ type: "Text", text: /2 matches/ })).toBeDefined();
     expect(await ui.find({ type: "Text", text: "3-coder-next" })).toBeDefined();
     await ui.input({ key: "filter", text: "nope", kind: "change" });
@@ -185,6 +187,12 @@ describe("edgee", () => {
     // Enter in the filter picks its first match.
     await ui.input({ key: "filter", text: "coder", kind: "submit" });
     expect(calls.at(-1)?.args).toMatchObject({ targetModel: "qwen/qwen3-coder-next" });
+
+    // Enter on an empty filter picks the pinned row: Claude Code's choice.
+    await ui.input({ key: "filter", text: "", kind: "submit" });
+    expect(calls.at(-1)?.tool).toBe("clearSessionReroute");
+    await ui.input({ key: "filter", text: "max", kind: "submit" });
+    expect(calls.at(-1)?.args).toMatchObject({ targetModel: "qwen/qwen3-max" });
 
     await ui.select({ key: "model", value: "__off" });
     expect(calls.at(-1)?.tool).toBe("clearSessionReroute");

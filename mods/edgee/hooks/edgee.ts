@@ -27,7 +27,7 @@ const DURATIONS = [15, 60, 240, 1440];
 const PICKER_LIMIT = 63; // a Select takes 1 to 64 options, one being the "no reroute" entry
 const CATALOG_ATTEMPTS = 20;
 const CATALOG_RETRY_MS = 1_000;
-const PREVIEW = 6; // filter matches listed under the field, so a filter shows what it found
+const PREVIEW = 6; // filter matches listed under the field: the Select below them is a folded dropdown
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_MS = 80;
 
@@ -94,10 +94,10 @@ export function register(on: On) {
     const result = await next(e);
     await updatePicker($, { filter: e.value });
     if (e.kind === "submit") {
-      // Enter in the filter picks its first match, the one the preview marks.
+      // Enter picks the row the list marks `▸`: the first match, or Claude Code's choice on an empty filter.
       const { value: models = [] } = await $.state.get(catalog);
-      const [first] = matching(models, e.value);
-      if (first) await pickModel($, first);
+      const target = e.value.trim() ? matching(models, e.value.trim())[0] : OFF;
+      if (target) await pickModel($, target);
     }
     return result;
   });
@@ -464,24 +464,22 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
   const route: RenderElement[] = [];
   if (pickers && catalog.length > 0) {
     const { Input, Select } = pickers;
-    const filter = (picker.filter ?? "").toLowerCase();
+    const filter = (picker.filter ?? "").trim().toLowerCase();
     const hits = matching(catalog, filter);
     // The active model stays an option whatever the filter, so the Select can show it.
     const pinned = active ? [active.model] : [];
     const shown = [...pinned, ...hits.filter((m) => m !== active?.model).slice(0, PICKER_LIMIT - pinned.length)];
     route.push(Input({ key: "filter", label: "⌕ Filter", placeholder: "qwen, opus, gpt-5…", value: picker.filter ?? "", submitLabel: "pick", autoFocus: true, onSubmit: () => {} }));
-    // The Select below is a folded dropdown: list what the filter found so it is visible while typing.
-    if (filter) route.push(...matchPreview(span, row, hits, filter, inner));
+    route.push(...routeList(span, row, { hits, filter, active, total: catalog.length, inner }));
     route.push(
       Select({
         key: "model",
-        label: "◇ Model",
+        label: "◇ Browse",
         value: picker.pending ?? active?.model ?? OFF,
         options: [{ value: OFF, label: "● Claude Code's choice (no reroute)" }, ...shown.map((m) => ({ value: m }))],
         onSelect: () => {},
       }),
     );
-    if (hits.length > PICKER_LIMIT) route.push(span(`  +${hits.length - PICKER_LIMIT} more match, refine the filter`, { dimColor: true, italic: true }));
     route.push(
       Select({
         key: "duration",
@@ -579,31 +577,46 @@ function spinner(picker: EdgeePicker): string {
   return SPINNER[(picker.frame ?? 0) % SPINNER.length]!;
 }
 
-// The filter's first matches, the match highlighted; the first is what Enter picks.
-function matchPreview(
+// The list under the filter: Claude Code's choice pinned first, then the
+// filter's first matches with the match highlighted. `▸` marks what Enter picks.
+function routeList(
   span: (children: string, props?: Omit<TextProps, "children">) => RenderElement,
   row: (children: RenderElement[], props?: Omit<BoxProps, "children">) => RenderElement,
-  hits: string[],
-  filter: string,
-  inner: number,
+  { hits, filter, active, total, inner }: { hits: string[]; filter: string; active: EdgeeReroute | null; total: number; inner: number },
 ): RenderElement[] {
-  if (hits.length === 0) return [span(`  No model matches "${filter}"`, { color: "red", italic: true })];
-  const lines = hits.slice(0, PREVIEW).map((m, i) => {
+  const mark = (picked: boolean, chosen: boolean) => [
+    span(picked ? "▸ " : "  ", { color: ACCENT, bold: true }),
+    span(chosen ? "✓ " : "  ", { color: "green", bold: true }),
+  ];
+  const enter = (picked: boolean) => (picked ? [span("  ⏎", { color: ACCENT, dimColor: true })] : []);
+  const lines = [
+    span("┄".repeat(Math.max(0, inner)), { color: ACCENT, dimColor: true }),
+    row([...mark(!filter, !active), span("● Claude Code's choice", { color: "green", bold: !active }), span(" · no reroute", { dimColor: true }), ...enter(!filter)]),
+  ];
+  if (!filter) {
+    if (active) lines.push(row([...mark(false, true), span(active.model, { color: providerColor(active.model), bold: true })]));
+    lines.push(span(`    type to filter ${total} models · tab to the list below`, { dimColor: true, italic: true }));
+    return lines;
+  }
+  if (hits.length === 0) return [...lines, span(`    No model matches "${filter}"`, { color: "red", italic: true })];
+  hits.slice(0, PREVIEW).forEach((m, i) => {
     const at = m.toLowerCase().indexOf(filter);
     const color = providerColor(m);
-    const name = fit(m, inner - 8).trimEnd();
+    const name = fit(m, inner - 10).trimEnd();
     const end = Math.min(at + filter.length, name.length);
-    return row([
-      span(i === 0 ? "  ▸ " : "    ", { color: ACCENT, bold: true }),
-      span(name.slice(0, at), { color }),
-      span(name.slice(at, end), { color: ACCENT, bold: true, underline: true }),
-      span(name.slice(end), { color }),
-      ...(i === 0 ? [span("  ⏎", { color: ACCENT, dimColor: true })] : []),
-    ]);
+    lines.push(
+      row([
+        ...mark(i === 0, m === active?.model),
+        span(name.slice(0, at), { color }),
+        span(name.slice(at, end), { color: ACCENT, bold: true, underline: true }),
+        span(name.slice(end), { color }),
+        ...enter(i === 0),
+      ]),
+    );
   });
   const rest = hits.length - PREVIEW;
-  const footer = `  ${hits.length} match${hits.length === 1 ? "" : "es"}${rest > 0 ? ` · +${rest} not shown` : ""} · tab to browse them in the list`;
-  return [...lines, span(footer, { dimColor: true, italic: true })];
+  lines.push(span(`    ${hits.length} match${hits.length === 1 ? "" : "es"}${rest > 0 ? ` · +${rest} more, tab to browse` : ""}`, { dimColor: true, italic: true }));
+  return lines;
 }
 
 type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns" | "clickable">;
