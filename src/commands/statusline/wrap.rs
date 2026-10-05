@@ -284,7 +284,7 @@ pub(crate) fn merge_outputs(input: MergeInputs<'_>) -> String {
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
-    use crate::commands::claude_settings::env_test_lock as env_lock;
+    use crate::commands::statusline::settings::env_test_lock as env_lock;
 
     fn inputs<'a>(
         edgee: &str,

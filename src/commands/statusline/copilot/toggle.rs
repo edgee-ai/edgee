@@ -10,7 +10,7 @@ use console::style;
 use serde_json::Value;
 
 use super::install;
-use crate::commands::claude_settings::{self, CommandKind};
+use crate::commands::statusline::settings::{self, CommandKind};
 
 pub fn disabled_marker_path() -> std::path::PathBuf {
     crate::config::global_config_dir().join("statusline-copilot.disabled")
@@ -46,9 +46,9 @@ pub async fn disable() -> Result<()> {
 
     let path = super::settings_path();
     if path.is_file() {
-        let mut value = claude_settings::read_settings(&path)?.value;
+        let mut value = settings::read_settings(&path)?.value;
         if remove_edgee(&mut value) {
-            claude_settings::write_settings(&path, &value)?;
+            settings::write_settings(&path, &value)?;
         }
     }
 
@@ -67,12 +67,12 @@ fn remove_edgee(value: &mut Value) -> bool {
     };
     let Some(command) = obj
         .get("statusLine")
-        .and_then(claude_settings::status_line_command)
+        .and_then(settings::status_line_command)
         .map(str::to_string)
     else {
         return false;
     };
-    match claude_settings::classify_command(&command) {
+    match settings::classify_command(&command) {
         CommandKind::EdgeeWrap => match install::unwrap_command(&command) {
             Some(theirs) => obj["statusLine"]["command"] = Value::String(theirs),
             // A wrap we can't parse back: dropping it would lose the user's

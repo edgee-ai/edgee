@@ -6,6 +6,7 @@
 
 pub mod claude;
 pub mod claude_desktop;
+mod claude_mods;
 pub mod codebuddy;
 mod mcp;
 pub mod codex;

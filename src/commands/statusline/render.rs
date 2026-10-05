@@ -371,7 +371,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_without_session_id_is_empty() {
-        let _lock = crate::commands::claude_settings::env_test_lock();
+        let _lock = crate::commands::statusline::settings::env_test_lock();
         unsafe {
             std::env::remove_var("EDGEE_SESSION_ID");
         }
@@ -384,7 +384,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_without_org_context_is_empty() {
-        let _lock = crate::commands::claude_settings::env_test_lock();
+        let _lock = crate::commands::statusline::settings::env_test_lock();
         unsafe {
             std::env::set_var("EDGEE_SESSION_ID", "test-session");
             std::env::remove_var("EDGEE_ORG_ID");

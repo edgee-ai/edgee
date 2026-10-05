@@ -12,7 +12,7 @@ use anyhow::Result;
 use console::style;
 use serde_json::Value;
 
-use crate::commands::claude_settings::{self, CommandKind};
+use crate::commands::statusline::settings::{self, CommandKind};
 
 pub const STATUSLINE_COMMAND: &str = "edgee statusline render";
 
@@ -45,14 +45,14 @@ enum Outcome {
 pub async fn run(opts: Options) -> Result<()> {
     let path = super::settings_path();
     let mut value = if path.is_file() {
-        claude_settings::read_settings(&path)?.value
+        settings::read_settings(&path)?.value
     } else {
         Value::Object(Default::default())
     };
 
     match apply(&mut value, opts.wrap) {
         Outcome::Installed | Outcome::Wrapped => {
-            claude_settings::write_settings(&path, &value)?;
+            settings::write_settings(&path, &value)?;
             let command = value["statusLine"]["command"].as_str().unwrap_or_default();
             println!("  {} Wrote {}", style("✓").green(), path.display());
             println!("    • statusLine → {command}");
@@ -110,13 +110,13 @@ pub async fn ensure_installed_on_launch() {
 
 fn apply(value: &mut Value, wrap: bool) -> Outcome {
     let Some(sl) = value.get_mut("statusLine") else {
-        claude_settings::set_status_line(value, STATUSLINE_COMMAND, Some(REFRESH_INTERVAL_SECS));
+        settings::set_status_line(value, STATUSLINE_COMMAND, Some(REFRESH_INTERVAL_SECS));
         return Outcome::Installed;
     };
-    let Some(command) = claude_settings::status_line_command(sl).map(str::to_string) else {
+    let Some(command) = settings::status_line_command(sl).map(str::to_string) else {
         return Outcome::Foreign(None);
     };
-    match claude_settings::classify_command(&command) {
+    match settings::classify_command(&command) {
         CommandKind::Edgee | CommandKind::EdgeeWrap => Outcome::AlreadyEdgee,
         _ if wrap => {
             sl["command"] = Value::String(wrap_command(&command));
@@ -129,7 +129,7 @@ fn apply(value: &mut Value, wrap: bool) -> Outcome {
 pub fn wrap_command(command: &str) -> String {
     format!(
         "edgee statusline wrap '{}'",
-        claude_settings::posix_single_quote_escape(command)
+        settings::posix_single_quote_escape(command)
     )
 }
 
