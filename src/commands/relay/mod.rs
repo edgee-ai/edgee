@@ -10,6 +10,7 @@
 
 mod handler;
 
+use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -288,6 +289,11 @@ async fn run_with_reroute(
         None
     };
     let session_id = reroute.create_session(&creds, &provider).await?;
+    // Same report every direct launch sends. Besides the version, it stores the
+    // session's org, which is how the Edgee MCP server resolves a session that
+    // has no gateway records yet. Without it, `setSessionName` on the first turn
+    // answers "Session not found" for members of more than one org.
+    crate::commands::launch::util::spawn_cli_version_report(&creds, &session_id);
     let org_slug = creds.org_slug.clone().unwrap_or_default();
     let repo = crate::git::detect_origin();
 
@@ -394,6 +400,7 @@ async fn run_with_reroute(
         // already delivered is missed and we'd wait for a second press. GUI editors
         // leave the terminal free, so their Ctrl-C really does reach us as SIGINT
         // (TUI agents keep the terminal in raw mode and swallow it themselves).
+        let extras = AgentExtras::passthrough(&opts.extra_args);
         let mut interrupt = std::pin::pin!(shutdown_signal());
         let mut editor = std::pin::pin!(run_agent(
             &agent,
@@ -402,7 +409,7 @@ async fn run_with_reroute(
             &key_pem,
             &session_id,
             &org_slug,
-            &opts.extra_args,
+            &extras,
         ));
         let exited = tokio::select! {
             res = &mut editor => Some(res?),
@@ -445,7 +452,7 @@ async fn run_with_reroute(
             &key_pem,
             &session_id,
             &org_slug,
-            &opts.extra_args,
+            &AgentExtras::passthrough(&opts.extra_args),
         )?;
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
@@ -500,6 +507,18 @@ async fn run_with_reroute(
         // TUI agents (Claude Code, Codex) run in this terminal and handle their own
         // Ctrl-C in raw mode, so we just wait for them to exit — no signal race and
         // no child kill, which would fight the agent's own SIGINT handling.
+        //
+        // Copilot CLI gets Edgee's MCP server, session instructions and org
+        // plugins. Prepared here, not in its launch target, because it needs
+        // the session this relay just created.
+        let (mut extras, copilot) = if is_copilot_cli(&agent) {
+            let (extras, session) =
+                crate::commands::launch::copilot_cli::prepare(&session_id, interactive).await?;
+            (extras, Some(session))
+        } else {
+            (AgentExtras::default(), None)
+        };
+        extras.args.extend(opts.extra_args.iter().map(OsString::from));
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
@@ -510,10 +529,14 @@ async fn run_with_reroute(
             &key_pem,
             &session_id,
             &org_slug,
-            &opts.extra_args,
+            &extras,
         )
         .await?;
         task.abort();
+        // Before `exit`, which would skip the destructors cleaning up after it.
+        if let Some(copilot) = copilot {
+            copilot.finish(&session_id).await;
+        }
         if let Some(code) = status.code() {
             std::process::exit(code);
         }
@@ -552,6 +575,24 @@ pub async fn run_for_agent_with_args(
         reroute,
     )
     .await
+}
+
+/// Argv and env for the spawned agent on top of the relay's own proxy and CA
+/// wiring. A launch target's injected flags go first, the user's passthrough
+/// args last.
+#[derive(Debug, Default)]
+pub(crate) struct AgentExtras {
+    pub args: Vec<OsString>,
+    pub env: Vec<(&'static str, OsString)>,
+}
+
+impl AgentExtras {
+    fn passthrough(user_args: &[String]) -> Self {
+        Self {
+            args: user_args.iter().map(OsString::from).collect(),
+            env: Vec::new(),
+        }
+    }
 }
 
 /// Default listen port per agent, picked from an uncommon range so two relays
@@ -1129,7 +1170,7 @@ fn spawn_agent(
     ca_key_pem: &str,
     session_id: &str,
     org_slug: &str,
-    extra_args: &[String],
+    extras: &AgentExtras,
 ) -> Result<tokio::process::Child> {
     let proxy_url = format!("http://127.0.0.1:{port}");
 
@@ -1144,11 +1185,11 @@ fn spawn_agent(
     // in the System keychain by `ensure_ca_trusted` in `run`.
     let mut cmd = if is_intellij(agent) {
         let mut c = tokio::process::Command::new(crate::commands::launch::intellij::binary()?);
-        c.args(extra_args).stdin(std::process::Stdio::null());
+        c.args(&extras.args).stdin(std::process::Stdio::null());
         c
     } else if is_copilot_desktop(agent) {
         let mut c = tokio::process::Command::new(crate::commands::launch::copilot_desktop::binary()?);
-        c.args(extra_args)
+        c.args(&extras.args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -1184,7 +1225,7 @@ fn spawn_agent(
         // forward the user's flags to the spawned binary. GUI editors never have
         // extra args — their launch targets parse none — so they stay untouched.
         if !is_gui_editor(agent) {
-            c.args(extra_args);
+            c.args(&extras.args);
         }
         // Cursor's Electron net module ignores HTTPS_PROXY; --proxy-server routes
         // all HTTPS traffic through the relay so BidiAppend / RunSSE are intercepted.
@@ -1230,6 +1271,7 @@ fn spawn_agent(
     );
     cmd.env("EDGEE_ORG_SLUG", org_slug);
     cmd.env("EDGEE_PROFILE", crate::config::active_profile_name());
+    cmd.envs(extras.env.iter().map(|(k, v)| (k, v)));
 
     cmd.spawn().with_context(|| {
         // A GUI editor most often fails here because its CLI isn't on PATH.
@@ -1251,7 +1293,7 @@ async fn run_agent(
     ca_key_pem: &str,
     session_id: &str,
     org_slug: &str,
-    extra_args: &[String],
+    extras: &AgentExtras,
 ) -> Result<std::process::ExitStatus> {
     Ok(spawn_agent(
         agent,
@@ -1260,7 +1302,7 @@ async fn run_agent(
         ca_key_pem,
         session_id,
         org_slug,
-        extra_args,
+        extras,
     )?
         .wait()
         .await?)
