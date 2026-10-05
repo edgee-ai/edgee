@@ -55,6 +55,8 @@ pub(crate) async fn prepare(
         .env
         .push(("EDGEE_CONSOLE_API_URL", crate::config::console_api_base_url().into()));
 
+    crate::commands::statusline::copilot::install::ensure_installed_on_launch().await;
+
     let org = super::fetch_active_org(&creds).await;
     let mcp_disabled = super::mcp_injection_disabled_with_org(org.as_ref());
     if !mcp_disabled && interactive {

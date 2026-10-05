@@ -92,8 +92,8 @@ Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
   provider list uses bare `copilot`, deliberately distinct from launch's `copilot-vscode`, and
   underscored `claude_desktop`/`codex_desktop` for surfaces metered as their own backend agent.
 - `edgee stats` (visible alias `report`) — session token counts and compression savings.
-- `edgee statusline` — renders/manages the Claude Code statusline integration (README's Statusline
-  section has the install/doctor/fix flow).
+- `edgee statusline`: renders/manages the Claude Code and Copilot CLI statusline integrations
+  (README's Statusline section has the install/doctor/fix flow).
 - `edgee alias` — installs CLI PATH shims/shell aliases and desktop app wrappers (`cursor`,
   `copilot-vscode`) when the host app is installed.
 - `edgee relay` — hidden (`hide = true`). Local MITM proxy powering the app launch targets;

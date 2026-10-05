@@ -362,6 +362,22 @@ and stays silent otherwise.
 | `EDGEE_SILENCE_CONFLICT_WARNING` | unset | Set to `1` to silence the `SessionStart` warning. Per-user via shell env, or per-project via `.claude/settings.local.json`'s `env` block. |
 | `EDGEE_NO_UPDATE_CHECK` | unset | Set to `1` to skip the background check for a newer CLI release. |
 
+### GitHub Copilot CLI
+
+`edgee launch copilot-cli` shows the same statusline in Copilot CLI. The first launch sets
+`statusLine.command = "edgee statusline render"` in `~/.copilot/settings.json` (or
+`$COPILOT_HOME/settings.json`), only if you don't already have a statusLine. Outside `edgee launch`
+the segment renders nothing.
+
+```bash
+edgee statusline copilot install          # run the install manually (idempotent)
+edgee statusline copilot install --wrap   # show Edgee next to your own statusLine
+edgee statusline copilot disable          # turn it off (unwraps yours if it was wrapped)
+edgee statusline copilot enable           # turn it back on
+```
+
+Its markers are `statusline-copilot.installed` and `statusline-copilot.disabled`, next to Claude's.
+
 ---
 
 ## Supported agents
