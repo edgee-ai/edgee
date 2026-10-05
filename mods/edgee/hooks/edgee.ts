@@ -118,7 +118,7 @@ export function register(on: On) {
 
   on("ui.press", { plugin: "edgee", element: "expand" }, async ($, e, next) => {
     const result = await next(e);
-    await openPane($, { focus: false });
+    await openPane($);
     return result;
   });
 
@@ -130,6 +130,7 @@ export function register(on: On) {
       recent: (await $.state.get(requests)).value ?? [],
       totals: (await $.state.get(models)).value ?? {},
       columns: e.props.bodyColumns,
+      clickable: e.viewport?.isFullscreen === true,
     });
   });
 
@@ -415,7 +416,7 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
           row([
             active ? span(" ⇄ REROUTED ", { backgroundColor: "#7C3AED", color: "white", bold: true }) : span(" ● DIRECT ", { backgroundColor: "#065F46", color: "white", bold: true }),
             span(" "),
-            Button({ key: "minimize", label: "–", hotkey: "m", onPress: () => {} }),
+            Button({ key: "minimize", label: "–", onPress: () => {} }),
           ]),
         ],
         { justifyContent: "space-between" },
@@ -534,15 +535,16 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
       Box({ flexDirection: "column", paddingX: 1, children: served }),
       rule("Recent requests"),
       Box({ flexDirection: "column", paddingX: 1, children: timeline }),
-      row([span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("m", { color: ACCENT, bold: true }), span(" minimize  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" back", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
+      row([span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span("  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" back", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
     ],
   });
 }
 
-type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns">;
+// `clickable`: the surface reports mouse clicks (fullscreen only); otherwise the band names its keys.
+type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns"> & { clickable: boolean };
 
 // The minimized pane: one line above the prompt, where requests go and what they cost.
-function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, totals, columns }: BandData): RenderElement {
+function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, totals, columns, clickable }: BandData): RenderElement {
   const sum = sumTotals(totals);
   const lastServed = [...recent].reverse().find((r) => r.served)?.served;
   const served = lastServed ? withProvider(lastServed, catalog) : undefined;
@@ -564,7 +566,14 @@ function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, to
           Text({ dimColor: true, wrap: "truncate-end", children: ` · ${facts}` }),
         ],
       }),
-      Button({ key: "expand", label: "+", hotkey: "o", onPress: () => {} }),
+      Box({
+        flexDirection: "row",
+        flexShrink: 0,
+        children: [
+          ...(clickable ? [] : [Text({ dimColor: true, children: "ctrl+x tab, o  " })]),
+          Button({ key: "expand", label: "+", hotkey: "o", onPress: () => {} }),
+        ],
+      }),
     ],
   });
 }
