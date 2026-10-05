@@ -90,29 +90,28 @@ fn clean_settings(value: &mut Value) -> bool {
 }
 
 fn is_plain_command(command: &str) -> bool {
-    let parts: Vec<_> = command.split_whitespace().collect();
-    matches!(
-        parts.as_slice(),
-        ["edgee", "statusline"] | ["edgee", "statusline", "render"]
-    ) || (parts.len() == 1
-        && (command.trim().ends_with("/edgee/statusline.sh")
-            || command.trim().ends_with("/edgee/statusline-wrapper.sh")))
+    let is_edgee_statusline = split_edgee_invocation(command).is_some_and(|(_, args)| {
+        matches!(
+            args.split_whitespace().collect::<Vec<_>>().as_slice(),
+            ["statusline"] | ["statusline", "render"]
+        )
+    });
+    is_edgee_statusline
+        || (command.split_whitespace().count() == 1
+            && (command.trim().ends_with("/edgee/statusline.sh")
+                || command.trim().ends_with("/edgee/statusline-wrapper.sh")))
 }
 
 /// Decode only the single-quoted form Edgee wrote, including escaped apostrophes.
 /// Refuse shell suffixes and malformed quoting instead of losing custom commands.
 fn unwrap_command(command: &str) -> Option<String> {
-    let command = command.trim();
-    let quoted = [
-        "edgee statusline wrap ",
-        "edgee statusline --wrap ",
-        "edgee statusline-wrap ",
-    ]
-    .iter()
-    .find_map(|prefix| command.strip_prefix(prefix))?
-    .trim();
+    let (env, args) = split_edgee_invocation(command)?;
+    let quoted = ["statusline wrap ", "statusline --wrap ", "statusline-wrap "]
+        .iter()
+        .find_map(|prefix| args.trim().strip_prefix(prefix))?
+        .trim();
     let body = quoted.strip_prefix('\'')?.strip_suffix('\'')?;
-    let mut result = String::new();
+    let mut result = env.iter().map(|var| format!("{var} ")).collect::<String>();
     let mut remaining = body;
     while let Some(index) = remaining.find('\'') {
         result.push_str(&remaining[..index]);
@@ -123,17 +122,48 @@ fn unwrap_command(command: &str) -> Option<String> {
     Some(result)
 }
 
+/// Split `[VAR=value ...] [/path/to/]edgee args` as users customised it (e.g.
+/// `EDGEE_STATUSLINE_LAYOUT=stacked ~/bin/edgee statusline ...`). Returns the
+/// non-Edgee env assignments to keep, and the arguments after the binary.
+fn split_edgee_invocation(command: &str) -> Option<(Vec<&str>, &str)> {
+    let mut env = Vec::new();
+    let mut rest = command.trim_start();
+    loop {
+        let (token, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        if is_env_assignment(token) {
+            if !token.starts_with("EDGEE_") {
+                env.push(token);
+            }
+            rest = tail.trim_start();
+            continue;
+        }
+        let program = token.rsplit(['/', '\\']).next()?;
+        return (program == "edgee" || program.eq_ignore_ascii_case("edgee.exe"))
+            .then_some((env, tail));
+    }
+}
+
+fn is_env_assignment(token: &str) -> bool {
+    token.split_once('=').is_some_and(|(name, value)| {
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !value.contains(['\'', '"', '`', '$', '\\'])
+    })
+}
+
 fn is_doctor_hook(value: &Value) -> bool {
     let Some(command) = value.get("command").and_then(Value::as_str) else {
         return false;
     };
-    let parts: Vec<_> = command.split_whitespace().collect();
+    let Some((_, args)) = split_edgee_invocation(command) else {
+        return false;
+    };
     matches!(
-        parts.as_slice(),
-        ["edgee", "statusline", "claude", "doctor"]
-            | ["edgee", "statusline", "claude", "doctor", "--warn-only"]
-            | ["edgee", "doctor"]
-            | ["edgee", "doctor", "--warn-only"]
+        args.split_whitespace().collect::<Vec<_>>().as_slice(),
+        ["statusline", "claude", "doctor"]
+            | ["statusline", "claude", "doctor", "--warn-only"]
+            | ["doctor"]
+            | ["doctor", "--warn-only"]
     )
 }
 
@@ -181,12 +211,41 @@ mod tests {
     }
 
     #[test]
+    fn unwraps_commands_with_env_prefix_and_binary_path() {
+        for (command, expected) in [
+            (
+                "EDGEE_STATUSLINE_LAYOUT=stacked /home/user/local/bin/edgee statusline wrap 'mise exec -- ccstatusline'",
+                "mise exec -- ccstatusline",
+            ),
+            (
+                "FOO=1 EDGEE_X=y ~/.local/bin/edgee statusline wrap 'ccusage statusline'",
+                "FOO=1 ccusage statusline",
+            ),
+        ] {
+            let mut value =
+                json!({"statusLine": {"type": "command", "command": command, "refreshInterval": 10}});
+            assert!(clean_settings(&mut value));
+            assert_eq!(value["statusLine"]["command"], expected);
+            assert_eq!(value["statusLine"]["refreshInterval"], 10);
+        }
+        let mut value = json!({
+            "statusLine": {"command": "EDGEE_STATUSLINE_LAYOUT=stacked /opt/edgee statusline"},
+            "hooks": {"SessionStart": [{"command": "/opt/edgee doctor --warn-only"}]}
+        });
+        assert!(clean_settings(&mut value));
+        assert!(value.get("statusLine").is_none());
+        assert_eq!(value["hooks"]["SessionStart"], json!([]));
+    }
+
+    #[test]
     fn leaves_custom_commands_and_malformed_wrappers_untouched() {
         for command in [
             "echo 'edgee statusline'",
             "edgee statusline wrap 'foo' && echo hi",
             "edgee statusline wrap 'broken",
             "ccusage statusline",
+            "/usr/bin/not-edgee statusline wrap 'foo'",
+            "FOO=\"a b\" edgee statusline wrap 'foo'",
         ] {
             let mut value = json!({"statusLine": {"command": command}, "hooks": {"SessionStart": [{"command": "echo 'edgee doctor'"}]}});
             assert!(!clean_settings(&mut value));
