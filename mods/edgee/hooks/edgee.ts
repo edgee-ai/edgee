@@ -10,7 +10,7 @@
 //   /edgee minimize           fold the pane into one line above the prompt (its [–] does too; the line's [+] unfolds it)
 
 import type { EngineInterface, On, RenderElement, TextProps, BoxProps, TurnStepInput, TurnStepResult } from "claude-code";
-import type { EdgeeModelTotals, EdgeePicker, EdgeeRequest, EdgeeReroute } from "../types/index.d.ts";
+import type { EdgeeModelTotals, EdgeePicker, EdgeeRequest, EdgeeReroute, EdgeeSavings } from "../types/index.d.ts";
 
 type $ = EngineInterface;
 type Elements = ReturnType<$["ui"]["resolve"]>;
@@ -38,6 +38,8 @@ const models = { plugin: "edgee", key: "models" } as const; // session totals pe
 const catalog = { plugin: "edgee", key: "catalog" } as const; // models the selector offers
 const picker = { plugin: "edgee", key: "picker" } as const; // the selector's filter, duration and last notice
 const minimized = { plugin: "edgee", key: "minimized" } as const; // the pane folded into a line above the prompt
+const savings = { plugin: "edgee", key: "savings" } as const;
+let refreshingSavings = false;
 // Start minimized by default; remember an explicit choice across sessions.
 const MINIMIZED_KEY = "minimized";
 
@@ -54,12 +56,20 @@ export function register(on: On) {
     // Start with the compact line unless the user last left the pane expanded.
     // Restoring the pane does not take the keyboard.
     if (!folded) await openPane($, { focus: false });
+    if (await $.env.get("EDGEE_CLI_PATH")) {
+      void refreshSavings($).catch(() => {}); // the host may unload during a refresh
+      // Analytics can arrive after the turn ends; keep refreshing while idle too.
+      $.clock.every(30_000, () => void refreshSavings($).catch(() => {}));
+    }
     return result;
   });
 
   on("turn.complete", async ($, e, next) => {
     const result = await next(e);
-    if (!e.agentId) await current($); // drop the reroute once expired, so the pane and band redraw
+    if (!e.agentId) {
+      await current($); // drop the reroute once expired, so the pane and band redraw
+      void refreshSavings($).catch(() => {});
+    }
     return result;
   });
 
@@ -80,6 +90,7 @@ export function register(on: On) {
       picker: (await $.state.get(picker)).value ?? {},
       recent: (await $.state.get(requests)).value ?? [],
       totals: (await $.state.get(models)).value ?? {},
+      savings: (await $.state.get(savings)).value,
       columns: e.props.bodyColumns,
       clickable: e.viewport?.isFullscreen === true,
       isFocused: e.props.isFocused,
@@ -134,6 +145,7 @@ export function register(on: On) {
       catalog: (await $.state.get(catalog)).value ?? [],
       recent: (await $.state.get(requests)).value ?? [],
       totals: (await $.state.get(models)).value ?? {},
+      savings: (await $.state.get(savings)).value,
       columns: e.props.bodyColumns,
       clickable: e.viewport?.isFullscreen === true,
     });
@@ -371,6 +383,46 @@ async function record($: $, e: TurnStepInput, result: TurnStepResult | undefined
   });
 }
 
+// Use the CLI's profile-aware authentication; credentials never enter plugin state.
+// Replace the snapshot each time: the API totals already cover the whole session.
+async function refreshSavings($: $): Promise<void> {
+  if (refreshingSavings) return;
+  refreshingSavings = true;
+  try {
+    const binary = await $.env.get("EDGEE_CLI_PATH");
+    const sessionId = await $.env.get("EDGEE_SESSION_ID");
+    if (!binary || !sessionId) return;
+    const profile = await $.env.get("EDGEE_PROFILE");
+    const result = await $.process.run(
+      [binary, ...(profile ? ["--profile", profile] : []), "stats", "--json", "--session", sessionId],
+      { timeoutMs: 10_000, env: { EDGEE_NO_UPDATE_CHECK: "1" } },
+    );
+    if (result.exitCode !== 0 || result.isStdoutTruncated) throw new Error("Savings unavailable");
+    const value = JSON.parse(result.stdout);
+    const input = nano(value.total_token_cost_savings);
+    const output = nano(value.total_output_cost_savings);
+    await $.state.set(savings, {
+      compression: input !== null && output !== null ? input + output : null,
+      rerouting: nano(value.estimated_routing_savings),
+    });
+  } catch {
+    const { value } = await $.state.get(savings);
+    await $.state.set(savings, { compression: null, rerouting: null, ...value, stale: true });
+  } finally {
+    refreshingSavings = false;
+  }
+}
+
+function nano(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function dollars(nano: number | null | undefined): string {
+  if (nano == null) return "—";
+  if (nano > 0 && nano < 10_000_000) return "<$0.01";
+  return `$${(nano / 1_000_000_000).toFixed(2)}`;
+}
+
 // The pane's palette: Edgee's accent, and one hue per provider so a model reads at a glance.
 const ACCENT = "#A78BFA";
 const PROVIDER_COLORS: Record<string, string> = {
@@ -396,12 +448,13 @@ type PaneData = {
   picker: EdgeePicker;
   recent: EdgeeRequest[];
   totals: Record<string, EdgeeModelTotals>;
+  savings: EdgeeSavings | undefined;
   columns: number;
   clickable: boolean; // the surface reports mouse clicks (fullscreen only): buttons are drawn only there
   isFocused: boolean;
 };
 
-function paneView(elements: Elements, { sessionId, active, catalog, picker, recent, totals, columns, clickable, isFocused }: PaneData): RenderElement {
+function paneView(elements: Elements, { sessionId, active, catalog, picker, recent, totals, savings, columns, clickable, isFocused }: PaneData): RenderElement {
   const { Box, Text, Button } = elements;
   const inner = Math.max(24, columns - 4); // inside a card's border and padding
   const span = (children: string, props: Omit<TextProps, "children"> = {}) => Text({ ...props, children });
@@ -449,6 +502,8 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
   const stats = [
     row([tile("requests", String(sum.requests), ACCENT), tile("input", short(sum.input), "cyan"), tile("cached", short(sum.cached), "green"), tile("output", short(sum.output), "yellow")]),
     row([span(" cache hit ", { dimColor: true }), span("█".repeat(Math.round(hit * barWidth)), { color: "green" }), span("░".repeat(barWidth - Math.round(hit * barWidth)), { dimColor: true }), span(` ${Math.round(hit * 100)}%`, { color: "green", bold: true })]),
+    row([tile("rerouting saved (est.)", dollars(savings?.rerouting), ACCENT), tile("compression saved", dollars(savings?.compression), "green")]),
+    span(savings?.stale ? "Savings refresh unavailable · showing last known amounts" : "Session savings · USD · updates every 30s · — unavailable", { dimColor: true }),
   ];
 
   // ── Route: the selector.
@@ -602,14 +657,14 @@ function splitOnce(text: string, sep: string): [string, string] {
   return at < 0 ? [text, ""] : [text.slice(0, at), text.slice(at + sep.length)];
 }
 
-type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns" | "clickable">;
+type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "savings" | "columns" | "clickable">;
 
 // The minimized pane: one line above the prompt, where requests go and what they cost.
-function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, totals, columns, clickable }: BandData): RenderElement {
+function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, totals, savings, columns, clickable }: BandData): RenderElement {
   const sum = sumTotals(totals);
   const lastServed = [...recent].reverse().find((r) => r.served)?.served;
   const served = lastServed ? withProvider(lastServed, catalog) : undefined;
-  const facts = [`${sum.requests} req`, `${short(sum.input + sum.cached)}↑ ${short(sum.output)}↓`, `${Math.round(cacheHit(sum) * 100)}% cache`].join(" · ");
+  const facts = [`saved ⇄ ${dollars(savings?.rerouting)} est. / compression ${dollars(savings?.compression)}${savings?.stale ? " (stale)" : ""}`, `${sum.requests} req`, `${short(sum.input + sum.cached)}↑ ${short(sum.output)}↓`, `${Math.round(cacheHit(sum) * 100)}% cache`].join(" · ");
   return Box({
     flexDirection: "row",
     justifyContent: "space-between",

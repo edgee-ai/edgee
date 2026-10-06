@@ -15,13 +15,72 @@ function text(value: unknown) {
 }
 
 describe("edgee", () => {
+  test("refreshes session savings, preserves unknown values, and marks failed refreshes stale", async ($, on) => {
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("command.register", ($, e) => ({ value: { command: e.name } }));
+    const env: Record<string, string> = { EDGEE_SESSION_ID: "sess-1", EDGEE_CLI_PATH: "/edgee/bin/edgee", EDGEE_PROFILE: "dev" };
+    on("env.get", ($, e) => ({ value: env[e.name] }));
+    on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Box({ children: [] }));
+    const clock = mock.clock(on);
+    mock.store(on);
+    let payload: unknown = { total_token_cost_savings: 1_000_000_000, total_output_cost_savings: 250_000_000, estimated_routing_savings: 2_500_000_000 };
+    let exitCode = 0;
+    let calls = 0;
+    on("process.run", ($, e) => {
+      calls++;
+      expect(e.argv).toEqual(["/edgee/bin/edgee", "--profile", "dev", "stats", "--json", "--session", "sess-1"]);
+      expect(e.init?.env).toEqual({ EDGEE_NO_UPDATE_CHECK: "1" });
+      return { value: { exitCode, stdout: JSON.stringify(payload), stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
+    });
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const band = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS });
+    // Refreshes run in the background so they never delay a turn or a render.
+    const settled = async (pattern: RegExp) => {
+      for (let i = 0; i < 50; i++) {
+        if (await band.find({ type: "Text", text: pattern })) return;
+        await new Promise((resolve) => (globalThis as any).setTimeout(resolve, 5));
+      }
+      expect(await band.find({ type: "Text", text: pattern })).toBeDefined();
+    };
+    await settled(/compression \$1.25/);
+    const pane = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    expect(await pane.find({ type: "Text", text: /^\$1\.25$/ })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: /^\$2\.50$/ })).toBeDefined();
+    expect(await band.find({ type: "Text", text: /saved ⇄ \$2.50 est. \/ compression \$1.25/ })).toBeDefined();
+
+    // Updated snapshots replace the previous totals.
+    payload = { total_token_cost_savings: 1_250_000_000, total_output_cost_savings: 250_000_000, estimated_routing_savings: 2_500_000_000 };
+    await clock.advance(30_000);
+    await settled(/compression \$1.50/);
+    exitCode = 1;
+    await clock.advance(30_000);
+    await settled(/compression \$1.50 \(stale\)/);
+    expect(await band.find({ type: "Text", text: /\(stale\)/ })).toBeDefined();
+
+    exitCode = 0;
+    payload = { total_token_cost_savings: 0, total_output_cost_savings: 0, estimated_routing_savings: null };
+    await clock.advance(30_000);
+    await settled(/saved ⇄ — est. \/ compression \$0.00/);
+    expect(await band.find({ type: "Text", text: /saved ⇄ — est. \/ compression \$0.00/ })).toBeDefined();
+    payload = { total_token_cost_savings: 100, total_output_cost_savings: 0, estimated_routing_savings: 1 };
+    await clock.advance(30_000);
+    await settled(/saved ⇄ <\$0.01 est. \/ compression <\$0.01/);
+    expect(await band.find({ type: "Text", text: /saved ⇄ <\$0.01 est. \/ compression <\$0.01/ })).toBeDefined();
+    payload = {};
+    await clock.advance(30_000);
+    await settled(/saved ⇄ — est. \/ compression —/);
+    expect(calls).toBe(6);
+    await pane.unmount();
+    await band.unmount();
+  });
+
   test("reroutes the session through the Edgee MCP server and clears it", async ($, on) => {
     // Hooks registered here run after the mod and stub what Claude Code would answer.
     const calls: { tool: string; args: Record<string, unknown> }[] = [];
     let now = Date.UTC(2026, 9, 2, 10, 0);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
-    on("env.get", () => ({ value: "sess-1" }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
     on("clock.now", () => ({ value: now }));
     const statuses: unknown[] = [];
     on("ui.status", ($, e) => {
@@ -64,7 +123,7 @@ describe("edgee", () => {
   test("lists models by provider, then by filter", async ($, on) => {
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
-    on("env.get", () => ({ value: "sess-1" }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
     on("clock.now", () => ({ value: 0 }));
     on("ui.status", () => ({ value: undefined }));
     on("mcp.call", () => text({ models: MODELS }));
@@ -92,7 +151,7 @@ describe("edgee", () => {
   test("the pane lists each request and the model that served it", async ($, on) => {
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
-    on("env.get", () => ({ value: "4eed308d-9830" }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "4eed308d-9830" : undefined }));
     on("clock.now", () => ({ value: Date.UTC(2026, 9, 2, 10, 0) }));
     on("ui.status", () => ({ value: undefined }));
     on("ui.open", () => ({ value: { isPlaced: true } }));
@@ -137,7 +196,7 @@ describe("edgee", () => {
     const calls: { tool: string; args: Record<string, unknown> }[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
-    on("env.get", () => ({ value: "sess-1" }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
     on("clock.now", () => ({ value: Date.UTC(2026, 9, 2, 10, 0) }));
     on("ui.status", () => ({ value: undefined }));
     on("ui.open", () => ({ value: { isPlaced: true } }));
@@ -202,7 +261,7 @@ describe("edgee", () => {
     const opens: { id: string; focus?: true }[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
-    on("env.get", () => ({ value: "sess-1" }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
     on("clock.now", () => ({ value: 0 }));
     on("ui.status", () => ({ value: undefined }));
     on("mcp.call", () => text({ models: MODELS }));
@@ -227,7 +286,7 @@ describe("edgee", () => {
     let connected = false;
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
-    on("env.get", () => ({ value: "sess-1" }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
     on("ui.status", () => ({ value: undefined }));
     on("ui.open", () => ({ value: { isPlaced: true } }));
     on("mcp.call", () => {
@@ -252,7 +311,7 @@ describe("edgee", () => {
     const closes: string[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
-    on("env.get", () => ({ value: "sess-1" }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
     on("clock.now", () => ({ value: Date.UTC(2026, 9, 2, 10, 0) }));
     on("ui.status", () => ({ value: undefined }));
     on("mcp.call", () => text({ models: MODELS }));
@@ -262,6 +321,7 @@ describe("edgee", () => {
     });
     on("ui.close", ($, e) => {
       closes.push(e.id);
+      return { value: undefined };
     });
     on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Box({ children: [] })); // the band without the mod: empty
     mock.store(on);

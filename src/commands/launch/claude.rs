@@ -108,6 +108,8 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
 
     // Set up the environment for Edgee session tracking and console API access.
     cmd.env("EDGEE_SESSION_ID", &session_id);
+    // The mod reads session savings through this binary, with the launch profile.
+    cmd.env("EDGEE_CLI_PATH", std::env::current_exe()?);
     cmd.env("EDGEE_ORG_ID", creds.org_id.as_deref().unwrap_or_default());
     cmd.env(
         "EDGEE_ORG_SLUG",

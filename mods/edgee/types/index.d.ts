@@ -21,6 +21,9 @@ export type EdgeePicker = {
 
 export type EdgeeModelTotals = { requests: number; input: number; cached: number; output: number };
 
+// Nano-USD from session analytics; null is unavailable, never an assumed zero.
+export type EdgeeSavings = { compression: number | null; rerouting: number | null; stale?: boolean };
+
 declare module "claude-code" {
   interface PluginState {
     "edgee": {
@@ -30,6 +33,7 @@ declare module "claude-code" {
       catalog: string[];
       picker: EdgeePicker;
       minimized: boolean;
+      savings: EdgeeSavings;
     };
   }
 }
