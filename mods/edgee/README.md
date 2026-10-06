@@ -31,6 +31,13 @@ one until the window is wide enough. It shows:
   the model in use. Picking reroutes at once, for 24 h; a spinner shows until
   the gateway confirms;
 - session totals: requests, input, cached and output tokens;
+- a Unicode donut chart of session cost savings, with estimated total saved,
+  percentage cost reduction, and a green/purple/gray legend for compression,
+  routing, and remaining cost. It stacks below the breakdown in narrow panes;
+- session savings in USD: estimated rerouting savings and compression savings
+  (input compression plus output brevity), refreshed every 30 seconds and after
+  each main-agent turn. `—` means unavailable; a failed refresh marks the last
+  known amounts as stale;
 - per served model: request count and tokens;
 - the last 30 API requests, newest first: time, served model, tokens in→out,
   duration, `↳` for subagents, and `asked <model>` when Claude Code asked for
@@ -53,7 +60,8 @@ Esc hands the keyboard back to the prompt.
 
 Minimized, the pane closes and one line above the prompt stands in for it:
 where requests go (`● direct`, or `⇄ <model> until HH:MM`), the last model
-served, and the session's requests, tokens and cache hit. Its `[+]` button, or
+served, rerouting/compression savings, and the session's requests, tokens and
+cache hit (as space permits). Its `[+]` button, or
 `/edgee panel`, brings the pane back. The choice is remembered: subsequent
 sessions restore the last minimized or expanded state.
 
@@ -69,8 +77,15 @@ pre-allows the three reroute tools the mod calls (`listSessionModels`,
 ## Limits
 
 The mod replaces Edgee's legacy statusline. Without mod support or Edgee MCP,
-there is no Edgee inline display. Gateway cost, reasoning-token totals, and
+there is no Edgee inline display. Gateway spend, reasoning-token totals, and
 fallback alerts are not shown by this mod; consult the Edgee console.
+
+Savings come from session analytics through `edgee stats --json --session <id>`,
+using the CLI binary and profile that launched Claude. They include the whole
+gateway session (including background calls) and may lag behind the request
+timeline. Routing savings are estimates for requests with available pricing;
+they are not inferred from model names. The CLI needs a signed-in profile to
+read them. Older launchers without `EDGEE_CLI_PATH` show unavailable amounts.
 
 - No tool reads a reroute back, so the pane reflects only what this mod
   set in this session. A reroute changed elsewhere leaves it stale.

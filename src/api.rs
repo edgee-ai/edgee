@@ -650,6 +650,15 @@ pub struct SessionRerouteRequest<'a> {
     pub expires_at: &'a str,
 }
 
+/// Session savings in nano-USD. Missing fields mean unavailable, not zero.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SessionSavings {
+    pub total_cost: Option<u64>,
+    pub total_token_cost_savings: Option<u64>,
+    pub total_output_cost_savings: Option<u64>,
+    pub estimated_routing_savings: Option<u64>,
+}
+
 impl ApiClient {
     pub fn new(token: &str) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
@@ -1025,6 +1034,29 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Reads live session savings without closing the session.
+    pub async fn get_session_savings(
+        &self,
+        org_id: &str,
+        session_id: &str,
+    ) -> Result<SessionSavings> {
+        let mut url = reqwest::Url::parse(&self.base_url)?;
+        url.path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("Invalid console API URL"))?
+            .pop_if_empty()
+            .extend(["v1", "organizations", org_id, "sessions", session_id]);
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Failed to read session savings; check your connection and try again")?;
+        check_status(&resp, "read session savings")?;
+        resp.json()
+            .await
+            .context("Invalid session savings response")
+    }
+
     /// Closes the session and returns its stats.
     ///
     /// `None` means the gateway never saw this session (404) — the agent ran but
@@ -1093,6 +1125,60 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn session_savings_reads_without_ending_session_and_preserves_unknowns() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for (status, body) in [
+            (
+                "200 OK",
+                r#"{"total_cost":100,"total_token_cost_savings":0,"total_output_cost_savings":42,"estimated_routing_savings":null}"#,
+            ),
+            ("200 OK", "{}"),
+            ("404 Not Found", "{}"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buf = [0; 1024];
+                    let count = stream.read(&mut buf).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buf[..count]);
+                    if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                String::from_utf8(request).unwrap()
+            });
+            let mut client = super::ApiClient::new("test-token").unwrap();
+            client.base_url = format!("http://{address}");
+            let result = client.get_session_savings("org", "session").await;
+            let request = server.await.unwrap();
+            assert!(request.starts_with("GET /v1/organizations/org/sessions/session HTTP/1.1"));
+            assert!(request
+                .to_lowercase()
+                .contains("authorization: bearer test-token"));
+            if status == "200 OK" {
+                let value = serde_json::to_value(result.unwrap()).unwrap();
+                assert!(value["estimated_routing_savings"].is_null());
+                if body == "{}" {
+                    assert!(value["total_token_cost_savings"].is_null());
+                    assert!(value["total_cost"].is_null());
+                } else {
+                    assert_eq!(value["total_cost"], 100);
+                    assert_eq!(value["total_token_cost_savings"], 0);
+                    assert_eq!(value["total_output_cost_savings"], 42);
+                }
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
+
     #[tokio::test]
     async fn session_reroute_sends_authenticated_put_and_propagates_rejection() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
