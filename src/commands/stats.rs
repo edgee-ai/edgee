@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use console::style;
 use serde::Serialize;
 
@@ -17,6 +17,9 @@ setup_command! {
     /// Use local session logs even when logged in (JSON).
     #[arg(long)]
     pub local: bool,
+    /// Read live savings for one session (JSON, nano-USD).
+    #[arg(long, requires = "json", conflicts_with_all = ["local", "limit"])]
+    pub session: Option<String>,
 }
 
 /// Compression percentage from before/after tool-token totals, or `None` when
@@ -220,6 +223,16 @@ fn fmt_compression_cell(before: u64, after: u64) -> (String, bool) {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
+    if let Some(session_id) = opts.session {
+        let creds = crate::config::read()?;
+        let token = creds.user_token.as_deref().filter(|s| !s.is_empty())
+            .context("Log in with `edgee auth login` to read session savings")?;
+        let org = creds.org_id.as_deref().filter(|s| !s.is_empty())
+            .context("Select an organization with `edgee auth login` to read session savings")?;
+        let savings = crate::api::ApiClient::new(token)?
+            .get_session_savings(org, &session_id).await?;
+        return util::emit_json(&savings);
+    }
     let logs = util::read_all_session_logs()?;
 
     if opts.json {

@@ -10,7 +10,7 @@
 //   /edgee minimize           fold the pane into one line above the prompt (its [–] does too; the line's [+] unfolds it)
 
 import type { EngineInterface, On, RenderElement, TextProps, BoxProps, TurnStepInput, TurnStepResult } from "claude-code";
-import type { EdgeeModelTotals, EdgeePicker, EdgeeRequest, EdgeeReroute } from "../types/index.d.ts";
+import type { EdgeeModelTotals, EdgeePicker, EdgeeRequest, EdgeeReroute, EdgeeSavings } from "../types/index.d.ts";
 
 type $ = EngineInterface;
 type Elements = ReturnType<$["ui"]["resolve"]>;
@@ -38,6 +38,8 @@ const models = { plugin: "edgee", key: "models" } as const; // session totals pe
 const catalog = { plugin: "edgee", key: "catalog" } as const; // models the selector offers
 const picker = { plugin: "edgee", key: "picker" } as const; // the selector's filter, duration and last notice
 const minimized = { plugin: "edgee", key: "minimized" } as const; // the pane folded into a line above the prompt
+const savings = { plugin: "edgee", key: "savings" } as const;
+let refreshingSavings = false;
 // Start minimized by default; remember an explicit choice across sessions.
 const MINIMIZED_KEY = "minimized";
 
@@ -54,12 +56,20 @@ export function register(on: On) {
     // Start with the compact line unless the user last left the pane expanded.
     // Restoring the pane does not take the keyboard.
     if (!folded) await openPane($, { focus: false });
+    if (await $.env.get("EDGEE_CLI_PATH")) {
+      void refreshSavings($).catch(() => {}); // the host may unload during a refresh
+      // Analytics can arrive after the turn ends; keep refreshing while idle too.
+      $.clock.every(30_000, () => void refreshSavings($).catch(() => {}));
+    }
     return result;
   });
 
   on("turn.complete", async ($, e, next) => {
     const result = await next(e);
-    if (!e.agentId) await current($); // drop the reroute once expired, so the pane and band redraw
+    if (!e.agentId) {
+      await current($); // drop the reroute once expired, so the pane and band redraw
+      void refreshSavings($).catch(() => {});
+    }
     return result;
   });
 
@@ -80,6 +90,7 @@ export function register(on: On) {
       picker: (await $.state.get(picker)).value ?? {},
       recent: (await $.state.get(requests)).value ?? [],
       totals: (await $.state.get(models)).value ?? {},
+      savings: (await $.state.get(savings)).value,
       columns: e.props.bodyColumns,
       clickable: e.viewport?.isFullscreen === true,
       isFocused: e.props.isFocused,
@@ -134,6 +145,7 @@ export function register(on: On) {
       catalog: (await $.state.get(catalog)).value ?? [],
       recent: (await $.state.get(requests)).value ?? [],
       totals: (await $.state.get(models)).value ?? {},
+      savings: (await $.state.get(savings)).value,
       columns: e.props.bodyColumns,
       clickable: e.viewport?.isFullscreen === true,
     });
@@ -371,6 +383,47 @@ async function record($: $, e: TurnStepInput, result: TurnStepResult | undefined
   });
 }
 
+// Use the CLI's profile-aware authentication; credentials never enter plugin state.
+// Replace the snapshot each time: the API totals already cover the whole session.
+async function refreshSavings($: $): Promise<void> {
+  if (refreshingSavings) return;
+  refreshingSavings = true;
+  try {
+    const binary = await $.env.get("EDGEE_CLI_PATH");
+    const sessionId = await $.env.get("EDGEE_SESSION_ID");
+    if (!binary || !sessionId) return;
+    const profile = await $.env.get("EDGEE_PROFILE");
+    const result = await $.process.run(
+      [binary, ...(profile ? ["--profile", profile] : []), "stats", "--json", "--session", sessionId],
+      { timeoutMs: 10_000, env: { EDGEE_NO_UPDATE_CHECK: "1" } },
+    );
+    if (result.exitCode !== 0 || result.isStdoutTruncated) throw new Error("Savings unavailable");
+    const value = JSON.parse(result.stdout);
+    const input = nano(value.total_token_cost_savings);
+    const output = nano(value.total_output_cost_savings);
+    await $.state.set(savings, {
+      compression: input !== null && output !== null ? input + output : null,
+      rerouting: nano(value.estimated_routing_savings),
+      remaining: nano(value.total_cost),
+    });
+  } catch {
+    const { value } = await $.state.get(savings);
+    await $.state.set(savings, { compression: null, rerouting: null, remaining: null, ...value, stale: true });
+  } finally {
+    refreshingSavings = false;
+  }
+}
+
+function nano(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function dollars(nano: number | null | undefined): string {
+  if (nano == null) return "—";
+  if (nano > 0 && nano < 10_000_000) return "<$0.01";
+  return `$${(nano / 1_000_000_000).toFixed(2)}`;
+}
+
 // The pane's palette: Edgee's accent, and one hue per provider so a model reads at a glance.
 const ACCENT = "#A78BFA";
 const PROVIDER_COLORS: Record<string, string> = {
@@ -396,12 +449,13 @@ type PaneData = {
   picker: EdgeePicker;
   recent: EdgeeRequest[];
   totals: Record<string, EdgeeModelTotals>;
+  savings: EdgeeSavings | undefined;
   columns: number;
   clickable: boolean; // the surface reports mouse clicks (fullscreen only): buttons are drawn only there
   isFocused: boolean;
 };
 
-function paneView(elements: Elements, { sessionId, active, catalog, picker, recent, totals, columns, clickable, isFocused }: PaneData): RenderElement {
+function paneView(elements: Elements, { sessionId, active, catalog, picker, recent, totals, savings, columns, clickable, isFocused }: PaneData): RenderElement {
   const { Box, Text, Button } = elements;
   const inner = Math.max(24, columns - 4); // inside a card's border and padding
   const span = (children: string, props: Omit<TextProps, "children"> = {}) => Text({ ...props, children });
@@ -449,6 +503,7 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
   const stats = [
     row([tile("requests", String(sum.requests), ACCENT), tile("input", short(sum.input), "cyan"), tile("cached", short(sum.cached), "green"), tile("output", short(sum.output), "yellow")]),
     row([span(" cache hit ", { dimColor: true }), span("█".repeat(Math.round(hit * barWidth)), { color: "green" }), span("░".repeat(barWidth - Math.round(hit * barWidth)), { dimColor: true }), span(` ${Math.round(hit * 100)}%`, { color: "green", bold: true })]),
+    savingsCard(elements, savings, inner),
   ];
 
   // ── Route: the selector.
@@ -533,6 +588,75 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
   });
 }
 
+const COMPRESSION_COLOR = "#55B98A";
+const ROUTING_COLOR = "#B12ACB";
+const REMAINING_COLOR = "#60566B";
+
+function savingsCard({ Box, Text }: Elements, savings: EdgeeSavings | undefined, width: number): RenderElement {
+  const compression = savings?.compression;
+  const routing = savings?.rerouting;
+  const remaining = savings?.remaining;
+  const saved = compression != null && routing != null ? compression + routing : null;
+  const baseline = saved != null && remaining != null ? saved + remaining : null;
+  const percent = (value: number | null | undefined) => value != null && baseline != null && baseline > 0
+    ? `${(100 * value / baseline).toFixed(1)}%` : "—";
+  const legend = [
+    ["Compression savings", compression, COMPRESSION_COLOR],
+    ["Routing savings", routing, ROUTING_COLOR],
+    ["Remaining cost", remaining, REMAINING_COLOR],
+  ] as const;
+  const details = Box({ flexDirection: "column", flexGrow: 1, children: [
+    Text({ bold: true, children: dollars(saved) }),
+    Text({ dimColor: true, children: "Estimated total saved" }),
+    Text({ children: `${percent(saved)} cost reduction` }),
+    ...legend.map(([label, value, color]) => Box({ flexDirection: "row", marginTop: 1, children: [
+      Text({ color, children: "● " }),
+      Text({ dimColor: true, children: `${label}  ` }),
+      Text({ children: dollars(value) }),
+      ...(label !== "Remaining cost" ? [Text({ dimColor: true, children: ` (${percent(value)})` })] : []),
+    ] })),
+  ] });
+  return Box({ flexDirection: "column", borderStyle: "round", borderColor: ROUTING_COLOR, paddingX: 1, marginTop: 1, children: [
+    Text({ bold: true, children: "Cost savings" }),
+    Box({ flexDirection: width >= 64 ? "row" : "column", alignItems: "center", columnGap: 2, marginTop: 1, children: [
+      details,
+      savingsDonut({ Box, Text }, baseline && saved != null ? [compression! / baseline, routing! / baseline] : [0, 0], percent(saved)),
+    ] }),
+    Text({ dimColor: true, children: savings?.stale ? "Refresh unavailable · last known amounts" : "Session estimates · USD · — unavailable" }),
+  ] });
+}
+
+// Braille provides 2×4 dots per terminal cell: a round ring without image support.
+// Color each cell by its angle; all numeric labels use the exact savings amounts.
+function savingsDonut({ Box, Text }: Pick<Elements, "Box" | "Text">, [compression, routing]: [number, number], label: string): RenderElement {
+  const width = 21;
+  const height = 9;
+  const dots = [[1, 8], [2, 16], [4, 32], [64, 128]];
+  const rows: RenderElement[] = [];
+  for (let y = 0; y < height; y++) {
+    const cells: RenderElement[] = [];
+    for (let x = 0; x < width; x++) {
+      if (y === 4 && x === 7) {
+        cells.push(Text({ bold: true, children: label.padStart(6).padEnd(7) }));
+        x += 6;
+        continue;
+      }
+      let mask = 0;
+      for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 2; dx++) {
+        const px = (x * 2 + dx + 0.5 - width) / width;
+        const py = (y * 4 + dy + 0.5 - height * 2) / (height * 2);
+        const radius = px * px + py * py;
+        if (radius >= 0.52 && radius <= 1) mask |= dots[dy]![dx]!;
+      }
+      const angle = (Math.atan2((x + 0.5 - width / 2) / width, -(y + 0.5 - height / 2) / height) / (2 * Math.PI) + 1) % 1;
+      const color = angle < compression ? COMPRESSION_COLOR : angle < compression + routing ? ROUTING_COLOR : REMAINING_COLOR;
+      cells.push(Text({ color, children: mask ? String.fromCharCode(0x2800 + mask) : " " }));
+    }
+    rows.push(Box({ flexDirection: "row", children: cells }));
+  }
+  return Box({ flexDirection: "column", width, flexShrink: 0, children: rows });
+}
+
 // The models containing `filter`, those whose provider or name starts with it
 // first ("qwen" lists qwen/… before deepseek/…-qwen-14b), newest version first.
 function matching(models: string[], filter: string): string[] {
@@ -602,14 +726,14 @@ function splitOnce(text: string, sep: string): [string, string] {
   return at < 0 ? [text, ""] : [text.slice(0, at), text.slice(at + sep.length)];
 }
 
-type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "columns" | "clickable">;
+type BandData = Pick<PaneData, "active" | "catalog" | "recent" | "totals" | "savings" | "columns" | "clickable">;
 
 // The minimized pane: one line above the prompt, where requests go and what they cost.
-function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, totals, columns, clickable }: BandData): RenderElement {
+function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, totals, savings, columns, clickable }: BandData): RenderElement {
   const sum = sumTotals(totals);
   const lastServed = [...recent].reverse().find((r) => r.served)?.served;
   const served = lastServed ? withProvider(lastServed, catalog) : undefined;
-  const facts = [`${sum.requests} req`, `${short(sum.input + sum.cached)}↑ ${short(sum.output)}↓`, `${Math.round(cacheHit(sum) * 100)}% cache`].join(" · ");
+  const facts = [`saved ⇄ ${dollars(savings?.rerouting)} est. / compression ${dollars(savings?.compression)}${savings?.stale ? " (stale)" : ""}`, `${sum.requests} req`, `${short(sum.input + sum.cached)}↑ ${short(sum.output)}↓`, `${Math.round(cacheHit(sum) * 100)}% cache`].join(" · ");
   return Box({
     flexDirection: "row",
     justifyContent: "space-between",
