@@ -624,6 +624,7 @@ pub struct SessionRerouteRequest<'a> {
 /// Session savings in nano-USD. Missing fields mean unavailable, not zero.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SessionSavings {
+    pub total_cost: Option<u64>,
     pub total_token_cost_savings: Option<u64>,
     pub total_output_cost_savings: Option<u64>,
     pub estimated_routing_savings: Option<u64>,
@@ -1084,7 +1085,7 @@ mod tests {
         for (status, body) in [
             (
                 "200 OK",
-                r#"{"total_token_cost_savings":0,"total_output_cost_savings":42,"estimated_routing_savings":null}"#,
+                r#"{"total_cost":100,"total_token_cost_savings":0,"total_output_cost_savings":42,"estimated_routing_savings":null}"#,
             ),
             ("200 OK", "{}"),
             ("404 Not Found", "{}"),
@@ -1119,7 +1120,9 @@ mod tests {
                 assert!(value["estimated_routing_savings"].is_null());
                 if body == "{}" {
                     assert!(value["total_token_cost_savings"].is_null());
+                    assert!(value["total_cost"].is_null());
                 } else {
+                    assert_eq!(value["total_cost"], 100);
                     assert_eq!(value["total_token_cost_savings"], 0);
                     assert_eq!(value["total_output_cost_savings"], 42);
                 }

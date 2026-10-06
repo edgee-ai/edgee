@@ -404,10 +404,11 @@ async function refreshSavings($: $): Promise<void> {
     await $.state.set(savings, {
       compression: input !== null && output !== null ? input + output : null,
       rerouting: nano(value.estimated_routing_savings),
+      remaining: nano(value.total_cost),
     });
   } catch {
     const { value } = await $.state.get(savings);
-    await $.state.set(savings, { compression: null, rerouting: null, ...value, stale: true });
+    await $.state.set(savings, { compression: null, rerouting: null, remaining: null, ...value, stale: true });
   } finally {
     refreshingSavings = false;
   }
@@ -502,8 +503,7 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
   const stats = [
     row([tile("requests", String(sum.requests), ACCENT), tile("input", short(sum.input), "cyan"), tile("cached", short(sum.cached), "green"), tile("output", short(sum.output), "yellow")]),
     row([span(" cache hit ", { dimColor: true }), span("█".repeat(Math.round(hit * barWidth)), { color: "green" }), span("░".repeat(barWidth - Math.round(hit * barWidth)), { dimColor: true }), span(` ${Math.round(hit * 100)}%`, { color: "green", bold: true })]),
-    row([tile("rerouting saved (est.)", dollars(savings?.rerouting), ACCENT), tile("compression saved", dollars(savings?.compression), "green")]),
-    span(savings?.stale ? "Savings refresh unavailable · showing last known amounts" : "Session savings · USD · updates every 30s · — unavailable", { dimColor: true }),
+    savingsCard(elements, savings, inner),
   ];
 
   // ── Route: the selector.
@@ -586,6 +586,75 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
         : [span("/edgee panel", { color: ACCENT, bold: true }), span(" focus  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span(" fold", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
     ],
   });
+}
+
+const COMPRESSION_COLOR = "#55B98A";
+const ROUTING_COLOR = "#B12ACB";
+const REMAINING_COLOR = "#60566B";
+
+function savingsCard({ Box, Text }: Elements, savings: EdgeeSavings | undefined, width: number): RenderElement {
+  const compression = savings?.compression;
+  const routing = savings?.rerouting;
+  const remaining = savings?.remaining;
+  const saved = compression != null && routing != null ? compression + routing : null;
+  const baseline = saved != null && remaining != null ? saved + remaining : null;
+  const percent = (value: number | null | undefined) => value != null && baseline != null && baseline > 0
+    ? `${(100 * value / baseline).toFixed(1)}%` : "—";
+  const legend = [
+    ["Compression savings", compression, COMPRESSION_COLOR],
+    ["Routing savings", routing, ROUTING_COLOR],
+    ["Remaining cost", remaining, REMAINING_COLOR],
+  ] as const;
+  const details = Box({ flexDirection: "column", flexGrow: 1, children: [
+    Text({ bold: true, children: dollars(saved) }),
+    Text({ dimColor: true, children: "Estimated total saved" }),
+    Text({ children: `${percent(saved)} cost reduction` }),
+    ...legend.map(([label, value, color]) => Box({ flexDirection: "row", marginTop: 1, children: [
+      Text({ color, children: "● " }),
+      Text({ dimColor: true, children: `${label}  ` }),
+      Text({ children: dollars(value) }),
+      ...(label !== "Remaining cost" ? [Text({ dimColor: true, children: ` (${percent(value)})` })] : []),
+    ] })),
+  ] });
+  return Box({ flexDirection: "column", borderStyle: "round", borderColor: ROUTING_COLOR, paddingX: 1, marginTop: 1, children: [
+    Text({ bold: true, children: "Cost savings" }),
+    Box({ flexDirection: width >= 64 ? "row" : "column", alignItems: "center", columnGap: 2, marginTop: 1, children: [
+      details,
+      savingsDonut({ Box, Text }, baseline && saved != null ? [compression! / baseline, routing! / baseline] : [0, 0], percent(saved)),
+    ] }),
+    Text({ dimColor: true, children: savings?.stale ? "Refresh unavailable · last known amounts" : "Session estimates · USD · — unavailable" }),
+  ] });
+}
+
+// Braille provides 2×4 dots per terminal cell: a round ring without image support.
+// Color each cell by its angle; all numeric labels use the exact savings amounts.
+function savingsDonut({ Box, Text }: Pick<Elements, "Box" | "Text">, [compression, routing]: [number, number], label: string): RenderElement {
+  const width = 21;
+  const height = 9;
+  const dots = [[1, 8], [2, 16], [4, 32], [64, 128]];
+  const rows: RenderElement[] = [];
+  for (let y = 0; y < height; y++) {
+    const cells: RenderElement[] = [];
+    for (let x = 0; x < width; x++) {
+      if (y === 4 && x === 7) {
+        cells.push(Text({ bold: true, children: label.padStart(6).padEnd(7) }));
+        x += 6;
+        continue;
+      }
+      let mask = 0;
+      for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 2; dx++) {
+        const px = (x * 2 + dx + 0.5 - width) / width;
+        const py = (y * 4 + dy + 0.5 - height * 2) / (height * 2);
+        const radius = px * px + py * py;
+        if (radius >= 0.52 && radius <= 1) mask |= dots[dy]![dx]!;
+      }
+      const angle = (Math.atan2((x + 0.5 - width / 2) / width, -(y + 0.5 - height / 2) / height) / (2 * Math.PI) + 1) % 1;
+      const color = angle < compression ? COMPRESSION_COLOR : angle < compression + routing ? ROUTING_COLOR : REMAINING_COLOR;
+      cells.push(Text({ color, children: mask ? String.fromCharCode(0x2800 + mask) : " " }));
+    }
+    rows.push(Box({ flexDirection: "row", children: cells }));
+  }
+  return Box({ flexDirection: "column", width, flexShrink: 0, children: rows });
 }
 
 // The models containing `filter`, those whose provider or name starts with it

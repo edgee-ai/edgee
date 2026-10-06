@@ -31,6 +31,9 @@ one until the window is wide enough. It shows:
   the model in use. Picking reroutes at once, for 24 h; a spinner shows until
   the gateway confirms;
 - session totals: requests, input, cached and output tokens;
+- a Unicode donut chart of session cost savings, with estimated total saved,
+  percentage cost reduction, and a green/purple/gray legend for compression,
+  routing, and remaining cost. It stacks below the breakdown in narrow panes;
 - session savings in USD: estimated rerouting savings and compression savings
   (input compression plus output brevity), refreshed every 30 seconds and after
   each main-agent turn. `—` means unavailable; a failed refresh marks the last

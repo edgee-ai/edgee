@@ -23,7 +23,7 @@ describe("edgee", () => {
     on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Box({ children: [] }));
     const clock = mock.clock(on);
     mock.store(on);
-    let payload: unknown = { total_token_cost_savings: 1_000_000_000, total_output_cost_savings: 250_000_000, estimated_routing_savings: 2_500_000_000 };
+    let payload: unknown = { total_cost: 6_250_000_000, total_token_cost_savings: 1_000_000_000, total_output_cost_savings: 250_000_000, estimated_routing_savings: 2_500_000_000 };
     let exitCode = 0;
     let calls = 0;
     on("process.run", ($, e) => {
@@ -46,6 +46,15 @@ describe("edgee", () => {
     const pane = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
     expect(await pane.find({ type: "Text", text: /^\$1\.25$/ })).toBeDefined();
     expect(await pane.find({ type: "Text", text: /^\$2\.50$/ })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: /^\$3\.75$/ })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: /^\$6\.25$/ })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: /37.5% cost reduction/ })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: /^\s*37.5%\s*$/ })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: /12.5%/ })).toBeDefined();
+    expect(await pane.find({ type: "Text", text: /25.0%/ })).toBeDefined();
+    const ring = await pane.findAll({ type: "Text", text: /[\u2801-\u28ff]/ });
+    expect([...new Set(ring.map(cell => cell.props.color))].sort()).toEqual(["#55B98A", "#60566B", "#B12ACB"]);
+
     expect(await band.find({ type: "Text", text: /saved ⇄ \$2.50 est. \/ compression \$1.25/ })).toBeDefined();
 
     // Updated snapshots replace the previous totals.
