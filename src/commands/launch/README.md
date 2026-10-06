@@ -75,7 +75,8 @@ Avoid ambiguous host-only names like bare `vscode` as a **canonical** target —
 VS Code can host Copilot, Claude Code, etc. Prefer `copilot-vscode`, and later
 `claude-vscode`, not a single `vscode` catch-all.
 
-Exception: `intellij` is the chosen public target for IntelliJ IDEA. It currently
+Exception: `intellij` and `phpstorm` are the chosen public targets for IntelliJ IDEA
+and PHPStorm. Each currently
 routes the GitHub Copilot plugin, shares the `copilot` provider key, and does not
 imply support for other AI plugins in the IDE.
 
@@ -109,6 +110,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 |---|---|---|---|
 | `cursor` | Cursor IDE | `cursor` | Writes Edgee as Cursor's OpenAI-compatible BYOK provider and adds each model's catalog reasoning efforts to Cursor's picker metadata; `edgee relay cursor` restores prior settings and retains the Plan relay |
 | `intellij` | GitHub Copilot in IntelliJ IDEA | `copilot` | Direct IDE launch with proxy env + Node CA; live-session validation pending |
+| `phpstorm` | GitHub Copilot in PHPStorm | `copilot` | Same relay and lifecycle as IntelliJ; live-session validation pending |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + dedicated system-trusted Copilot CA |
 | `copilot-cli` | GitHub Copilot CLI | `copilot` | Relays the `copilot` binary directly (TUI, no `--wait`) — deliberately not env-injected; see below |
@@ -582,3 +584,16 @@ Edgee. A launcher can hand off to an existing IDE and exit, so Edgee keeps servi
 until Ctrl-C. Live Copilot traffic still needs validation with an installed IDE;
 this target is experimental until then. Other AI plugins and remote/cloud agent
 sessions are outside this target's supported scope.
+
+## `phpstorm` — GitHub Copilot in PHPStorm
+
+Quit PHPStorm completely, then run `edgee launch phpstorm /path/to/project`.
+It uses the same Copilot relay, proxy environment, Node CA and editor lifecycle
+as IntelliJ. Install and sign in to the GitHub Copilot plugin, and use **No proxy**
+in the IDE's HTTP Proxy settings so the launch environment applies.
+
+The launcher detects `PhpStorm.app` or `PHPStorm.app` in system/user Applications
+on macOS, or `phpstorm` / `phpstorm.sh` (`phpstorm64.exe` / `phpstorm.exe` on
+Windows) on PATH. Set `EDGEE_PHPSTORM_BINARY` for another executable location.
+`edgee alias phpstorm` installs a desktop wrapper when the IDE is detected.
+Keep the terminal running until the IDE quits. Live Copilot validation is pending.

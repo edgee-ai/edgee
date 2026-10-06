@@ -27,7 +27,7 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 /// Canonical relay targets (same public names as `edgee launch`). See
 /// `src/commands/launch/README.md` for naming rules.
 const TARGETS: &[&str] =
-    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
+    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "phpstorm", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
@@ -46,6 +46,7 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
         "copilot-cli" => Some("copilot-cli"),
         "copilot-desktop" => Some("copilot-desktop"),
         "intellij" => Some("intellij"),
+        "phpstorm" => Some("phpstorm"),
         // GitHub Copilot in VS Code — canonical name is `copilot-vscode`.
         "copilot-vscode" | "vscode-copilot" | "vscode" | "code" => Some("copilot-vscode"),
         _ => None,
@@ -57,9 +58,9 @@ fn is_copilot_vscode(agent: &str) -> bool {
     agent == "copilot-vscode"
 }
 
-/// True for IntelliJ IDEA hosting the GitHub Copilot plugin.
-fn is_intellij(agent: &str) -> bool {
-    agent == "intellij"
+/// True for JetBrains IDEs hosting the GitHub Copilot plugin.
+fn is_jetbrains(agent: &str) -> bool {
+    matches!(agent, "intellij" | "phpstorm")
 }
 
 /// True for the standalone GitHub Copilot app.
@@ -89,7 +90,7 @@ fn is_opencode(agent: &str) -> bool {
 /// Whether this relay target can produce GitHub Copilot traffic. OpenCode is
 /// included because Copilot may be selected in the user's existing config.
 fn intercepts_copilot_hosts(agent: &str) -> bool {
-    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_intellij(agent) || is_copilot_vscode(agent) || is_opencode(agent)
+    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_jetbrains(agent) || is_copilot_vscode(agent) || is_opencode(agent)
 }
 
 /// True for the Cursor relay target (launches the `cursor` binary).
@@ -107,7 +108,7 @@ fn is_claude_desktop(agent: &str) -> bool {
 /// announce per-request), and the gateway forwards to the editor's own backend
 /// rather than routing through an Edgee provider pipeline.
 fn is_gui_editor(agent: &str) -> bool {
-    is_copilot_vscode(agent) || is_intellij(agent) || is_cursor(agent)
+    is_copilot_vscode(agent) || is_jetbrains(agent) || is_cursor(agent)
 }
 
 /// Whether requests retain the agent's existing provider credentials and must
@@ -121,8 +122,10 @@ fn uses_upstream_credentials(agent: &str) -> bool {
 fn editor_app_name(agent: &str) -> &'static str {
     if is_cursor(agent) {
         "Cursor"
-    } else if is_intellij(agent) {
+    } else if agent == "intellij" {
         "IntelliJ IDEA"
+    } else if agent == "phpstorm" {
+        "PHPStorm"
     } else {
         "VS Code"
     }
@@ -174,7 +177,7 @@ fn macos_cli_path_hint(agent: &str) -> Option<&'static [&'static str]> {
 fn key_provider(target: &str) -> &str {
     match target {
         // Copilot surfaces share one provider key and retain GitHub credentials.
-        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" => "copilot",
+        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" | "phpstorm" => "copilot",
         // Claude Desktop is a dedicated backend agent with its own key/compression
         // (coding_assistant `claude_desktop`), so it maps to its own provider slot
         // rather than sharing the `claude` (Claude Code) key.
@@ -186,7 +189,7 @@ fn key_provider(target: &str) -> &str {
 }
 
 setup_command! {
-    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|copilot-vscode|cursor|opencode).
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|phpstorm|copilot-vscode|cursor|opencode).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
@@ -194,7 +197,7 @@ setup_command! {
     #[arg(long)]
     pub no_launch: bool,
     /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200,
-    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700) so multiple relays can
+    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700, phpstorm 41800) so multiple relays can
     /// run side by side.
     #[arg(long)]
     pub port: Option<u16>,
@@ -323,7 +326,7 @@ async fn run_with_reroute(
     };
     let ca = build_ca(&cert_pem, &key_pem)?;
     let port = opts.port.unwrap_or_else(|| {
-        if is_copilot_desktop(&agent) { 41600 } else if is_intellij(&agent) { 41700 } else { default_port(&provider) }
+        if is_copilot_desktop(&agent) { 41600 } else if agent == "intellij" { 41700 } else if agent == "phpstorm" { 41800 } else { default_port(&provider) }
     });
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
@@ -1142,8 +1145,13 @@ fn spawn_agent(
     // NODE_EXTRA_CA_CERTS *and* the --ignore-certificate-errors* switches when
     // passed via argv), so the relay CA must be trusted in the keychain — handled
     // in the System keychain by `ensure_ca_trusted` in `run`.
-    let mut cmd = if is_intellij(agent) {
-        let mut c = tokio::process::Command::new(crate::commands::launch::intellij::binary()?);
+    let mut cmd = if is_jetbrains(agent) {
+        let bin = if agent == "phpstorm" {
+            crate::commands::launch::phpstorm::binary()?
+        } else {
+            crate::commands::launch::intellij::binary()?
+        };
+        let mut c = tokio::process::Command::new(bin);
         c.args(extra_args).stdin(std::process::Stdio::null());
         c
     } else if is_copilot_desktop(agent) {
@@ -1465,12 +1473,12 @@ fn print_claude_desktop_hint() {
 
 fn print_gui_editor_hint(agent: &str) {
     let app = editor_app_name(agent);
-    if is_intellij(agent) {
-        println!("Launching IntelliJ IDEA with Copilot through Edgee.");
-        println!("Quit all IntelliJ IDEA windows first so Copilot receives the connection settings.");
+    if is_jetbrains(agent) {
+        println!("Launching {app} with Copilot through Edgee.");
+        println!("Quit all {app} windows first so Copilot receives the connection settings.");
         println!("Install and sign in to the GitHub Copilot plugin. Usage is grouped under Copilot.");
         println!("IDE HTTP Proxy settings override the launch environment; use No proxy there to use Edgee.");
-        println!("Keep this command running, and quit IntelliJ IDEA before stopping it with Ctrl-C.");
+        println!("Keep this command running, and quit {app} before stopping it with Ctrl-C.");
         return;
     }
     let (cli, launch, feature) = if is_cursor(agent) {
@@ -1553,6 +1561,17 @@ fn print_external_help(addr: &SocketAddr, cert_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phpstorm_uses_copilot_subscription_and_editor_lifecycle() {
+        assert_eq!(canonicalize_target("phpstorm"), Some("phpstorm"));
+        assert_eq!(key_provider("phpstorm"), "copilot");
+        assert!(uses_upstream_credentials("phpstorm"));
+        assert!(intercepts_copilot_hosts("phpstorm"));
+        assert!(is_gui_editor("phpstorm"));
+        assert_eq!(editor_app_name("phpstorm"), "PHPStorm");
+        assert!(!uses_trusted_copilot_ca("phpstorm"));
+    }
 
     #[test]
     fn intellij_uses_copilot_subscription_and_editor_lifecycle() {
