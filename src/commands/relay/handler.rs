@@ -131,6 +131,14 @@ fn is_anthropic_host(host: &str) -> bool {
     host == "anthropic.com" || host.ends_with(".anthropic.com")
 }
 
+/// Codex subscription routing is specific to the ChatGPT backend endpoint.
+fn is_codex_subscription_request(host: Option<&str>, path: &str) -> bool {
+    path == "/backend-api/codex/responses"
+        && host.is_some_and(|host| {
+            host.split(':').next().unwrap_or(host).eq_ignore_ascii_case("chatgpt.com")
+        })
+}
+
 /// Where rerouted inference requests are sent, plus the Edgee auth to inject.
 /// The key is the active relay's provider key (claude when the agent is claude /
 /// proxy-only, codex when the agent is codex).
@@ -152,6 +160,9 @@ pub struct GatewayTarget {
     /// alongside Copilot. When present, `/v1/messages` traffic uses this key and the
     /// gateway's claude pipeline instead of the default (Copilot) key + passthrough.
     pub claude_api_key: Option<String>,
+    /// Codex key for provider CLIs using the ChatGPT subscription endpoint.
+    /// Those requests use the Codex pipeline instead of upstream passthrough.
+    pub codex_api_key: Option<String>,
     /// Base64-encoded X25519 public key + Argon2id salt for this session's E2EE
     /// debug-log encryption, derived from the user's debug-log passphrase.
     /// `None` when no passphrase was resolved — debug logs then upload as
@@ -169,6 +180,11 @@ impl GatewayTarget {
     fn auth_for(&self, orig_host: Option<&str>, orig_path: &str) -> (&str, bool) {
         if orig_path == CLAUDE_PATH && orig_host.is_some_and(is_anthropic_host) {
             if let Some(key) = &self.claude_api_key {
+                return (key, false);
+            }
+        }
+        if is_codex_subscription_request(orig_host, orig_path) {
+            if let Some(key) = &self.codex_api_key {
                 return (key, false);
             }
         }
@@ -605,6 +621,21 @@ fn apply_reroute(parts: &mut http::request::Parts, gw: &GatewayTarget, gw_path: 
     let (api_key, passthrough_to_upstream) =
         gw.auth_for(upstream_host.as_deref(), parts.uri.path());
 
+    // The gateway selects Codex's subscription handling by a codex-prefixed
+    // User-Agent. Provider CLIs otherwise identify as omp/pi/opencode, causing
+    // their OAuth token to be treated as a keyed-provider API key. Preserve their
+    // identity as a suffix and change only the known Codex subscription endpoint.
+    if gw.codex_api_key.is_some()
+        && is_codex_subscription_request(upstream_host.as_deref(), parts.uri.path())
+    {
+        let original = parts.headers.get(http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok()).unwrap_or_default();
+        let user_agent = format!("codex/edgee-relay {original}");
+        if let Ok(value) = http::HeaderValue::from_str(user_agent.trim_end()) {
+            parts.headers.insert(http::header::USER_AGENT, value);
+        }
+    }
+
     let new_path = format!("{}{gw_path}{query}", gw.base_path);
 
     let mut builder = Uri::builder()
@@ -715,6 +746,7 @@ mod tests {
             repo: Some("git@github.com:edgee-ai/edgee.git".into()),
             passthrough_to_upstream: true,
             claude_api_key: None,
+            codex_api_key: None,
             debug_log_headers: None,
         }
     }
@@ -820,6 +852,40 @@ mod tests {
         let (mut parts, _b) = req.into_parts();
         apply_reroute(&mut parts, &t, gateway_path_for("/v1/messages").unwrap());
         assert!(parts.headers.get("x-edgee-upstream-url").is_none());
+    }
+
+    #[test]
+    fn provider_cli_codex_subscription_uses_codex_pipeline() {
+        let mut t = target();
+        t.api_key = "sk-pi".into();
+        t.codex_api_key = Some("sk-codex".into());
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://chatgpt.com/backend-api/codex/responses?foo=1")
+            .header("authorization", "Bearer subscription-token")
+            .header("user-agent", "omp")
+            .body(Body::from(bytes::Bytes::new()))
+            .unwrap();
+        let (mut parts, _) = req.into_parts();
+        apply_reroute(&mut parts, &t, "/v1/responses");
+        assert_eq!(parts.uri.path_and_query().unwrap().as_str(), "/v1/responses?foo=1");
+        assert_eq!(parts.headers["x-edgee-api-key"], "sk-codex");
+        assert_eq!(parts.headers["authorization"], "Bearer subscription-token");
+        assert_eq!(parts.headers["user-agent"], "codex/edgee-relay omp");
+        assert!(!parts.headers.contains_key("x-edgee-upstream-url"));
+
+        // Copilot's Responses endpoint retains the CLI key and passthrough.
+        assert_eq!(t.auth_for(Some("api.githubcopilot.com"), "/responses"), ("sk-pi", true));
+        assert_eq!(t.auth_for(Some("api.githubcopilot.com"), "/backend-api/codex/responses"), ("sk-pi", true));
+        let req = Request::builder()
+            .uri("https://api.githubcopilot.com/responses")
+            .header("user-agent", "omp")
+            .body(Body::from(bytes::Bytes::new())).unwrap();
+        let (mut parts, _) = req.into_parts();
+        apply_reroute(&mut parts, &t, "/v1/responses");
+        assert_eq!(parts.headers["user-agent"], "omp");
+        assert_eq!(parts.headers["x-edgee-api-key"], "sk-pi");
+        assert!(parts.headers.contains_key("x-edgee-upstream-url"));
     }
 
     #[test]
