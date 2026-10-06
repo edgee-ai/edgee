@@ -480,8 +480,8 @@ replaces it with a bare BYOK shell pointed at Edgee — architecturally identica
 to `kimi`/`pi`, not to `claude`/`codex`.
 
 So this target relays instead, following `copilot-vscode` (they share the
-`copilot` provider key and both MITM [`COPILOT_ONLY_HOSTS`](handler.rs) —
-`githubcopilot.com` + `api.github.com`). That's also why it's named
+`copilot` provider key and both MITM [`COPILOT_ONLY_HOSTS`](../relay/handler.rs),
+i.e. `githubcopilot.com`; `api.github.com` stays blind-tunnelled). That's also why it's named
 `copilot-cli` rather than bare `copilot`, breaking rule 1's "reserve the bare
 name for the primary CLI": its transport and passthrough semantics pair it with
 `copilot-vscode` as another surface of the same product, not with the
@@ -508,9 +508,26 @@ full authenticated request/response cycle):
 
 Net effect: `edgee launch copilot-cli` spawns `copilot` directly (TUI-style, no
 `--wait`, same as `claude`/`codex`) with the relay's proxy env and CA, and its
-real Copilot-billed traffic to `githubcopilot.com`/`api.github.com` reroutes
-through the gateway — preserving the user's actual GitHub Copilot subscription,
-which the BYOK lever cannot do.
+real Copilot-billed traffic to `githubcopilot.com` reroutes through the
+gateway, preserving the user's actual GitHub Copilot subscription, which the
+BYOK lever cannot do.
+
+### What the launch injects
+
+Prepared in `copilot_cli::prepare`, after the relay has created the session,
+and placed before the user's args. Verified against Copilot CLI 1.0.90:
+
+- **Edgee MCP**, gated like `claude`: `--additional-mcp-config=@<file>` (a temp
+  file, so the token stays out of argv) plus `--allow-tool=edgee-session`. The
+  server is named `edgee-session`, not `edgee`: Copilot's MCP namespace is flat,
+  and an injected server silently shadows an org plugin's server of the same
+  name.
+- **Session instructions** via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`. Copilot only
+  reads `.github/instructions/*.instructions.md` from those directories.
+- **Org plugins**: the Claude bundle, one `--plugin-dir=` per plugin. Copilot
+  reads `.claude-plugin/plugin.json` and Claude-format hooks.
+- **Statusline**: checked on every launch in `~/.copilot/settings.json`, and
+  pointed at this binary through `EDGEE_BIN`. See `statusline/copilot.rs`.
 
 ## Planned targets (same rules)
 
