@@ -32,8 +32,8 @@ Every launch target uses exactly one of three transports. Nothing else exists in
 
 | Transport | What Edgee does | Targets | Vendor-documented? |
 | --- | --- | --- | --- |
-| **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi`, `kilo` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
-| **B. Config-file patch** | Writes provider settings into the app's own configuration | `pi`, `omp`, `cursor`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's storage is our own pattern |
+| **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi`, `kilo`, `pi` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
+| **B. Config-file patch** | Writes provider settings into the app's own configuration | `omp`, `cursor`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's storage is our own pattern |
 | **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `copilot-vscode`, `copilot-desktop`, `claude-desktop`; `edgee relay cursor` for Plan mode | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
 
 Transport A covers the products that drive most enterprise coding-agent spend. Transport C is the
@@ -43,8 +43,8 @@ compatibility path for GUI apps that expose no configuration surface at all.
 is a foreground process started by the launch command and bound to loopback; it is never installed
 or registered, and it does not survive the terminal. Edgee never modifies the agent's binary, its
 installed files, or its stored credentials. Two config files are the exceptions: `codex-desktop`'s,
-which is reverted about ten seconds later, and `pi`'s `models.json`, which gains one namespaced
-`edgee` provider key and keeps it.
+which is reverted about ten seconds later, and `omp`'s `models.yml`, which gains two namespaced
+provider keys and keeps them.
 
 ---
 
@@ -325,30 +325,51 @@ selects, billed through their Edgee or BYOK credentials. It does not redirect an
 already authenticated, and no subscription is involved: Kilo's own `kilo auth` login is left
 untouched and unused.
 
+### Pi (`edgee launch pi`)
+
+Implementation: [`src/commands/launch/pi.rs`](../src/commands/launch/pi.rs), whose
+module docs carry the full rationale.
+
+Pi gets no provider config from Edgee. The first-party [`pi-edgee`](https://www.npmjs.com/package/pi-edgee)
+extension registers the `edgee` provider, discovers models, draws the footer and syncs session
+metadata, and the launch loads it with Pi's documented `-e npm:pi-edgee@<pinned>` flag. Pi treats
+that as a temporary source: it caches the package under its own `tmp/extensions` directory and
+never writes `settings.json`, so a plain `pi` run is unaffected and no install needs confirming.
+
+The identity the CLI selected travels in one child-only variable, `EDGEE_PI_CONTEXT` (versioned
+JSON: gateway key, console token, organization, endpoints, session id, debug-log headers). The
+extension reads it once, removes it from its own environment, and keeps it in memory. It is never
+placed in argv, `settings.json` or `auth.json`, and it wins over a different `/login edgee` account
+stored in Pi for the whole run. A context the extension cannot read disables the Edgee models
+instead of falling back to the stored login. `EDGEE_API_KEY` and `EDGEE_SESSION_ID` are still
+exported so a `pi-edgee` installed before this contract keeps working.
+
+Two things are checked before launch:
+
+- **An existing install.** If `pi-edgee` is already in the user's agent dir (a `packages` entry in
+  `settings.json`, or `extensions/`), or the user passed it with `-e`, no second copy is injected,
+  because Pi dedupes by path only and would register `edgee` twice. An install whose `package.json`
+  lacks `edgee.cliContract` produces a warning. `-ne` ignores installs, so the extension is
+  injected anyway. A project-level `.pi/settings.json` is not read, since Pi only loads it for
+  trusted projects.
+- **Old provider blocks.** Earlier releases wrote `edgee` and `edgee-anthropic` into `models.json`,
+  and Pi layers that file over extension providers. Blocks that still match the generated shape
+  (`$EDGEE_API_KEY` and `$EDGEE_SESSION_ID` references) are removed after a one-time
+  `models.json.edgee-bak`. Customised blocks, comment-bearing or unparseable files are left alone
+  with a warning.
+
+`EDGEE_PI_EXTENSION` replaces the pinned spec with a local checkout or another npm spec.
+
 ---
 
-## Transport B: config-file patch (`pi`, `omp`, `cursor`, `codex-desktop`)
+## Transport B: config-file patch (`omp`, `cursor`, `codex-desktop`)
 
 These targets write into configuration storage the user owns, with target-specific lifecycles.
 
-### Pi (`edgee launch pi`)
-
-Implementation: [`src/commands/launch/pi.rs`](../src/commands/launch/pi.rs), whose module docs carry
-the full rationale.
-
-Pi resolves models through `<agent dir>/models.json`, and its only directory override moves the
-whole agent root — `auth.json`, `settings.json`, history — so a private copy would strand the user's
-login. The blocks therefore go into the real `models.json`, under the namespaced `edgee` and
-`edgee-anthropic` provider keys. Because they are **additive** rather than a hijack of existing keys,
-they need no patch-and-revert dance: nothing else in the file is touched. Anthropic models use Pi's
-native `anthropic-messages` transport and `/v1/messages`, preserving Pi's prompt-cache behavior.
-All other models use `openai-completions` and `/v1/chat/completions`. The gateway can reroute from
-either ingress protocol.
-
 ### Oh My Pi (`edgee launch omp`)
 
-Implementation: [`src/commands/launch/omp.rs`](../src/commands/launch/omp.rs), backed by Pi's shared
-provider builder in [`src/commands/launch/pi.rs`](../src/commands/launch/pi.rs).
+Implementation: [`src/commands/launch/omp.rs`](../src/commands/launch/omp.rs), whose module docs
+carry the full rationale. `pi` used to share this path and now loads an extension instead.
 
 OMP uses Pi's custom-provider schema. Edgee writes the same additive provider blocks to
 `~/.omp/agent/models.yml`, launches `omp` with credential references supplied through environment
@@ -536,7 +557,7 @@ gaps rather than bugs.
 | `codex` | ✅¹ | ❌ | ⏳ | ✅ | skills via a `CODEX_HOME` symlink mirror; MCP via `-c mcp_servers`; no user-defined subagents exist |
 | `crush` | ✅ | ✅ | ⏳ | ✅ | config fragments on the redirected document |
 | `kimi` | ⏳ | ❌ | ❌ | ❌ | not yet wired — see below |
-| `pi` | ✅ | ❌ | ❌ | ❌ | repeatable `--skill`; other kinds require extension code or have no configuration surface |
+| `pi` | ✅ | ❌ | ❌ | ❌ | repeatable `--skill`; other kinds require extension code or have no configuration surface. The `pi-edgee` extension Edgee loads is first-party and not part of the org plugin matrix |
 | `omp` | ✅ | ✅ | ✅ | ✅ | Claude-compatible bundle via repeatable `--plugin-dir` |
 | `copilot-cli` | ✅ | ✅ | ✅ | ✅ | the Claude bundle via repeatable `--plugin-dir`, injected by the relay; subagents surface as `<plugin>:<name>` |
 | `cursor`, `copilot-vscode`, `claude-desktop` | ❌ | ❌ | ❌ | ❌ | GUI targets with no supported session-scoped plugin injection path |
