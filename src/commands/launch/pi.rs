@@ -1,104 +1,61 @@
-//! `edgee launch pi` — Pi CLI (<https://pi.dev>).
+//! `edgee launch pi`: Pi CLI (<https://pi.dev>) through the `pi-edgee` extension.
 //!
-//! Pi resolves models through `<agent dir>/models.json`, where custom providers
-//! merge into the built-in catalog by `provider + id`. Registering a provider
-//! named `edgee` is therefore purely additive: every provider, model and login
-//! the user already had keeps working untouched.
+//! Pi no longer gets provider blocks written into its `models.json`. The
+//! first-party `pi-edgee` extension registers the `edgee` provider, discovers
+//! models, renders the footer and syncs session metadata; this launcher loads
+//! it for the run and hands it the identity the CLI already selected.
 //!
-//! ## Why this writes the user's real config instead of a temp one
+//! ## Delivery: per-launch `-e`, no install
 //!
-//! `opencode.rs` and `crush.rs` build a merged config in `$TMPDIR` and point the
-//! agent at it (`OPENCODE_CONFIG`, `CRUSH_GLOBAL_CONFIG`), leaving the user's
-//! files untouched. Pi has no equivalent: its only relevant env var,
-//! `PI_CODING_AGENT_DIR`, relocates the *entire* agent directory — not just
-//! `models.json` but `auth.json`, `settings.json`, `keybindings.json`,
-//! `sessions/`, `themes/`, `tools/`, `prompts/`, `bin/`, plus extension,
-//! skill and plugin discovery. Pointing it at a temp dir would drop the user
-//! into pi with no history, no logins, no settings and none of their installed
-//! plugins. There is no narrower lever: `--models` takes model *patterns* for
-//! Ctrl+P cycling, not a config path.
+//! The extension is passed as `-e npm:pi-edgee@<pinned>`. Pi treats that as a
+//! temporary source: it caches the package under `<agent dir>/tmp/extensions`
+//! and never touches `settings.json`, so plain `pi` is unaffected and nothing
+//! has to be confirmed. When the user already has pi-edgee in their own agent
+//! dir (settings `packages` or `extensions/`), injecting a second copy would
+//! register `edgee` twice (Pi dedupes by canonical path only), so the launch
+//! reuses theirs and warns if it predates the CLI contract.
 //!
-//! So two provider blocks are written into the real `models.json` under
-//! namespaced keys: one uses Anthropic Messages for Claude models, the other
-//! uses Chat Completions for everything else. This needs no patch-and-revert
-//! dance (unlike `codex_desktop.rs`) precisely because it is additive rather
-//! than a hijack of a provider the user already relies on.
+//! Detection is deliberately shallow: the user-level agent dir, plus the
+//! user's own `-e`. A project `.pi/settings.json` is only read once the
+//! project is trusted, so skipping injection because of it could leave a run
+//! with no Edgee provider at all.
 //!
-//! ## No credential at rest
+//! ## Ephemeral identity
 //!
-//! Pi and OMP both resolve `apiKey` and header values against the environment,
-//! but use different reference syntax: Pi expands `$NAME`, while OMP treats a
-//! bare `NAME` as an environment-variable lookup. The generated block stores
-//! the appropriate references and `run` supplies their values at spawn time.
-//! The Edgee key is never written to disk, unlike the OpenCode and Crush temp
-//! configs, which embed it.
+//! The gateway key, console token, org, endpoints and debug headers travel in
+//! one child-only JSON env var ([`CONTEXT_ENV`]), never in argv, settings or
+//! Pi's `auth.json`. The extension reads it once and scrubs it from its own
+//! environment. `EDGEE_API_KEY`/`EDGEE_SESSION_ID` are still exported so a
+//! user-installed pi-edgee that predates the contract keeps working.
 //!
-//! **This requires pi 0.79.4 or newer**, and the version boundary is a trap
-//! worth knowing about. Before 0.79.4 the whole value was the variable name
-//! (bare `EDGEE_API_KEY`) and an unset variable silently fell through to the
-//! literal string; 0.79.4 reversed that, making bare uppercase values literals
-//! and `$NAME` the only env reference (upstream #5661). The two spellings are
-//! mutually exclusive — each is an inert literal on the other side of that
-//! boundary, and the symptom is identical either way: the gateway answers 401
-//! because it was handed the string `EDGEE_API_KEY` or `$EDGEE_API_KEY` as a
-//! credential. We emit the current, documented form.
-//!
-//! Modern pi resolves an unset reference to `undefined` rather than leaking the
-//! literal, so the failure mode there is at least a clean "no credential".
-//!
-//! The flip side of storing references: a bare `pi` run outside
-//! `edgee launch pi` can see the Edgee models but cannot authenticate them. That
-//! is the deliberate trade — the credential stays out of the config file.
+//! OMP does not use this path; it keeps its provider-file launcher in `omp.rs`.
+
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use colored::Colorize;
+use serde::Serialize;
 use serde_json::Value;
 
 use super::util;
 use crate::commands::util::plugins;
 
-/// Provider keys under `providers` in `models.json`. Everything this command
-/// writes lives under them; nothing else in the file is touched.
-const PROVIDER_KEY: &str = "edgee";
-const ANTHROPIC_PROVIDER_KEY: &str = "edgee-anthropic";
+/// npm release of `pi-edgee` that implements [`CONTRACT_VERSION`]. A CLI
+/// release must not pin a version that is not published yet.
+const PI_EDGEE_SPEC: &str = "npm:pi-edgee@0.2.0";
 
-/// Env vars whose values `run` supplies at spawn time. The config embeds
-/// agent-specific references (see [`CompatibleAgent::env_ref`]), never values.
-const API_KEY_ENV: &str = "EDGEE_API_KEY";
-const SESSION_ID_ENV: &str = "EDGEE_SESSION_ID";
+/// Local checkout or alternative spec to load instead of [`PI_EDGEE_SPEC`].
+const EXTENSION_OVERRIDE_ENV: &str = "EDGEE_PI_EXTENSION";
 
-/// Pi's picker uses fixed slot names. The catalog's `none` effort maps to
-/// Pi's disabled `off` slot.
-const PI_THINKING_LEVELS: [(&str, &str); 7] = [
-    ("off", "none"),
-    ("minimal", "minimal"),
-    ("low", "low"),
-    ("medium", "medium"),
-    ("high", "high"),
-    ("xhigh", "xhigh"),
-    ("max", "max"),
-];
+/// Child-only env var carrying the [`LaunchContext`] JSON.
+const CONTEXT_ENV: &str = "EDGEE_PI_CONTEXT";
 
-fn thinking_level_map(efforts: &[String]) -> Value {
-    Value::Object(
-        PI_THINKING_LEVELS
-            .into_iter()
-            .map(|(pi_level, catalog_effort)| {
-                let value = if efforts.iter().any(|effort| effort == catalog_effort) {
-                    Value::String(catalog_effort.to_string())
-                } else {
-                    Value::Null
-                };
-                (pi_level.to_string(), value)
-            })
-            .collect(),
-    )
-}
+/// `version` written into the context and the minimum `edgee.cliContract` a
+/// user-installed pi-edgee must advertise in its `package.json`.
+const CONTRACT_VERSION: u64 = 1;
 
-/// Output cap declared for every model. The gateway catalog carries a context
-/// window but no per-model output limit, and pi has no "unset" for `maxTokens`
-/// short of omitting it — which makes pi fall back to a conservative built-in
-/// default. This is high enough not to truncate coding turns.
-const PI_OUTPUT_TOKEN_MAX: u64 = 64_000;
+/// Provider keys the previous launcher wrote under `providers` in `models.json`.
+const LEGACY_PROVIDER_KEYS: [&str; 2] = ["edgee", "edgee-anthropic"];
 
 #[derive(Debug, clap::Parser)]
 #[command(disable_help_flag = true)]
@@ -108,18 +65,16 @@ pub struct Options {
     pub args: Vec<String>,
 }
 
-fn home_dir() -> Option<std::path::PathBuf> {
+fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
-        .map(std::path::PathBuf::from)
+        .map(PathBuf::from)
 }
 
 /// Pi's agent directory, mirroring its own resolution order: an explicit
-/// `PI_CODING_AGENT_DIR` (tilde-expanded, as pi does) wins over `~/.pi/agent`.
-/// Honoring the override matters — a user who has relocated their pi config
-/// should have the provider written where pi will actually read it.
-fn agent_dir() -> Option<std::path::PathBuf> {
+/// `PI_CODING_AGENT_DIR` (tilde-expanded, as Pi does) wins over `~/.pi/agent`.
+fn agent_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var("PI_CODING_AGENT_DIR")
         .ok()
         .filter(|d| !d.is_empty())
@@ -130,392 +85,341 @@ fn agent_dir() -> Option<std::path::PathBuf> {
         if let Some(rest) = dir.strip_prefix("~/") {
             return home_dir().map(|h| h.join(rest));
         }
-        return Some(std::path::PathBuf::from(dir));
+        return Some(PathBuf::from(dir));
     }
     home_dir().map(|h| h.join(".pi").join("agent"))
 }
 
-fn omp_agent_dir(home: &std::path::Path) -> std::path::PathBuf {
-    home.join(".omp").join("agent")
+/// Everything pi-edgee needs to act as the CLI-selected identity. No `Debug`:
+/// it holds credentials.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LaunchContext {
+    version: u64,
+    session_id: String,
+    api_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key_id: Option<String>,
+    user_token: String,
+    org_id: String,
+    org_slug: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    org_name: Option<String>,
+    gateway_url: String,
+    console_url: String,
+    console_api_url: String,
+    mcp_url: String,
+    mcp_disabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    debug_headers: Option<DebugHeaders>,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum CompatibleAgent {
-    Pi,
-    Omp,
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DebugHeaders {
+    pubkey: String,
+    salt: String,
 }
 
-impl CompatibleAgent {
-    /// Renders the environment reference syntax understood by each agent.
-    /// Pi 0.79.4+ requires `$NAME`; OMP looks up the complete string as the
-    /// environment-variable name, so its reference must be bare `NAME`.
-    fn env_ref(self, name: &str) -> String {
-        match self {
-            Self::Pi => format!("${name}"),
-            Self::Omp => name.to_string(),
-        }
-    }
-
-    fn binary(self) -> &'static str {
-        match self {
-            Self::Pi => "pi",
-            Self::Omp => "omp",
-        }
-    }
-
-    fn display_name(self) -> &'static str {
-        match self {
-            Self::Pi => "Pi",
-            Self::Omp => "OMP",
-        }
-    }
-
-    fn launch_command(self) -> &'static str {
-        match self {
-            Self::Pi => "edgee launch pi",
-            Self::Omp => "edgee launch omp",
-        }
-    }
-
-    fn models_path(self) -> Option<std::path::PathBuf> {
-        let dir = match self {
-            Self::Pi => agent_dir()?,
-            Self::Omp => omp_agent_dir(&home_dir()?),
-        };
-        Some(dir.join(match self {
-            Self::Pi => "models.json",
-            Self::Omp => "models.yml",
-        }))
-    }
-
-    fn install_error(self) -> &'static str {
-        match self {
-            Self::Pi => {
-                "Pi is not installed. Install it with `npm install -g @mariozechner/pi-coding-agent`"
-            }
-            Self::Omp => {
-                "OMP is not installed. Install it from https://github.com/can1357/oh-my-pi"
-            }
-        }
-    }
-
-    fn plugin_target(self) -> plugins::Target {
-        match self {
-            Self::Pi => plugins::Target::Pi,
-            Self::Omp => plugins::Target::Omp,
-        }
-    }
+/// Whether to add `-e <spec>`, and what to tell the user about their own copy.
+#[derive(Debug, PartialEq, Eq)]
+struct ExtensionPlan {
+    inject: Option<String>,
+    warning: Option<String>,
 }
 
-fn plugin_args(agent: CompatibleAgent, report: &plugins::sync::SyncReport) -> Vec<String> {
-    match agent {
-        CompatibleAgent::Pi => report
-            .skills_root
-            .iter()
-            .flat_map(|path| ["--skill".to_string(), path.to_string_lossy().into_owned()])
-            .collect(),
-        CompatibleAgent::Omp => report
-            .plugin_dirs
-            .iter()
-            .map(|path| format!("--plugin-dir={}", path.to_string_lossy()))
-            .collect(),
-    }
+/// A pi-edgee the user installed themselves. `manifest` is its `package.json`
+/// when we can point at one.
+struct UserInstall {
+    manifest: Option<PathBuf>,
 }
 
-/// Reads the agent's model config, or an empty document when absent. A file we
-/// cannot parse is *not* overwritten — see [`write_providers`].
-fn read_models_config(path: &std::path::Path) -> Result<Option<Value>> {
-    if !path.exists() {
-        return Ok(Some(serde_json::json!({ "providers": {} })));
+/// `-e`/`--extension` values in `args`, the same two spellings Pi's parser
+/// accepts (it has no `--extension=value` form).
+fn extension_args(args: &[String]) -> impl Iterator<Item = &str> {
+    args.windows(2)
+        .filter(|pair| pair[0] == "-e" || pair[0] == "--extension")
+        .map(|pair| pair[1].as_str())
+}
+
+fn is_pi_edgee_npm(source: &str) -> bool {
+    source
+        .strip_prefix("npm:")
+        .and_then(|spec| spec.split('@').next())
+        == Some("pi-edgee")
+}
+
+fn package_name(manifest: &Path) -> Option<String> {
+    let parsed: Value = serde_json::from_str(&std::fs::read_to_string(manifest).ok()?).ok()?;
+    parsed.get("name")?.as_str().map(str::to_string)
+}
+
+/// Resolves a local `packages` source the way Pi reads it from the user's
+/// `settings.json`: `~/` from the home dir, relative paths from the agent dir.
+fn resolve_local_source(source: &str, agent_dir: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    if let Some(rest) = source.strip_prefix("~/") {
+        return home.map(|h| h.join(rest));
     }
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
-    // An empty file is equivalent to no file; pi treats both as "no overrides".
-    if content.trim().is_empty() {
-        return Ok(Some(serde_json::json!({ "providers": {} })));
-    }
-    let parsed = if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
-        serde_yaml::from_str(&content).ok()
+    let path = Path::new(source);
+    if path.is_absolute() {
+        Some(path.to_path_buf())
+    } else if source.starts_with('.') {
+        Some(agent_dir.join(path))
     } else {
-        serde_json::from_str(&content).ok()
-    };
-    Ok(parsed)
+        None
+    }
 }
 
-/// Replaces Edgee's providers in the agent's model config, preserving every
-/// other key. Pi uses JSON; OMP uses YAML.
-///
-/// Bails rather than clobbering when the existing file does not parse. Pi
-/// tolerates comments in `models.json` (`stripJsonComments`), and a user's
-/// annotated config is not ours to silently rewrite into canonical JSON.
-fn write_providers(path: &std::path::Path, replacements: &[(&str, Value)]) -> Result<()> {
-    let Some(mut config) = read_models_config(path)? else {
-        let format = if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
-            "YAML"
-        } else {
-            "JSON"
-        };
-        anyhow::bail!(
-            "{} exists but is not valid {format}.\nFix or remove it, then launch the agent again.",
-            path.display(),
-        )
-    };
-
-    if !config.is_object() {
-        anyhow::bail!(
-            "{} does not contain a JSON object.\nFix or remove it, then launch the agent again.",
-            path.display()
-        )
-    }
-
-    let obj = config.as_object_mut().expect("checked above");
-    let providers = obj
-        .entry("providers")
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
-    if !providers.is_object() {
-        *providers = Value::Object(serde_json::Map::new());
-    }
-    let providers = providers.as_object_mut().expect("just ensured object");
-    // Remove both managed keys first so a catalog family that disappears does
-    // not leave stale models in Pi's picker.
-    providers.remove(PROVIDER_KEY);
-    providers.remove(ANTHROPIC_PROVIDER_KEY);
-    for (key, provider) in replacements {
-        providers.insert((*key).to_string(), provider.clone());
-    }
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    let rendered = if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
-        serde_yaml::to_string(&config)?
-    } else {
-        serde_json::to_string_pretty(&config)?
-    };
-    std::fs::write(path, format!("{rendered}\n"))
-        .with_context(|| format!("Failed to write {}", path.display()))
-}
-
-#[derive(Clone, Copy)]
-enum PiTransport {
-    ChatCompletions,
-    AnthropicMessages,
-}
-
-/// Builds one of the two Edgee provider blocks. Anthropic models use Pi's
-/// native Messages transport so its normal prompt-cache behavior is retained;
-/// all other models use Chat Completions.
-fn build_provider(
-    agent: CompatibleAgent,
-    gateway_url: &str,
-    models: &[String],
-    catalog: &util::ModelCatalog,
-    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
-    transport: PiTransport,
-) -> Value {
-    let mut headers = serde_json::json!({
-        "x-edgee-api-key": agent.env_ref(API_KEY_ENV),
-        "x-edgee-session-id": agent.env_ref(SESSION_ID_ENV),
-    });
-    if matches!(agent, CompatibleAgent::Omp)
-        && matches!(transport, PiTransport::AnthropicMessages)
+/// Looks for pi-edgee in the user's agent dir: a `packages` entry in
+/// `settings.json` (npm or local) or an auto-discovered `extensions/` entry.
+/// Anything it does not recognise counts as not installed.
+fn find_user_install(agent_dir: &Path, home: Option<&Path>) -> Option<UserInstall> {
+    if let Some(settings) = std::fs::read_to_string(agent_dir.join("settings.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
     {
-        headers["User-Agent"] = Value::String("omp".to_string());
-    }
-    // Unlike the key and session id, these are embedded literally: they derive
-    // from the profile passphrase and so are stable across launches, and a
-    // public key plus salt is not a secret. Env-var indirection would only add
-    // a way for them to resolve to nothing on a bare `pi` run.
-    if let (Some(headers_obj), Some(debug_headers)) = (headers.as_object_mut(), debug_log_headers) {
-        headers_obj.insert(
-            "x-edgee-debug-pubkey".to_string(),
-            Value::String(debug_headers.pubkey),
-        );
-        headers_obj.insert(
-            "x-edgee-debug-salt".to_string(),
-            Value::String(debug_headers.salt),
-        );
-    }
-
-    let gateway_url = gateway_url.trim_end_matches('/');
-    let (name, base_url, api) = match transport {
-        PiTransport::ChatCompletions => (
-            "Edgee",
-            format!("{gateway_url}/v1"),
-            "openai-completions",
-        ),
-        // Pi appends `/v1/messages` for this transport, matching its built-in
-        // Anthropic provider. Including `/v1` here would duplicate the segment.
-        PiTransport::AnthropicMessages => (
-            "Edgee (Anthropic)",
-            gateway_url.to_string(),
-            "anthropic-messages",
-        ),
-    };
-    let mut provider = serde_json::json!({
-        "name": name,
-        "baseUrl": base_url,
-        "api": api,
-        "apiKey": agent.env_ref(API_KEY_ENV),
-        "headers": headers,
-    });
-
-    if !models.is_empty() {
-        let entries: Vec<Value> = models
-            .iter()
-            .map(|id| {
-                // The gateway id (`anthropic/claude-sonnet-5`) is the routing
-                // identifier, so it doubles as pi's model id. `--model` matches
-                // on id as well as name, so `--model anthropic/claude-sonnet-5`
-                // works without a provider prefix.
-                let mut entry = serde_json::json!({ "id": id, "name": id });
-                let metadata = catalog.get(id);
-                if let Some(input) = metadata.map(|m| {
-                    m.input_modalities
-                        .iter()
-                        .filter(|modality| matches!(modality.as_str(), "text" | "image"))
-                        .collect::<Vec<_>>()
-                }) {
-                    if !input.is_empty() {
-                        entry["input"] = serde_json::json!(input);
+        for entry in settings
+            .get("packages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            // The object form carries per-resource filters; an empty
+            // `extensions` list loads nothing from the package.
+            let source = match entry {
+                Value::String(source) => source.as_str(),
+                Value::Object(object) => {
+                    if object
+                        .get("extensions")
+                        .and_then(Value::as_array)
+                        .is_some_and(|list| list.is_empty())
+                    {
+                        continue;
+                    }
+                    match object.get("source").and_then(Value::as_str) {
+                        Some(source) => source,
+                        None => continue,
                     }
                 }
-                if let Some(context) = metadata.and_then(|m| m.context) {
-                    entry["contextWindow"] = serde_json::json!(context);
-                    entry["maxTokens"] = serde_json::json!(PI_OUTPUT_TOKEN_MAX);
-                }
-                // Dollars per million tokens — the same unit pi's built-in
-                // catalog uses. Without this every session reports as $0.
-                if let Some(cost) = metadata.and_then(|m| m.cost) {
-                    entry["cost"] = serde_json::json!({
-                        "input": cost.input,
-                        "output": cost.output,
-                        "cacheRead": cost.cache_read,
-                        "cacheWrite": cost.cache_write,
+                _ => continue,
+            };
+            if is_pi_edgee_npm(source) {
+                return Some(UserInstall {
+                    manifest: Some(
+                        agent_dir
+                            .join("npm")
+                            .join("node_modules")
+                            .join("pi-edgee")
+                            .join("package.json"),
+                    ),
+                });
+            }
+            if let Some(dir) = resolve_local_source(source, agent_dir, home) {
+                let manifest = dir.join("package.json");
+                if package_name(&manifest).as_deref() == Some("pi-edgee") {
+                    return Some(UserInstall {
+                        manifest: Some(manifest),
                     });
                 }
-                if let Some(efforts) = metadata
-                    .map(|m| m.reasoning_efforts.as_slice())
-                    .filter(|efforts| !efforts.is_empty())
-                {
-                    entry["reasoning"] = Value::Bool(true);
-                    entry["thinkingLevelMap"] = thinking_level_map(efforts);
-                    if matches!(transport, PiTransport::AnthropicMessages) {
-                        // The gateway accepts Pi's adaptive control and maps it
-                        // to the ultimately selected Claude provider.
-                        entry["compat"] = serde_json::json!({
-                            "forceAdaptiveThinking": true,
-                        });
-                    }
-                }
-                if matches!(agent, CompatibleAgent::Omp)
-                    && matches!(transport, PiTransport::AnthropicMessages)
-                {
-                    // OMP's Anthropic transport deliberately speaks Claude Code's
-                    // OAuth wire protocol. Keep its working bearer auth, but retain
-                    // OMP's identity so the gateway uses the normal Messages path
-                    // and the prompt has no volatile Claude Code `cch` block.
-                    entry["compat"]["allowAnthropicHeaderOverrides"] = Value::Bool(true);
-                    entry["compat"]["disableStrictTools"] = Value::Bool(true);
-                    entry["compat"]["injectClaudeCodeInstruction"] = Value::Bool(false);
-                }
-                entry
-            })
-            .collect();
-        provider["models"] = Value::Array(entries);
+            }
+        }
     }
 
-    provider
+    let extensions = agent_dir.join("extensions");
+    let dir = extensions.join("pi-edgee");
+    if dir.is_dir() {
+        return Some(UserInstall {
+            manifest: Some(dir.join("package.json")),
+        });
+    }
+    if extensions.join("pi-edgee.ts").is_file() {
+        return Some(UserInstall { manifest: None });
+    }
+    None
 }
 
-#[cfg(test)]
-fn build_edgee_provider(
-    gateway_url: &str,
-    models: &[String],
-    catalog: &util::ModelCatalog,
-    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
-) -> Value {
-    build_edgee_provider_for(
-        CompatibleAgent::Pi,
-        gateway_url,
-        models,
-        catalog,
-        debug_log_headers,
+/// `None` when the install advertises a compatible `edgee.cliContract`.
+fn contract_warning(install: &UserInstall) -> Option<String> {
+    let advertised = install
+        .manifest
+        .as_deref()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|manifest| manifest.pointer("/edgee/cliContract")?.as_u64());
+    if advertised.is_some_and(|version| version >= CONTRACT_VERSION) {
+        return None;
+    }
+    Some(
+        "Your own pi-edgee install does not advertise Edgee CLI support, so it was left in \
+         place and the footer and session metadata may need `/login edgee`. Update it with \
+         `pi update`, or remove it to let `edgee launch pi` load the matching release."
+            .to_string(),
     )
 }
 
-fn build_edgee_provider_for(
-    agent: CompatibleAgent,
-    gateway_url: &str,
-    models: &[String],
-    catalog: &util::ModelCatalog,
-    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
-) -> Value {
-    build_provider(
-        agent,
-        gateway_url,
-        models,
-        catalog,
-        debug_log_headers,
-        PiTransport::ChatCompletions,
-    )
+/// Decides how pi-edgee gets loaded for this launch. Pure: paths, args and the
+/// override are passed in so tests need no process-global state.
+fn extension_plan(
+    agent_dir: Option<&Path>,
+    home: Option<&Path>,
+    args: &[String],
+    spec_override: Option<&str>,
+) -> ExtensionPlan {
+    let nothing_to_add = |warning| ExtensionPlan {
+        inject: None,
+        warning,
+    };
+
+    // The user already asked for pi-edgee themselves.
+    if extension_args(args).any(|value| value.contains("pi-edgee")) {
+        return nothing_to_add(None);
+    }
+
+    // `-ne` stops Pi loading anything it would discover, including an install.
+    let discovery_disabled = args.iter().any(|a| a == "-ne" || a == "--no-extensions");
+    if !discovery_disabled {
+        if let Some(install) = agent_dir.and_then(|dir| find_user_install(dir, home)) {
+            return nothing_to_add(contract_warning(&install));
+        }
+    }
+
+    let spec = spec_override
+        .filter(|s| !s.is_empty())
+        .unwrap_or(PI_EDGEE_SPEC);
+    ExtensionPlan {
+        inject: Some(spec.to_string()),
+        warning: None,
+    }
 }
 
-#[cfg(test)]
-fn build_anthropic_provider(
-    gateway_url: &str,
-    models: &[String],
-    catalog: &util::ModelCatalog,
-    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
-) -> Value {
-    build_anthropic_provider_for(
-        CompatibleAgent::Pi,
-        gateway_url,
-        models,
-        catalog,
-        debug_log_headers,
-    )
+/// What [`cleanup_legacy_providers`] did, for the caller to report.
+#[derive(Debug, PartialEq, Eq)]
+enum LegacyCleanup {
+    Nothing,
+    Removed {
+        providers: Vec<String>,
+        backup: PathBuf,
+    },
+    /// Left untouched; the string says why and what to do.
+    Skipped(String),
 }
 
-fn build_anthropic_provider_for(
-    agent: CompatibleAgent,
-    gateway_url: &str,
-    models: &[String],
-    catalog: &util::ModelCatalog,
-    debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
-) -> Value {
-    build_provider(
-        agent,
-        gateway_url,
-        models,
-        catalog,
-        debug_log_headers,
-        PiTransport::AnthropicMessages,
-    )
+/// True for a provider block exactly as the previous launcher generated it:
+/// env references for the key and the session header, and a Pi transport. Any
+/// customisation breaks the fingerprint and keeps the block off-limits.
+fn is_cli_generated(block: &Value) -> bool {
+    block.get("apiKey").and_then(Value::as_str) == Some("$EDGEE_API_KEY")
+        && block
+            .pointer("/headers/x-edgee-session-id")
+            .and_then(Value::as_str)
+            == Some("$EDGEE_SESSION_ID")
+        && matches!(
+            block.get("api").and_then(Value::as_str),
+            Some("openai-completions" | "anthropic-messages")
+        )
+}
+
+fn backup_path(models: &Path) -> PathBuf {
+    let mut name = models.as_os_str().to_os_string();
+    name.push(".edgee-bak");
+    PathBuf::from(name)
+}
+
+/// Removes the `edgee` / `edgee-anthropic` blocks the previous launcher wrote.
+///
+/// Pi layers `models.json` over extension providers, so a leftover block would
+/// shadow the one pi-edgee registers. Only blocks matching
+/// [`is_cli_generated`] are removed, after a one-time backup, and the rewrite
+/// is abandoned if the file changed in between. Unparseable files and
+/// customised blocks are never touched.
+fn cleanup_legacy_providers(path: &Path) -> Result<LegacyCleanup> {
+    if !path.exists() {
+        return Ok(LegacyCleanup::Nothing);
+    }
+    let original = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let Ok(mut root) = serde_json::from_str::<Value>(&original) else {
+        return Ok(LegacyCleanup::Skipped(format!(
+            "{} is not plain JSON, so it was left alone. If it still has `edgee` or \
+             `edgee-anthropic` providers from an older `edgee launch pi`, remove them.",
+            path.display()
+        )));
+    };
+    let Some(providers) = root.get_mut("providers").and_then(Value::as_object_mut) else {
+        return Ok(LegacyCleanup::Nothing);
+    };
+
+    let present: Vec<&str> = LEGACY_PROVIDER_KEYS
+        .into_iter()
+        .filter(|key| providers.contains_key(*key))
+        .collect();
+    if present.is_empty() {
+        return Ok(LegacyCleanup::Nothing);
+    }
+    let (generated, custom): (Vec<&str>, Vec<&str>) = present
+        .into_iter()
+        .partition(|key| is_cli_generated(&providers[*key]));
+    if generated.is_empty() {
+        return Ok(LegacyCleanup::Skipped(format!(
+            "{} has custom `{}` provider block(s). Pi layers models.json over extensions, so \
+             they shadow pi-edgee's `edgee` provider. Remove or rename them.",
+            path.display(),
+            custom.join("`, `")
+        )));
+    }
+
+    let backup = backup_path(path);
+    if !backup.exists() {
+        std::fs::copy(path, &backup)
+            .with_context(|| format!("Failed to back up {}", path.display()))?;
+    }
+    for key in &generated {
+        providers.remove(*key);
+    }
+
+    // Re-read right before writing so a concurrent edit is not overwritten.
+    if std::fs::read_to_string(path).ok().as_deref() != Some(original.as_str()) {
+        return Ok(LegacyCleanup::Skipped(format!(
+            "{} changed while it was being cleaned up, so it was left alone.",
+            path.display()
+        )));
+    }
+    let rendered = serde_json::to_string_pretty(&root)?;
+    std::fs::write(path, format!("{rendered}\n"))
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+
+    Ok(LegacyCleanup::Removed {
+        providers: generated.into_iter().map(str::to_string).collect(),
+        backup,
+    })
+}
+
+fn report_cleanup(outcome: &LegacyCleanup) {
+    match outcome {
+        LegacyCleanup::Nothing => {}
+        LegacyCleanup::Removed { providers, backup } => eprintln!(
+            "{}",
+            format!(
+                "Removed the old `{}` provider block(s) from models.json (backup: {}). \
+                 pi-edgee now provides `edgee`; reselect any `edgee-anthropic/...` model \
+                 under it.",
+                providers.join("`, `"),
+                backup.display()
+            )
+            .dimmed()
+        ),
+        LegacyCleanup::Skipped(reason) => eprintln!("{}", reason.yellow()),
+    }
 }
 
 pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
-    run_compatible(opts, CompatibleAgent::Pi, reroute).await
-}
-
-pub(crate) async fn run_compatible(
-    opts: Options,
-    agent: CompatibleAgent,
-    reroute: &super::reroute::Reroute,
-) -> Result<()> {
     let mut creds = crate::config::read()?;
 
-    // Step 1: ensure we are authenticated
     if creds.user_token.as_deref().unwrap_or("").is_empty() {
         crate::commands::auth::login::perform_login().await?;
     }
-
-    // Step 1b: ensure an org is selected (handles partial state after aborted login)
     crate::commands::auth::login::ensure_org_selected().await?;
 
-    // Step 2: ensure we have a live Pi api_key. OMP deliberately shares this
-    // key. Re-provisions if the cached key was deleted in the console.
     let reprovisioned = crate::commands::auth::login::ensure_valid_provider_key("pi")
         .await?
         .created;
@@ -524,7 +428,7 @@ pub(crate) async fn run_compatible(
     }
     creds = crate::config::read()?;
 
-    // Step 3: ensure we have a connection choice (default to "plan")
+    // The relay-style "plan" connection is what the previous launcher recorded.
     if creds
         .pi
         .as_ref()
@@ -536,94 +440,88 @@ pub(crate) async fn run_compatible(
         crate::config::write(&creds)?;
     }
 
-    let pi = creds.pi.as_ref().unwrap();
-    let api_key = &pi.api_key;
     let session_id = reroute.create_session(&creds, "pi").await?;
     util::spawn_cli_version_report(&creds, &session_id);
 
+    let org = super::fetch_active_org(&creds).await;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
+    let pi_key = creds.pi.as_ref().context("Missing Pi credentials")?;
+    let debug_headers = util::resolve_debug_log_keypair()?
+        .map(|keypair| keypair.header_values())
+        .map(|values| DebugHeaders {
+            pubkey: values.pubkey,
+            salt: values.salt,
+        });
+    let context = LaunchContext {
+        version: CONTRACT_VERSION,
+        session_id: session_id.clone(),
+        api_key: pi_key.api_key.clone(),
+        api_key_id: pi_key.api_key_id.clone(),
+        user_token: creds
+            .user_token
+            .clone()
+            .context("Missing Edgee user token")?,
+        org_id: creds.org_id.clone().context("No Edgee organization selected")?,
+        org_slug: creds.org_slug.clone().unwrap_or_default(),
+        org_name: org.as_ref().map(|o| o.name.clone()),
+        gateway_url,
+        console_url: crate::config::console_base_url(),
+        console_api_url: crate::config::console_api_base_url(),
+        mcp_url: crate::config::mcp_base_url(),
+        mcp_disabled: super::mcp_injection_disabled_with_org(org.as_ref()),
+        debug_headers,
+    };
 
-    // Step 4: register the Edgee provider in the user's models.json
-    let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let agent_dir = agent_dir();
+    if let Some(models) = agent_dir.as_ref().map(|dir| dir.join("models.json")) {
+        match cleanup_legacy_providers(&models) {
+            Ok(outcome) => report_cleanup(&outcome),
+            // A failed cleanup must not block the launch; the user is told how to fix it.
+            Err(e) => eprintln!(
+                "{}",
+                format!("Could not clean up old Edgee providers in models.json: {e:#}").yellow()
+            ),
+        }
+    }
 
-    let (models, catalog) = tokio::join!(
-        util::fetch_gateway_models(&gateway_url, api_key),
-        util::fetch_model_catalog(&creds)
+    let spec_override = std::env::var(EXTENSION_OVERRIDE_ENV).ok();
+    let plan = extension_plan(
+        agent_dir.as_deref(),
+        home_dir().as_deref(),
+        &opts.args,
+        spec_override.as_deref(),
     );
-    let models = util::without_app_subscription_models(models, &catalog);
-    // `fetch_gateway_models` is best-effort and yields an empty list on any
-    // failure. OpenCode survives that — its provider still works without an
-    // explicit model map. Pi does not: a custom provider is *defined* by its
-    // models, so an empty list registers a provider pi can offer nothing from
-    // and the session opens on "No models available". Stop before touching the
-    // user's config rather than launching into that dead end.
-    if models.is_empty() {
-        // Distinguish the two causes, because they look identical from here and
-        // the second one is easy to misread as an auth problem: the gateway may
-        // be unreachable, or up and serving an empty catalog — it proxies
-        // `/v1/models` from the console API, so a dev stack with an unseeded
-        // model table answers 200 with `{"data":[]}` for any key, valid or not.
-        anyhow::bail!(
-            "The gateway at {gateway_url} returned no models, and {} needs an explicit model list.\n\
-             Check that the gateway is reachable and that its model catalog is populated \
-             (`curl {gateway_url}/v1/models`), then run `{}` again.",
-            agent.display_name(),
-            agent.launch_command()
-        );
-    }
-    let (anthropic_models, other_models): (Vec<_>, Vec<_>) = models
-        .into_iter()
-        .partition(|id| id.starts_with("anthropic/"));
-    let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
-    let mut providers = Vec::with_capacity(2);
-    if !other_models.is_empty() {
-        providers.push((
-            PROVIDER_KEY,
-            build_edgee_provider_for(
-                agent,
-                &gateway_url,
-                &other_models,
-                &catalog,
-                debug_log_headers.clone(),
-            ),
-        ));
-    }
-    if !anthropic_models.is_empty() {
-        providers.push((
-            ANTHROPIC_PROVIDER_KEY,
-            build_anthropic_provider_for(
-                agent,
-                &gateway_url,
-                &anthropic_models,
-                &catalog,
-                debug_log_headers,
-            ),
-        ));
+    if let Some(warning) = &plan.warning {
+        eprintln!("{}", warning.yellow());
     }
 
-    let models_path = agent
-        .models_path()
-        .context("Could not determine your home directory")?;
-    write_providers(&models_path, &providers)?;
-
-    // Step 5: launch the agent with the values its config refers to by name
-    let plugin_report = plugins::sync_for_target(&creds, agent.plugin_target()).await;
-    let mut cmd = std::process::Command::new(util::resolve_binary(agent.binary()));
-    cmd.env(API_KEY_ENV, api_key);
-    cmd.env(SESSION_ID_ENV, &session_id);
-    cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
-    cmd.args(plugin_args(agent, &plugin_report));
+    let plugin_report = plugins::sync_for_target(&creds, plugins::Target::Pi).await;
+    let mut cmd = std::process::Command::new(util::resolve_binary("pi"));
+    cmd.env(CONTEXT_ENV, serde_json::to_string(&context)?);
+    // Older pi-edgee releases only understand these.
+    cmd.env("EDGEE_API_KEY", &context.api_key);
+    cmd.env("EDGEE_SESSION_ID", &session_id);
+    cmd.env("EDGEE_ORG_SLUG", &context.org_slug);
+    if let Some(spec) = &plan.inject {
+        cmd.args(["-e", spec]);
+    }
+    if let Some(path) = &plugin_report.skills_root {
+        cmd.args(["--skill".to_string(), path.to_string_lossy().into_owned()]);
+    }
     cmd.args(&opts.args);
     plugins::report_launch(&plugin_report);
 
     let status = cmd.status().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!(agent.install_error())
+            anyhow::anyhow!(
+                "Pi is not installed. Install it with `npm install -g @mariozechner/pi-coding-agent`"
+            )
         } else {
             anyhow::anyhow!(e)
         }
     })?;
 
-    super::print_session_stats(&creds, &session_id, agent.display_name()).await;
+    super::print_session_stats(&creds, &session_id, "Pi").await;
 
     if let Some(code) = status.code() {
         std::process::exit(code);
@@ -636,395 +534,386 @@ pub(crate) async fn run_compatible(
 mod tests {
     use super::*;
 
-    #[test]
-    fn plugin_flags_match_agent_parsers_and_capabilities() {
-        let report = plugins::sync::SyncReport {
-            skills_root: Some(std::path::PathBuf::from("/tmp/edgee/pi/skills")),
-            plugin_dirs: vec![
-                std::path::PathBuf::from("/tmp/edgee/omp/alpha"),
-                std::path::PathBuf::from("/tmp/edgee/omp/beta"),
-            ],
-            ..Default::default()
-        };
-
-        assert_eq!(
-            plugin_args(CompatibleAgent::Pi, &report),
-            ["--skill", "/tmp/edgee/pi/skills"]
-        );
-        assert_eq!(
-            plugin_args(CompatibleAgent::Omp, &report),
-            [
-                "--plugin-dir=/tmp/edgee/omp/alpha",
-                "--plugin-dir=/tmp/edgee/omp/beta"
-            ]
-        );
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
     }
 
-    fn catalog_with_efforts(
-        id: &str,
-        context: Option<u64>,
-        efforts: &[&str],
-    ) -> util::ModelCatalog {
-        let mut catalog = util::ModelCatalog::new();
-        catalog.insert(
-            id.to_string(),
-            util::ModelMetadata {
-                context,
-                cost: None,
-                reasoning_efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
-                input_modalities: Vec::new(),
-                app_subscription_only: false,
-            },
-        );
-        catalog
+    fn write(path: &Path, content: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
     }
 
-    fn catalog_with(id: &str, context: Option<u64>) -> util::ModelCatalog {
-        catalog_with_efforts(id, context, &[])
+    fn plan(dir: &Path, args: &[String]) -> ExtensionPlan {
+        extension_plan(Some(dir), Some(dir), args, None)
     }
 
-    #[test]
-    fn declares_input_modalities_from_the_catalog() {
-        let models = vec!["anthropic/claude-opus-5".to_string()];
-        let catalog: util::ModelCatalog = [(
-            "anthropic/claude-opus-5".to_string(),
-            util::ModelMetadata {
-                input_modalities: ["text", "image", "audio", "video", "pdf"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect();
-
-        let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
-        assert_eq!(
-            provider["models"][0]["input"],
-            serde_json::json!(["text", "image"])
-        );
-    }
-
-    #[test]
-    fn stores_env_references_not_the_credential() {
-        let provider =
-            build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
-
-        // `$NAME`, the syntax pi has expanded since 0.79.4. A bare `EDGEE_API_KEY`
-        // is a plain literal there and would be sent verbatim as the credential.
-        assert_eq!(provider["apiKey"], "$EDGEE_API_KEY");
-        assert_eq!(provider["headers"]["x-edgee-api-key"], "$EDGEE_API_KEY");
-        assert_eq!(
-            provider["headers"]["x-edgee-session-id"],
-            "$EDGEE_SESSION_ID"
-        );
-    }
-
-    #[test]
-    fn omp_uses_bare_env_names_as_references() {
-        let provider = build_edgee_provider_for(
-            CompatibleAgent::Omp,
-            "https://api.edgee.ai",
-            &[],
-            &util::ModelCatalog::new(),
-            None,
-        );
-
-        assert_eq!(provider["apiKey"], "EDGEE_API_KEY");
-        assert_eq!(provider["headers"]["x-edgee-api-key"], "EDGEE_API_KEY");
-        assert_eq!(
-            provider["headers"]["x-edgee-session-id"],
-            "EDGEE_SESSION_ID"
-        );
-    }
-
-    #[test]
-    fn embeds_debug_log_headers_literally() {
-        // These are not env references: an unset reference resolves to nothing,
-        // and a pubkey/salt pair is derived from the passphrase, not secret.
-        let provider = build_edgee_provider(
-            "https://api.edgee.ai",
-            &[],
-            &util::ModelCatalog::new(),
-            Some(crate::crypto::DebugLogHeaderValues {
-                pubkey: "pubkey-b64".to_string(),
-                salt: "salt-b64".to_string(),
-            }),
-        );
-        assert_eq!(provider["headers"]["x-edgee-debug-pubkey"], "pubkey-b64");
-        assert_eq!(provider["headers"]["x-edgee-debug-salt"], "salt-b64");
-    }
-
-    #[test]
-    fn uses_openai_chat_completions_endpoint() {
-        // Pi appends `/chat/completions` to an OpenAI-compatible base URL.
-        let provider =
-            build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
-        assert_eq!(provider["baseUrl"], "https://api.edgee.ai/v1");
-        assert_eq!(provider["api"], "openai-completions");
-
-        let provider = build_edgee_provider(
-            "https://api.edgee.ai/",
-            &[],
-            &util::ModelCatalog::new(),
-            None,
-        );
-        assert_eq!(provider["baseUrl"], "https://api.edgee.ai/v1");
-    }
-
-    #[test]
-    fn anthropic_models_use_the_native_messages_endpoint() {
-        let provider = build_anthropic_provider(
-            "https://api.edgee.ai/",
-            &["anthropic/claude-sonnet-5".to_string()],
-            &util::ModelCatalog::new(),
-            None,
-        );
-
-        assert_eq!(provider["baseUrl"], "https://api.edgee.ai");
-        assert_eq!(provider["api"], "anthropic-messages");
-        assert_eq!(provider["models"][0]["id"], "anthropic/claude-sonnet-5");
-    }
-
-    #[test]
-    fn declares_context_window_only_when_the_catalog_has_one() {
-        let models = vec!["anthropic/claude-sonnet-5".to_string(), "zai/glm-5.2".to_string()];
-        let catalog = catalog_with("anthropic/claude-sonnet-5", Some(1_000_000));
-
-        let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
-        let entries = provider["models"].as_array().unwrap();
-
-        assert_eq!(entries[0]["id"], "anthropic/claude-sonnet-5");
-        assert_eq!(entries[0]["contextWindow"], 1_000_000);
-        assert_eq!(entries[0]["maxTokens"], PI_OUTPUT_TOKEN_MAX);
-        // Unknown to the catalog: better to let pi apply its own defaults than
-        // to declare a fabricated window.
-        assert_eq!(entries[1]["id"], "zai/glm-5.2");
-        assert!(entries[1].get("contextWindow").is_none());
-    }
-
-    #[test]
-    fn declares_reasoning_levels_from_the_catalog() {
-        let models = vec!["anthropic/claude-sonnet-5".to_string()];
-        let catalog = catalog_with_efforts(
-            "anthropic/claude-sonnet-5",
-            Some(1_000_000),
-            &["none", "low", "medium", "high", "xhigh", "max"],
-        );
-
-        let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
-        let model = &provider["models"][0];
-
-        assert_eq!(model["reasoning"], serde_json::json!(true));
-        assert_eq!(model["thinkingLevelMap"]["off"], "none");
-        assert_eq!(model["thinkingLevelMap"]["minimal"], Value::Null);
-        for effort in ["low", "medium", "high", "xhigh", "max"] {
-            assert_eq!(model["thinkingLevelMap"][effort], effort);
+    fn manifest(contract: Option<u64>) -> String {
+        match contract {
+            Some(v) => format!(
+                r#"{{"name":"pi-edgee","edgee":{{"cliContract":{v}}}}}"#
+            ),
+            None => r#"{"name":"pi-edgee"}"#.to_string(),
         }
-        assert!(model.get("compat").is_none());
     }
 
     #[test]
-    fn anthropic_reasoning_uses_adaptive_thinking() {
-        let models = vec!["anthropic/claude-sonnet-5".to_string()];
-        let catalog = catalog_with_efforts(
-            "anthropic/claude-sonnet-5",
-            Some(1_000_000),
-            &["none", "low", "medium", "high", "xhigh", "max"],
-        );
-        let provider = build_anthropic_provider("https://api.edgee.ai", &models, &catalog, None);
-
-        assert_eq!(
-            provider["models"][0]["compat"]["forceAdaptiveThinking"],
-            true
-        );
+    fn injects_the_pinned_release_when_nothing_is_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan(dir.path(), &args(&["--model", "edgee/x"]));
+        assert_eq!(plan.inject.as_deref(), Some(PI_EDGEE_SPEC));
+        assert_eq!(plan.warning, None);
     }
 
     #[test]
-    fn omp_anthropic_models_keep_the_omp_identity() {
-        let provider = build_anthropic_provider_for(
-            CompatibleAgent::Omp,
-            "https://api.edgee.ai",
-            &["anthropic/claude-sonnet-5".to_string()],
-            &util::ModelCatalog::new(),
-            None,
-        );
-
-        assert_eq!(provider["headers"]["User-Agent"], "omp");
-        assert_eq!(
-            provider["models"][0]["compat"]["allowAnthropicHeaderOverrides"],
-            true
-        );
-        assert_eq!(
-            provider["models"][0]["compat"]["disableStrictTools"],
-            true
-        );
-        assert_eq!(
-            provider["models"][0]["compat"]["injectClaudeCodeInstruction"],
-            false
-        );
+    fn honors_the_override_for_local_checkouts() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = extension_plan(Some(dir.path()), None, &[], Some("/src/pi-edgee"));
+        assert_eq!(plan.inject.as_deref(), Some("/src/pi-edgee"));
+        let empty = extension_plan(Some(dir.path()), None, &[], Some(""));
+        assert_eq!(empty.inject.as_deref(), Some(PI_EDGEE_SPEC));
     }
 
     #[test]
-    fn hides_pi_levels_the_catalog_does_not_support() {
-        let models = vec!["deepseek/deepseek-v4-pro".to_string()];
-        let catalog = catalog_with_efforts(
-            "deepseek/deepseek-v4-pro",
-            None,
-            &["low", "high", "max"],
+    fn injects_without_an_agent_dir() {
+        let plan = extension_plan(None, None, &[], None);
+        assert_eq!(plan.inject.as_deref(), Some(PI_EDGEE_SPEC));
+    }
+
+    #[test]
+    fn skips_injection_when_the_user_passes_pi_edgee() {
+        let dir = tempfile::tempdir().unwrap();
+        for given in [
+            args(&["-e", "npm:pi-edgee@0.2.0"]),
+            args(&["--extension", "/src/pi-edgee"]),
+            args(&["-ne", "-e", "./pi-edgee"]),
+        ] {
+            assert_eq!(plan(dir.path(), &given).inject, None, "{given:?}");
+        }
+    }
+
+    #[test]
+    fn unrelated_extensions_do_not_suppress_injection() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan(dir.path(), &args(&["-e", "npm:other-ext"]));
+        assert!(plan.inject.is_some());
+    }
+
+    #[test]
+    fn reuses_a_compatible_npm_install() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("settings.json"),
+            r#"{"packages":["npm:pi-edgee@0.2.0"]}"#,
         );
-
-        let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
-        let levels = &provider["models"][0]["thinkingLevelMap"];
-
-        assert_eq!(levels["off"], Value::Null);
-        assert_eq!(levels["minimal"], Value::Null);
-        assert_eq!(levels["low"], "low");
-        assert_eq!(levels["medium"], Value::Null);
-        assert_eq!(levels["high"], "high");
-        assert_eq!(levels["xhigh"], Value::Null);
-        assert_eq!(levels["max"], "max");
+        write(
+            &dir.path().join("npm/node_modules/pi-edgee/package.json"),
+            &manifest(Some(1)),
+        );
+        let plan = plan(dir.path(), &[]);
+        assert_eq!(plan, ExtensionPlan { inject: None, warning: None });
     }
 
     #[test]
-    fn omits_reasoning_fields_without_catalog_efforts() {
-        let models = vec!["openai/gpt-4.1".to_string()];
-        let catalog = catalog_with("openai/gpt-4.1", Some(1_000_000));
-
-        let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
-        let model = &provider["models"][0];
-        assert!(model.get("reasoning").is_none());
-        assert!(model.get("thinkingLevelMap").is_none());
-        assert!(model.get("compat").is_none());
+    fn matches_unpinned_and_object_form_sources() {
+        for settings in [
+            r#"{"packages":["npm:pi-edgee"]}"#,
+            r#"{"packages":[{"source":"npm:pi-edgee@0.1.1","skills":[]}]}"#,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            write(&dir.path().join("settings.json"), settings);
+            assert_eq!(plan(dir.path(), &[]).inject, None, "{settings}");
+        }
     }
 
     #[test]
-    fn preserves_unrelated_config_when_registering() {
+    fn warns_when_an_install_predates_the_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("settings.json"),
+            r#"{"packages":["npm:pi-edgee@0.1.1"]}"#,
+        );
+        write(
+            &dir.path().join("npm/node_modules/pi-edgee/package.json"),
+            &manifest(None),
+        );
+        let plan = plan(dir.path(), &[]);
+        assert_eq!(plan.inject, None);
+        assert!(plan.warning.unwrap().contains("pi update"));
+    }
+
+    #[test]
+    fn warns_when_the_install_cannot_be_inspected() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("settings.json"),
+            r#"{"packages":["npm:pi-edgee"]}"#,
+        );
+        assert!(plan(dir.path(), &[]).warning.is_some());
+    }
+
+    #[test]
+    fn recognises_local_checkouts_by_package_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("src/pi-edgee");
+        write(&checkout.join("package.json"), &manifest(Some(1)));
+        write(
+            &dir.path().join("settings.json"),
+            &format!(r#"{{"packages":["{}"]}}"#, checkout.display()),
+        );
+        assert_eq!(plan(dir.path(), &[]), ExtensionPlan { inject: None, warning: None });
+
+        // Same layout but a different package: not ours.
+        let other = tempfile::tempdir().unwrap();
+        let unrelated = other.path().join("tools");
+        write(&unrelated.join("package.json"), r#"{"name":"other"}"#);
+        write(
+            &other.path().join("settings.json"),
+            &format!(r#"{{"packages":["{}"]}}"#, unrelated.display()),
+        );
+        assert!(plan(other.path(), &[]).inject.is_some());
+    }
+
+    #[test]
+    fn resolves_tilde_and_relative_local_sources() {
+        let home = tempfile::tempdir().unwrap();
+        let agent = home.path().join(".pi/agent");
+        write(&home.path().join("dev/pi-edgee/package.json"), &manifest(Some(1)));
+        write(&agent.join("settings.json"), r#"{"packages":["~/dev/pi-edgee"]}"#);
+        let tilde = extension_plan(Some(&agent), Some(home.path()), &[], None);
+        assert_eq!(tilde.inject, None);
+
+        write(&agent.join("local/pi-edgee/package.json"), &manifest(Some(1)));
+        write(&agent.join("settings.json"), r#"{"packages":["./local/pi-edgee"]}"#);
+        let relative = extension_plan(Some(&agent), Some(home.path()), &[], None);
+        assert_eq!(relative.inject, None);
+    }
+
+    #[test]
+    fn a_filtered_out_package_does_not_count_as_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("settings.json"),
+            r#"{"packages":[{"source":"npm:pi-edgee","extensions":[]}]}"#,
+        );
+        assert!(plan(dir.path(), &[]).inject.is_some());
+    }
+
+    #[test]
+    fn recognises_the_auto_discovered_extensions_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("extensions/pi-edgee/package.json"),
+            &manifest(Some(1)),
+        );
+        assert_eq!(plan(dir.path(), &[]).inject, None);
+
+        let single = tempfile::tempdir().unwrap();
+        write(&single.path().join("extensions/pi-edgee.ts"), "export default () => {}");
+        let plan = plan(single.path(), &[]);
+        assert_eq!(plan.inject, None);
+        assert!(plan.warning.is_some());
+    }
+
+    #[test]
+    fn no_extensions_ignores_installs_and_injects_anyway() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("settings.json"),
+            r#"{"packages":["npm:pi-edgee"]}"#,
+        );
+        for flag in ["-ne", "--no-extensions"] {
+            assert!(plan(dir.path(), &args(&[flag])).inject.is_some(), "{flag}");
+        }
+    }
+
+    #[test]
+    fn malformed_settings_count_as_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("settings.json"), "{not json");
+        assert!(plan(dir.path(), &[]).inject.is_some());
+    }
+
+    #[test]
+    fn project_level_installs_are_not_considered() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = dir.path().join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        write(
+            &dir.path().join(".pi/settings.json"),
+            r#"{"packages":["npm:pi-edgee"]}"#,
+        );
+        assert!(plan(&agent, &[]).inject.is_some());
+    }
+
+    #[test]
+    fn extension_args_follow_pi_flag_spelling() {
+        let given = args(&["--extension=npm:pi-edgee", "-e", "a", "--extension", "b"]);
+        assert_eq!(extension_args(&given).collect::<Vec<_>>(), ["a", "b"]);
+    }
+
+    fn cli_block(api: &str) -> Value {
+        serde_json::json!({
+            "name": "Edgee",
+            "api": api,
+            "apiKey": "$EDGEE_API_KEY",
+            "headers": {
+                "x-edgee-api-key": "$EDGEE_API_KEY",
+                "x-edgee-session-id": "$EDGEE_SESSION_ID"
+            },
+            "models": [{ "id": "openai/gpt-5" }]
+        })
+    }
+
+    fn read_json(path: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn removes_generated_blocks_and_keeps_everything_else() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("models.json");
-        std::fs::write(
-            &path,
-            r#"{"providers":{"ollama":{"baseUrl":"http://localhost:11434/v1","api":"openai-completions","apiKey":"ollama","models":[{"id":"llama3.1:8b"}]}}}"#,
-        )
-        .unwrap();
+        let original = serde_json::json!({
+            "providers": {
+                "edgee": cli_block("openai-completions"),
+                "edgee-anthropic": cli_block("anthropic-messages"),
+                "ollama": { "baseUrl": "http://localhost:11434/v1" }
+            },
+            "other": [1, 2, 3]
+        });
+        write(&path, &serde_json::to_string_pretty(&original).unwrap());
 
-        let provider =
-            build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
-        write_providers(&path, &[(PROVIDER_KEY, provider)]).unwrap();
-
-        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        // The user's own provider survives untouched...
-        assert_eq!(written["providers"]["ollama"]["apiKey"], "ollama");
-        assert_eq!(
-            written["providers"]["ollama"]["models"][0]["id"],
-            "llama3.1:8b"
-        );
-        // ...alongside ours.
-        assert_eq!(written["providers"]["edgee"]["name"], "Edgee");
+        let outcome = cleanup_legacy_providers(&path).unwrap();
+        let LegacyCleanup::Removed { providers, backup } = outcome else {
+            panic!("expected removal, got {outcome:?}");
+        };
+        assert_eq!(providers, ["edgee", "edgee-anthropic"]);
+        assert_eq!(read_json(&backup), original);
+        let after = read_json(&path);
+        assert_eq!(after["providers"].as_object().unwrap().len(), 1);
+        assert_eq!(after["providers"]["ollama"], original["providers"]["ollama"]);
+        assert_eq!(after["other"], original["other"]);
     }
 
     #[test]
-    fn replaces_only_its_own_providers_on_relaunch() {
+    fn keeps_the_first_backup_across_runs() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("models.json");
+        let original = serde_json::json!({ "providers": { "edgee": cli_block("openai-completions") } });
+        write(&path, &original.to_string());
+        let backup = backup_path(&path);
 
-        let first = build_edgee_provider(
-            "https://api.edgee.ai",
-            &["anthropic/claude-sonnet-5".to_string()],
-            &catalog_with("anthropic/claude-sonnet-5", Some(1_000_000)),
-            None,
-        );
-        let anthropic = build_anthropic_provider(
-            "https://api.edgee.ai",
-            &["anthropic/claude-sonnet-5".to_string()],
-            &catalog_with("anthropic/claude-sonnet-5", Some(1_000_000)),
-            None,
-        );
-        write_providers(
+        cleanup_legacy_providers(&path).unwrap();
+        // An older CLI (or the user) recreates a block, then a later run cleans it again.
+        write(
             &path,
-            &[
-                (PROVIDER_KEY, first),
-                (ANTHROPIC_PROVIDER_KEY, anthropic),
-            ],
-        )
-        .unwrap();
-        let second = build_edgee_provider(
-            "https://gateway.example.com",
-            &[],
-            &util::ModelCatalog::new(),
-            None,
+            &serde_json::json!({ "providers": { "edgee": cli_block("openai-completions"), "new": {} } })
+                .to_string(),
         );
-        write_providers(&path, &[(PROVIDER_KEY, second)]).unwrap();
-
-        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        // Rewritten wholesale rather than merged, so a model dropped from the
-        // gateway catalog does not linger in the user's picker forever.
-        assert_eq!(
-            written["providers"]["edgee"]["baseUrl"],
-            "https://gateway.example.com/v1"
-        );
-        assert!(written["providers"]["edgee"].get("models").is_none());
-        assert!(written["providers"].get(ANTHROPIC_PROVIDER_KEY).is_none());
+        cleanup_legacy_providers(&path).unwrap();
+        assert_eq!(read_json(&backup), original);
     }
 
     #[test]
-    fn refuses_to_clobber_an_unparseable_config() {
+    fn leaves_customised_blocks_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("models.json");
-        let original = "{ this is not json";
-        std::fs::write(&path, original).unwrap();
+        let mut custom = cli_block("openai-completions");
+        custom["apiKey"] = Value::String("sk-literal".into());
+        let content = serde_json::json!({ "providers": { "edgee": custom } }).to_string();
+        write(&path, &content);
 
-        let provider =
-            build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
-        assert!(write_providers(&path, &[(PROVIDER_KEY, provider)]).is_err());
-        // The user's file is left exactly as it was.
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        let outcome = cleanup_legacy_providers(&path).unwrap();
+        assert!(matches!(outcome, LegacyCleanup::Skipped(_)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+        assert!(!backup_path(&path).exists());
     }
 
     #[test]
-    fn creates_the_agent_dir_when_absent() {
+    fn removes_only_the_generated_block_when_mixed() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested").join("agent").join("models.json");
-
-        let provider =
-            build_edgee_provider("https://api.edgee.ai", &[], &util::ModelCatalog::new(), None);
-        write_providers(&path, &[(PROVIDER_KEY, provider)]).unwrap();
-
-        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(written["providers"]["edgee"]["name"], "Edgee");
-    }
-
-    #[test]
-    fn omp_models_path_uses_omp_agent_dir() {
-        assert_eq!(
-            CompatibleAgent::Omp.models_path().map(|path| path.file_name().unwrap().to_owned()),
-            Some(std::ffi::OsString::from("models.yml"))
-        );
-    }
-
-    #[test]
-    fn omp_yaml_preserves_unrelated_providers() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("models.yml");
-        std::fs::write(
+        let path = dir.path().join("models.json");
+        let mut custom = cli_block("anthropic-messages");
+        custom["headers"]["x-edgee-session-id"] = Value::String("fixed".into());
+        write(
             &path,
-            "providers:\n  local:\n    api: openai-completions\n    baseUrl: http://localhost:8080/v1\n",
-        )
-        .unwrap();
-
-        let provider =
-            build_edgee_provider("https://stg.edgee.io", &[], &util::ModelCatalog::new(), None);
-        write_providers(&path, &[(PROVIDER_KEY, provider)]).unwrap();
-
-        let written: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(
-            written["providers"]["local"]["baseUrl"],
-            "http://localhost:8080/v1"
+            &serde_json::json!({
+                "providers": { "edgee": cli_block("openai-completions"), "edgee-anthropic": custom }
+            })
+            .to_string(),
         );
-        assert_eq!(
-            written["providers"]["edgee"]["baseUrl"],
-            "https://stg.edgee.io/v1"
-        );
+
+        let outcome = cleanup_legacy_providers(&path).unwrap();
+        assert!(matches!(&outcome, LegacyCleanup::Removed { providers, .. } if providers == &["edgee"]));
+        let after = read_json(&path);
+        assert!(after["providers"].get("edgee").is_none());
+        assert!(after["providers"].get("edgee-anthropic").is_some());
+    }
+
+    #[test]
+    fn leaves_unparseable_and_comment_bearing_files_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models.json");
+        for content in ["{not json", "// note\n{\"providers\":{\"edgee\":{}}}", "[]"] {
+            write(&path, content);
+            let outcome = cleanup_legacy_providers(&path).unwrap();
+            assert!(
+                matches!(outcome, LegacyCleanup::Skipped(_) | LegacyCleanup::Nothing),
+                "{content}: {outcome:?}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+        }
+    }
+
+    #[test]
+    fn missing_file_or_unrelated_providers_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models.json");
+        assert_eq!(cleanup_legacy_providers(&path).unwrap(), LegacyCleanup::Nothing);
+
+        let content = r#"{"providers":{"ollama":{}}}"#;
+        write(&path, content);
+        assert_eq!(cleanup_legacy_providers(&path).unwrap(), LegacyCleanup::Nothing);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+    }
+
+    fn sample_context(debug: bool) -> LaunchContext {
+        LaunchContext {
+            version: CONTRACT_VERSION,
+            session_id: "42999158-ae9f-5b44-8834-27675aacf427".into(),
+            api_key: "ek_test".into(),
+            api_key_id: None,
+            user_token: "tok_test".into(),
+            org_id: "org-1".into(),
+            org_slug: "acme".into(),
+            org_name: Some("Acme".into()),
+            gateway_url: "https://api.edgee.ai".into(),
+            console_url: "https://www.edgee.ai".into(),
+            console_api_url: "https://api.edgee.app".into(),
+            mcp_url: "https://api.edgee.app/mcp".into(),
+            mcp_disabled: false,
+            debug_headers: debug.then(|| DebugHeaders {
+                pubkey: "pk".into(),
+                salt: "salt".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn context_uses_the_camel_case_wire_format() {
+        let json = serde_json::to_value(sample_context(true)).unwrap();
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["sessionId"], "42999158-ae9f-5b44-8834-27675aacf427");
+        assert_eq!(json["apiKey"], "ek_test");
+        assert_eq!(json["userToken"], "tok_test");
+        assert_eq!(json["consoleApiUrl"], "https://api.edgee.app");
+        assert_eq!(json["mcpDisabled"], false);
+        assert_eq!(json["debugHeaders"]["pubkey"], "pk");
+    }
+
+    #[test]
+    fn context_omits_unset_optionals() {
+        let json = serde_json::to_value(sample_context(false)).unwrap();
+        assert!(json.get("debugHeaders").is_none());
+        assert!(json.get("apiKeyId").is_none());
     }
 }
