@@ -28,7 +28,7 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 /// Canonical relay targets (same public names as `edgee launch`). See
 /// `src/commands/launch/README.md` for naming rules.
 const TARGETS: &[&str] =
-    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
+    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "phpstorm", "pi", "omp", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
@@ -47,6 +47,9 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
         "copilot-cli" => Some("copilot-cli"),
         "copilot-desktop" => Some("copilot-desktop"),
         "intellij" => Some("intellij"),
+        "phpstorm" => Some("phpstorm"),
+        "pi" => Some("pi"),
+        "omp" => Some("omp"),
         // GitHub Copilot in VS Code — canonical name is `copilot-vscode`.
         "copilot-vscode" | "vscode-copilot" | "vscode" | "code" => Some("copilot-vscode"),
         _ => None,
@@ -58,9 +61,9 @@ fn is_copilot_vscode(agent: &str) -> bool {
     agent == "copilot-vscode"
 }
 
-/// True for IntelliJ IDEA hosting the GitHub Copilot plugin.
-fn is_intellij(agent: &str) -> bool {
-    agent == "intellij"
+/// True for JetBrains IDEs hosting the GitHub Copilot plugin.
+fn is_jetbrains(agent: &str) -> bool {
+    matches!(agent, "intellij" | "phpstorm")
 }
 
 /// True for the standalone GitHub Copilot app.
@@ -80,17 +83,17 @@ fn uses_trusted_copilot_ca(agent: &str) -> bool {
     is_copilot_vscode(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent)
 }
 
-/// True for OpenCode running with its existing provider configuration. It is a
-/// generic passthrough target and may use GitHub Copilot, so its relay must also
+/// True for provider CLIs running with their existing provider configuration in
+/// generic passthrough mode and may use GitHub Copilot, so the relay must also
 /// intercept the Copilot-only hosts.
-fn is_opencode(agent: &str) -> bool {
-    agent == "opencode"
+fn is_provider_cli(agent: &str) -> bool {
+    matches!(agent, "opencode" | "pi" | "omp")
 }
 
-/// Whether this relay target can produce GitHub Copilot traffic. OpenCode is
+/// Whether this relay target can produce GitHub Copilot traffic. Provider CLIs are
 /// included because Copilot may be selected in the user's existing config.
 fn intercepts_copilot_hosts(agent: &str) -> bool {
-    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_intellij(agent) || is_copilot_vscode(agent) || is_opencode(agent)
+    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_jetbrains(agent) || is_copilot_vscode(agent) || is_provider_cli(agent)
 }
 
 /// True for the Cursor relay target (launches the `cursor` binary).
@@ -108,13 +111,13 @@ fn is_claude_desktop(agent: &str) -> bool {
 /// announce per-request), and the gateway forwards to the editor's own backend
 /// rather than routing through an Edgee provider pipeline.
 fn is_gui_editor(agent: &str) -> bool {
-    is_copilot_vscode(agent) || is_intellij(agent) || is_cursor(agent)
+    is_copilot_vscode(agent) || is_jetbrains(agent) || is_cursor(agent)
 }
 
 /// Whether requests retain the agent's existing provider credentials and must
 /// be forwarded to their original upstream by the gateway.
 fn uses_upstream_credentials(agent: &str) -> bool {
-    is_gui_editor(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent) || is_opencode(agent)
+    is_gui_editor(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent) || is_provider_cli(agent)
 }
 
 /// Display name of the GUI editor behind a relay target, for user-facing messages.
@@ -122,8 +125,10 @@ fn uses_upstream_credentials(agent: &str) -> bool {
 fn editor_app_name(agent: &str) -> &'static str {
     if is_cursor(agent) {
         "Cursor"
-    } else if is_intellij(agent) {
+    } else if agent == "intellij" {
         "IntelliJ IDEA"
+    } else if agent == "phpstorm" {
+        "PHPStorm"
     } else {
         "VS Code"
     }
@@ -175,7 +180,8 @@ fn macos_cli_path_hint(agent: &str) -> Option<&'static [&'static str]> {
 fn key_provider(target: &str) -> &str {
     match target {
         // Copilot surfaces share one provider key and retain GitHub credentials.
-        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" => "copilot",
+        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" | "phpstorm" => "copilot",
+        "omp" => "pi",
         // Claude Desktop is a dedicated backend agent with its own key/compression
         // (coding_assistant `claude_desktop`), so it maps to its own provider slot
         // rather than sharing the `claude` (Claude Code) key.
@@ -187,7 +193,7 @@ fn key_provider(target: &str) -> &str {
 }
 
 setup_command! {
-    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|copilot-vscode|cursor|opencode).
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|phpstorm|copilot-vscode|cursor|opencode|pi|omp).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
@@ -195,7 +201,7 @@ setup_command! {
     #[arg(long)]
     pub no_launch: bool,
     /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200,
-    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700) so multiple relays can
+    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700, phpstorm 41800, pi 41900, omp 42000) so multiple relays can
     /// run side by side.
     #[arg(long)]
     pub port: Option<u16>,
@@ -275,6 +281,16 @@ async fn run_with_reroute(
             crate::commands::auth::login::ensure_onboarded("claude").await?;
         }
     }
+    // Provider CLIs can use Codex's ChatGPT subscription endpoint as well as
+    // Copilot. That endpoint requires the Codex pipeline, not passthrough.
+    if is_provider_cli(&agent) {
+        let reprov = crate::commands::auth::login::ensure_valid_provider_key("codex")
+            .await?
+            .created;
+        if reprov && interactive {
+            crate::commands::auth::login::ensure_onboarded("codex").await?;
+        }
+    }
     creds = crate::config::read()?;
 
     let api_key = creds
@@ -303,7 +319,7 @@ async fn run_with_reroute(
     // backend, so record the original upstream.
     let passthrough_to_upstream = uses_upstream_credentials(&agent);
     let debug_log_headers = crate::commands::launch::util::resolve_debug_log_keypair()?.map(|k| k.header_values());
-    let gateway = build_gateway_target(
+    let mut gateway = build_gateway_target(
         &gateway_url,
         api_key,
         session_id.clone(),
@@ -312,6 +328,10 @@ async fn run_with_reroute(
         claude_api_key,
         debug_log_headers,
     )?;
+
+    if is_provider_cli(&agent) {
+        gateway.codex_api_key = creds.provider_api_key("codex").map(str::to_string);
+    }
 
     // Native Copilot clients and GUI front-ends use dedicated, name-constrained
     // CAs because their TLS stacks do not consistently trust NODE_EXTRA_CA_CERTS.
@@ -329,7 +349,7 @@ async fn run_with_reroute(
     };
     let ca = build_ca(&cert_pem, &key_pem)?;
     let port = opts.port.unwrap_or_else(|| {
-        if is_copilot_desktop(&agent) { 41600 } else if is_intellij(&agent) { 41700 } else { default_port(&provider) }
+        if is_copilot_desktop(&agent) { 41600 } else if agent == "intellij" { 41700 } else if agent == "phpstorm" { 41800 } else if agent == "omp" { 42000 } else { default_port(&provider) }
     });
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
@@ -603,6 +623,7 @@ fn default_port(provider: &str) -> u16 {
         "cursor" => 41300,
         "claude_desktop" => 41400,
         "opencode" => 41500,
+        "pi" => 41900,
         _ => 41100, // claude / copilot / proxy-only
     }
 }
@@ -633,6 +654,7 @@ fn build_gateway_target(
         repo,
         passthrough_to_upstream,
         claude_api_key,
+        codex_api_key: None,
         debug_log_headers,
     })
 }
@@ -1160,6 +1182,19 @@ fn spawn_bin_name_and_args(agent: &str) -> (&str, &'static [&'static str]) {
     }
 }
 
+/// Pi uses Node fetch, while OMP has a provider-aware Bun fetch wrapper.
+fn configure_pi_proxy(cmd: &mut tokio::process::Command, agent: &str, proxy_url: &str) {
+    if agent == "pi" {
+        // Enable env proxy support for Node's native fetch on supported runtimes.
+        cmd.env("NODE_USE_ENV_PROXY", "1");
+    } else if agent == "omp" {
+        // OMP's own proxy variables take precedence over HTTPS_PROXY. Set both
+        // scopes so an inherited Copilot override cannot bypass this relay.
+        cmd.env("PI_PROXY", proxy_url);
+        cmd.env("PI_PROXY_GITHUB_COPILOT", proxy_url);
+    }
+}
+
 /// Spawn the named agent wired through the proxy and return the live child handle
 /// (the caller awaits it, and kills it on Ctrl-C). The proxy injects Edgee auth on
 /// reroute, so no base-URL / custom-header env is needed here.
@@ -1183,8 +1218,13 @@ fn spawn_agent(
     // NODE_EXTRA_CA_CERTS *and* the --ignore-certificate-errors* switches when
     // passed via argv), so the relay CA must be trusted in the keychain — handled
     // in the System keychain by `ensure_ca_trusted` in `run`.
-    let mut cmd = if is_intellij(agent) {
-        let mut c = tokio::process::Command::new(crate::commands::launch::intellij::binary()?);
+    let mut cmd = if is_jetbrains(agent) {
+        let bin = if agent == "phpstorm" {
+            crate::commands::launch::phpstorm::binary()?
+        } else {
+            crate::commands::launch::intellij::binary()?
+        };
+        let mut c = tokio::process::Command::new(bin);
         c.args(&extras.args).stdin(std::process::Stdio::null());
         c
     } else if is_copilot_desktop(agent) {
@@ -1245,6 +1285,7 @@ fn spawn_agent(
     cmd.env("HTTP_PROXY", &proxy_url);
     cmd.env("https_proxy", &proxy_url);
     cmd.env("http_proxy", &proxy_url);
+    configure_pi_proxy(&mut cmd, agent, &proxy_url);
     // Exempt loopback from the proxy. The proxy env is inherited by every child
     // process the agent spawns — notably MCP servers, which commonly talk to a
     // local endpoint (`http://127.0.0.1:PORT`). Without a bypass, Node-based MCP
@@ -1507,12 +1548,12 @@ fn print_claude_desktop_hint() {
 
 fn print_gui_editor_hint(agent: &str) {
     let app = editor_app_name(agent);
-    if is_intellij(agent) {
-        println!("Launching IntelliJ IDEA with Copilot through Edgee.");
-        println!("Quit all IntelliJ IDEA windows first so Copilot receives the connection settings.");
+    if is_jetbrains(agent) {
+        println!("Launching {app} with Copilot through Edgee.");
+        println!("Quit all {app} windows first so Copilot receives the connection settings.");
         println!("Install and sign in to the GitHub Copilot plugin. Usage is grouped under Copilot.");
         println!("IDE HTTP Proxy settings override the launch environment; use No proxy there to use Edgee.");
-        println!("Keep this command running, and quit IntelliJ IDEA before stopping it with Ctrl-C.");
+        println!("Keep this command running, and quit {app} before stopping it with Ctrl-C.");
         return;
     }
     let (cli, launch, feature) = if is_cursor(agent) {
@@ -1597,6 +1638,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn phpstorm_uses_copilot_subscription_and_editor_lifecycle() {
+        assert_eq!(canonicalize_target("phpstorm"), Some("phpstorm"));
+        assert_eq!(key_provider("phpstorm"), "copilot");
+        assert!(uses_upstream_credentials("phpstorm"));
+        assert!(intercepts_copilot_hosts("phpstorm"));
+        assert!(is_gui_editor("phpstorm"));
+        assert_eq!(editor_app_name("phpstorm"), "PHPStorm");
+        assert!(!uses_trusted_copilot_ca("phpstorm"));
+    }
+
+    #[test]
+    fn pi_and_omp_receive_runtime_proxy_settings() {
+        let proxy = "http://127.0.0.1:41900";
+        for (target, vars) in [
+            ("pi", vec![("NODE_USE_ENV_PROXY", "1")]),
+            ("omp", vec![("PI_PROXY", proxy), ("PI_PROXY_GITHUB_COPILOT", proxy)]),
+        ] {
+            let mut cmd = tokio::process::Command::new(target);
+            configure_pi_proxy(&mut cmd, target, proxy);
+            for (name, value) in vars {
+                assert!(cmd.as_std().get_envs().any(|(key, val)| key == name && val == Some(std::ffi::OsStr::new(value))));
+            }
+        }
+    }
+
+    #[test]
+    fn pi_and_omp_relay_preserve_provider_credentials() {
+        for target in ["pi", "omp"] {
+            assert_eq!(canonicalize_target(target), Some(target));
+            assert_eq!(key_provider(target), "pi");
+            assert!(uses_upstream_credentials(target));
+            assert!(intercepts_copilot_hosts(target));
+            assert!(!is_gui_editor(target));
+            assert!(!uses_trusted_copilot_ca(target));
+            assert_eq!(spawn_bin_name_and_args(target), (target, &[][..]));
+        }
+    }
+
+    #[test]
     fn intellij_uses_copilot_subscription_and_editor_lifecycle() {
         assert_eq!(canonicalize_target("intellij"), Some("intellij"));
         assert_eq!(key_provider("intellij"), "copilot");
@@ -1674,7 +1754,7 @@ mod tests {
 
     #[test]
     fn opencode_relay_uses_its_own_key_and_binary() {
-        assert!(is_opencode("opencode"));
+        assert!(is_provider_cli("opencode"));
         assert!(uses_upstream_credentials("opencode"));
         assert_eq!(key_provider("opencode"), "opencode");
         assert_eq!(spawn_bin_name_and_args("opencode"), ("opencode", &[][..]));
