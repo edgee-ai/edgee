@@ -2,7 +2,6 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use anyhow::Result;
-use console::style;
 
 use super::util;
 use crate::commands::util::plugins;
@@ -138,31 +137,12 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     // they set the env var (see `mcp_injection_disabled_with_org`).
     let wants_mcp = creds.enable_mcp.unwrap_or(false);
     if mcp_disabled && wants_mcp {
-        // Without this the integration would just silently vanish, which reads
-        // as a bug rather than a deliberate setting. Name the actual source, so
-        // a forgotten export doesn't look like an org decision.
-        let reason = if crate::config::mcp_injection_disabled_env_override() == Some(true) {
-            "EDGEE_MCP_INJECTION_DISABLED is set"
-        } else {
-            "Edgee MCP is turned off for your organization"
-        };
-        println!("{}", style(format!("  {reason} — skipping.")).dim());
+        super::mcp::print_injection_skipped();
     }
     let use_mcp = wants_mcp && !mcp_disabled;
     if use_mcp {
         let mcp_config_path = write_mcp_config(&creds)?;
-        let session_url = match creds.org_slug.as_deref() {
-            Some(slug) if !slug.is_empty() => {
-                format!(
-                    "{}/sessions/{slug}/{session_id}",
-                    crate::config::console_base_url()
-                )
-            }
-            _ => format!(
-                "{}/sessions/{session_id}",
-                crate::config::console_base_url()
-            ),
-        };
+        let session_url = super::mcp::session_url(&creds, &session_id);
         let system_prompt =
             super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
         let system_prompt_path = write_system_prompt_file(&system_prompt)?;
@@ -262,15 +242,7 @@ fn mcp_injection_args(
 fn write_mcp_config(creds: &crate::config::Credentials) -> Result<std::path::PathBuf> {
     let token = creds.user_token.as_deref().unwrap_or("");
     let mcp_config = serde_json::json!({
-        "mcpServers": {
-            "edgee": {
-                "type": "http",
-                "url": crate::config::mcp_base_url(),
-                "headers": {
-                    "Authorization": format!("Bearer {token}")
-                }
-            }
-        }
+        "mcpServers": { "edgee": super::mcp::edgee_http_server(token) }
     });
 
     let dir = crate::config::config_dir();

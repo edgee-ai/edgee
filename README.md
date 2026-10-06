@@ -314,6 +314,32 @@ to disable the mod, or `EDGEE_NO_UPDATE_CHECK=1` to skip CLI update checks.
 
 ---
 
+## GitHub Copilot CLI statusline
+
+`edgee launch copilot-cli` shows the session in Copilot CLI's statusline: the last model served,
+requests, tokens, cache hit, cost and what Edgee saved, plus a warning when a request fell back to
+another model.
+
+```
+◆ Edgee  claude-sonnet-4.6 · 142 req · 4.1M↑ 197k↓ · 92% cache · $1.24 · $0.31 saved
+```
+
+Each launch makes sure `~/.copilot/settings.json` (or `$COPILOT_HOME/settings.json`) has
+`statusLine.command = "\"${EDGEE_BIN:-edgee}\" statusline"`. `EDGEE_BIN` is the `edgee` that launched the
+session, so it works whichever `edgee` is on Copilot's `PATH`. A statusLine of your own is never
+replaced. Outside `edgee launch` the segment renders nothing.
+
+```bash
+edgee statusline copilot install          # set it up now (also undoes `uninstall`)
+edgee statusline copilot install --wrap   # show Edgee next to your own statusLine
+edgee statusline copilot uninstall        # remove it, and stop launch from adding it again
+```
+
+`uninstall` leaves a `statusline-copilot.disabled` marker in Edgee's config directory, and gives you
+back your own command if `--wrap` had merged the two.
+
+---
+
 ## Supported agents
 
 | Tool | Setup command | Status |

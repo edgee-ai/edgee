@@ -18,6 +18,8 @@ setup_commands! {
     /// Show stored session stats
     #[command(visible_alias = "report")]
     Stats(stats),
+    /// Render the Edgee statusline and manage the Copilot CLI integration
+    Statusline(statusline),
     /// Relay LLM API traffic through the Edgee gateway via a local MITM proxy
     #[command(hide = true)]
     Relay(relay),
