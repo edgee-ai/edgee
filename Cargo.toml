@@ -40,7 +40,6 @@ serde_yaml = "0.9.34"
 tempfile = "3"
 self_update = { version = "0.44.0", default-features = false, optional = true, features = ["reqwest", "rustls"] }
 time = { version = "0.3.47", features = ["formatting", "parsing", "serde", "serde-human-readable", "macros"] }
-unicode-width = "0.2"
 x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
 
 # Local MITM relay (`edgee relay` / app launch targets)

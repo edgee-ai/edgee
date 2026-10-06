@@ -602,6 +602,35 @@ impl SessionStats {
     }
 }
 
+/// Live totals of a running session (`GET .../sessions/{id}/summary`), as the
+/// statusline shows them. Unlike [`SessionStats`] it does not close the session.
+/// Every field defaults so a gateway-side addition or omission never breaks it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionSummary {
+    pub total_requests: u64,
+    /// Nanodollars.
+    pub total_cost: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cached_input_tokens: u64,
+    pub total_tool_compression_cost_savings: u64,
+    pub total_mcp_surface_cost_savings: u64,
+    pub total_output_cost_savings: u64,
+    pub total_fallback_requests: u64,
+    pub last_request_is_fallback: bool,
+    pub last_request_model: String,
+}
+
+impl SessionSummary {
+    /// Cost Edgee saved on this session, in nanodollars.
+    pub fn total_savings(&self) -> u64 {
+        self.total_tool_compression_cost_savings
+            + self.total_mcp_surface_cost_savings
+            + self.total_output_cost_savings
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCompressionStat {
     pub count: u64,
@@ -1024,6 +1053,24 @@ impl ApiClient {
             .await
             .map(Some)
             .context("Invalid session stats response")
+    }
+
+    /// Running totals of a session, without ending it. `org` is an org ID or slug.
+    pub async fn get_session_summary(&self, org: &str, session_id: &str) -> Result<SessionSummary> {
+        let url = format!(
+            "{}/v1/organizations/{org}/sessions/{session_id}/summary",
+            self.base_url
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to get session summary")?;
+        check_status(&resp, "get session summary")?;
+        resp.json()
+            .await
+            .context("Invalid session summary response")
     }
 }
 

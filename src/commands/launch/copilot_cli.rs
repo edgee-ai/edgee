@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::commands::relay::AgentExtras;
+use crate::commands::statusline::copilot as statusline;
 use crate::commands::util::plugins;
 
 #[derive(Debug, clap::Parser)]
@@ -51,12 +52,12 @@ pub(crate) async fn prepare(
     let mut creds = crate::config::read()?;
     let mut extras = AgentExtras::default();
 
-    // The statusline renderer reads this to reach the active profile's API.
-    extras
-        .env
-        .push(("EDGEE_CONSOLE_API_URL", crate::config::console_api_base_url().into()));
-
-    crate::commands::statusline::copilot::install::ensure_installed_on_launch().await;
+    // The statusline Copilot runs is this very binary, not whichever `edgee`
+    // (possibly an older release) is first on its PATH.
+    if let Ok(exe) = std::env::current_exe() {
+        extras.env.push((statusline::BIN_ENV, exe.into_os_string()));
+    }
+    statusline::ensure_on_launch();
 
     let org = super::fetch_active_org(&creds).await;
     let mcp_disabled = super::mcp_injection_disabled_with_org(org.as_ref());

@@ -515,8 +515,8 @@ and placed before the user's args. Verified against Copilot CLI 1.0.90:
   reads `.github/instructions/*.instructions.md` from those directories.
 - **Org plugins**: the Claude bundle, one `--plugin-dir=` per plugin. Copilot
   reads `.claude-plugin/plugin.json` and Claude-format hooks.
-- **Statusline**: installed once into `~/.copilot/settings.json`, see
-  `statusline/copilot/`.
+- **Statusline**: checked on every launch in `~/.copilot/settings.json`, and
+  pointed at this binary through `EDGEE_BIN`. See `statusline/copilot.rs`.
 
 ## Planned targets (same rules)
 

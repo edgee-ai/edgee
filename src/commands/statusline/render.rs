@@ -1,424 +1,255 @@
-//! Rust port of the legacy `statusline.sh` renderer.
+//! `edgee statusline`: one ANSI line of live session totals.
 //!
-//! Reads the Claude Code session JSON from stdin (currently ignored — we use
-//! `EDGEE_SESSION_ID`/`EDGEE_ORG_ID` from the environment), fetches an
-//! authenticated per-session summary from the Edgee API (with an on-disk
-//! cache), and prints a single line of ANSI-colored text. Missing context, or a
-//! failed network call with no cache, degrades gracefully (no output, or the
-//! bare Edgee marker). The renderer must never crash and must always exit 0.
+//! Copilot CLI pipes its own session JSON to stdin; it is ignored, since the
+//! session is identified by the `EDGEE_*` env that `edgee launch` sets. Without
+//! that env (a plain `copilot`) nothing is printed, so no segment shows up. The
+//! renderer never fails: a slow or unreachable API falls back to the last cached
+//! summary, then to the bare marker.
+//!
+//! The line mirrors the minimized band of the Claude Code mod (`mods/edgee/`),
+//! plus cost and savings, which only the gateway knows.
 
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use serde::Deserialize;
+use crate::api::{ApiClient, SessionSummary};
 
-const CACHE_MAX_AGE_SECS: u64 = 8;
-const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+/// A cached summary younger than this is served without calling the API.
+const CACHE_TTL: Duration = Duration::from_secs(8);
+const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 
-const PURPLE: &str = "\x1b[38;5;128m";
+const ACCENT: &str = "\x1b[1;38;5;141m";
 const YELLOW: &str = "\x1b[33m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
-#[derive(Debug, Default, Deserialize)]
-struct SessionSummary {
-    #[serde(default)]
-    total_input_tokens: u64,
-    #[serde(default)]
-    total_cached_input_tokens: u64,
-    #[serde(default)]
-    total_cache_creation_input_tokens: u64,
-    #[serde(default)]
-    total_output_tokens: u64,
-    #[serde(default)]
-    total_reasoning_output_tokens: u64,
-    #[serde(default)]
-    total_cost: u64,
-    #[serde(default)]
-    total_requests: u64,
-    #[serde(default)]
-    total_fallback_requests: u64,
-    #[serde(default)]
-    last_request_is_fallback: bool,
-    #[serde(default)]
-    last_request_model: String,
-}
-
-/// Run as the `edgee statusline` subcommand without `--wrap`.
-pub async fn run() -> anyhow::Result<()> {
-    // Drain stdin so the upstream invoker doesn't block on an unread pipe.
-    let _ = drain_stdin();
-
-    let line = render_with_separator(env_separator()).await;
+pub async fn run() {
+    // Drain stdin so the invoker never blocks on an unread pipe.
+    let _ = std::io::stdin().lock().read_to_end(&mut Vec::new());
+    let line = render().await;
     if !line.is_empty() {
         println!("{line}");
     }
-    Ok(())
 }
 
-/// Render the Edgee statusline as a single line. Used both by the standalone
-/// `edgee statusline` command and by the `--wrap` path.
-///
-/// Never blocks longer than [`HTTP_TIMEOUT`] on a network call. Falls back to
-/// a minimal output if anything goes wrong.
-pub async fn render_line() -> String {
-    render_with_separator("").await
-}
-
-/// Internal entrypoint for tests and the standalone command.
-async fn render_with_separator(prefix: &str) -> String {
-    let session_id = std::env::var("EDGEE_SESSION_ID").unwrap_or_default();
-    if session_id.is_empty() {
-        // No Edgee session in scope (Claude launched outside `edgee launch`).
-        // Emit nothing so Claude Code hides the statusline entirely.
+/// The statusline, or an empty string outside an Edgee session. Also used by
+/// `--wrap`.
+pub async fn render() -> String {
+    let (Some(session_id), Some(org)) = (
+        env("EDGEE_SESSION_ID"),
+        env("EDGEE_ORG_ID").or_else(|| env("EDGEE_ORG_SLUG")),
+    ) else {
         return String::new();
-    }
-    let org_ref = std::env::var("EDGEE_ORG_ID")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var("EDGEE_ORG_SLUG")
-                .ok()
-                .filter(|value| !value.is_empty())
-        })
-        .unwrap_or_default();
-    if org_ref.is_empty() {
-        // Endpoint is org-scoped; no ID or slug means it's unreachable.
-        return String::new();
-    }
-    let token = crate::config::read()
-        .ok()
-        .and_then(|creds| creds.user_token)
-        .unwrap_or_default();
-    let stats = if token.is_empty() {
-        read_cache(&cache_path(&session_id))
-    } else {
-        fetch_or_cache(&session_id, &org_ref, &token).await
     };
-    format_line(prefix, stats.as_ref())
+    format_line(summary(&session_id, &org).await.as_ref())
 }
 
-fn drain_stdin() -> std::io::Result<()> {
-    let mut buf = Vec::new();
-    std::io::stdin().lock().read_to_end(&mut buf)?;
-    Ok(())
+fn env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.is_empty())
 }
 
-fn env_separator() -> &'static str {
-    if std::env::var_os("EDGEE_HAS_EXISTING_STATUSLINE").is_some() {
-        "| "
-    } else {
-        ""
-    }
-}
-
-fn cache_path(session_id: &str) -> PathBuf {
-    crate::config::global_config_dir()
+async fn summary(session_id: &str, org: &str) -> Option<SessionSummary> {
+    let cache = crate::config::global_config_dir()
         .join("cache")
-        .join(format!("statusline-{session_id}.json"))
+        .join(format!("statusline-{session_id}.json"));
+    if let Some(fresh) = read_cache(&cache, Some(CACHE_TTL)) {
+        return Some(fresh);
+    }
+    match fetch(session_id, org).await {
+        Some(summary) => {
+            write_cache(&cache, &summary);
+            Some(summary)
+        }
+        None => read_cache(&cache, None),
+    }
 }
 
-async fn fetch_or_cache(session_id: &str, org_ref: &str, token: &str) -> Option<SessionSummary> {
-    let cache_file = cache_path(session_id);
-    let cache_fresh = cache_age(&cache_file)
-        .map(|age| age < Duration::from_secs(CACHE_MAX_AGE_SECS))
-        .unwrap_or(false);
+async fn fetch(session_id: &str, org: &str) -> Option<SessionSummary> {
+    let token = crate::config::read().ok()?.user_token.filter(|t| !t.is_empty())?;
+    let client = ApiClient::new(&token).ok()?;
+    tokio::time::timeout(FETCH_TIMEOUT, client.get_session_summary(org, session_id))
+        .await
+        .ok()?
+        .ok()
+}
 
-    if cache_fresh {
-        if let Some(s) = read_cache(&cache_file) {
-            return Some(s);
+/// `max_age: None` accepts a cache of any age (the API is unreachable).
+fn read_cache(path: &Path, max_age: Option<Duration>) -> Option<SessionSummary> {
+    if let Some(max_age) = max_age {
+        let modified = fs::metadata(path).ok()?.modified().ok()?;
+        if SystemTime::now().duration_since(modified).ok()? >= max_age {
+            return None;
         }
     }
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
+}
 
-    if let Some(stats) = fetch_summary(session_id, org_ref, token).await {
-        if let Some(parent) = cache_file.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_vec(&serde_json::json!({
-            "total_input_tokens": stats.total_input_tokens,
-            "total_cached_input_tokens": stats.total_cached_input_tokens,
-            "total_cache_creation_input_tokens": stats.total_cache_creation_input_tokens,
-            "total_output_tokens": stats.total_output_tokens,
-            "total_reasoning_output_tokens": stats.total_reasoning_output_tokens,
-            "total_cost": stats.total_cost,
-            "total_requests": stats.total_requests,
-            "total_fallback_requests": stats.total_fallback_requests,
-            "last_request_is_fallback": stats.last_request_is_fallback,
-            "last_request_model": stats.last_request_model,
-        })) {
-            let _ = fs::write(&cache_file, json);
-        }
-        return Some(stats);
+fn write_cache(path: &Path, summary: &SessionSummary) {
+    let Ok(json) = serde_json::to_vec(summary) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
     }
-
-    read_cache(&cache_file)
+    let _ = fs::write(path, json);
 }
 
-fn cache_age(path: &PathBuf) -> Option<Duration> {
-    let meta = fs::metadata(path).ok()?;
-    let modified = meta.modified().ok()?;
-    SystemTime::now().duration_since(modified).ok()
-}
-
-fn read_cache(path: &PathBuf) -> Option<SessionSummary> {
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-async fn fetch_summary(session_id: &str, org_ref: &str, token: &str) -> Option<SessionSummary> {
-    let api_base = std::env::var("EDGEE_CONSOLE_API_URL")
-        .unwrap_or_else(|_| "https://api.edgee.app".to_string());
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()
-        .ok()?;
-    let request = summary_request(&client, &api_base, org_ref, session_id, token)?;
-    let resp = client.execute(request).await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    resp.json::<SessionSummary>().await.ok()
-}
-
-fn summary_request(
-    client: &reqwest::Client,
-    api_base: &str,
-    org_ref: &str,
-    session_id: &str,
-    token: &str,
-) -> Option<reqwest::Request> {
-    let url = format!(
-        "{api_base}/v1/organizations/{org_ref}/sessions/{session_id}/summary"
-    );
-    client.get(url).bearer_auth(token).build().ok()
-}
-
-fn format_line(prefix: &str, stats: Option<&SessionSummary>) -> String {
-    let Some(stats) = stats else {
-        return format!("{prefix}{PURPLE}三 Edgee{RESET}");
+/// `◆ Edgee  claude-sonnet-4.6 · 142 req · 4.1M↑ 197k↓ · 92% cache · $1.24 · $0.31 saved`
+///
+/// `↑` counts every input token, cached or not, and the cache share is of that
+/// same total, as in the Claude mod's band.
+fn format_line(summary: Option<&SessionSummary>) -> String {
+    let marker = format!("{ACCENT}◆ Edgee{RESET}");
+    let Some(s) = summary.filter(|s| s.total_requests > 0) else {
+        return marker;
     };
 
-    let mut line = format!(
-        "{prefix}{PURPLE}三 Edgee{RESET}  {DIM}in {}  cr {}  cw {}  out {}  rsn {}  ${}  {} reqs{RESET}",
-        format_tokens(stats.total_input_tokens),
-        format_tokens(stats.total_cached_input_tokens),
-        format_tokens(stats.total_cache_creation_input_tokens),
-        format_tokens(stats.total_output_tokens),
-        format_tokens(stats.total_reasoning_output_tokens),
-        format_cost(stats.total_cost),
-        stats.total_requests,
-    );
-
-    if stats.last_request_is_fallback {
-        line.push_str(&format!(
-            "  {YELLOW}⚠ fallback: {}{RESET}",
-            stats.last_request_model
-        ));
-        if stats.total_fallback_requests > 1 {
-            line.push_str(&format!(
-                " {DIM}({} this session){RESET}",
-                stats.total_fallback_requests
-            ));
-        }
+    let input = s.total_input_tokens + s.total_cached_input_tokens;
+    let mut facts = Vec::new();
+    if !s.last_request_model.is_empty() {
+        facts.push(s.last_request_model.clone());
+    }
+    facts.push(format!("{} req", s.total_requests));
+    facts.push(format!(
+        "{}↑ {}↓",
+        short(input),
+        short(s.total_output_tokens)
+    ));
+    if input > 0 {
+        let hit = s.total_cached_input_tokens as f64 / input as f64;
+        facts.push(format!("{:.0}% cache", hit * 100.0));
+    }
+    facts.push(format!("${}", dollars(s.total_cost)));
+    if s.total_savings() > 0 {
+        facts.push(format!("${} saved", dollars(s.total_savings())));
     }
 
+    let mut line = format!("{marker}  {DIM}{}{RESET}", facts.join(" · "));
+    if s.last_request_is_fallback {
+        line.push_str(&format!("{DIM} · {RESET}{YELLOW}⚠ fallback"));
+        if s.total_fallback_requests > 1 {
+            line.push_str(&format!(" ({}×)", s.total_fallback_requests));
+        }
+        line.push_str(RESET);
+    }
     line
 }
 
-fn format_tokens(tokens: u64) -> String {
-    for (scale, suffix) in [
-        (1_000_000_000_000_000_000, "E"),
-        (1_000_000_000_000_000, "P"),
-        (1_000_000_000_000, "T"),
-        (1_000_000_000, "G"),
-        (1_000_000, "M"),
-        (1_000, "k"),
-    ] {
-        if tokens >= scale {
-            return format!("{:.1}{suffix}", tokens as f64 / scale as f64);
-        }
-    }
-    tokens.to_string()
+fn short(n: u64) -> String {
+    let (value, suffix) = match n {
+        1_000_000.. => (n as f64 / 1e6, "M"),
+        1_000.. => (n as f64 / 1e3, "k"),
+        _ => return n.to_string(),
+    };
+    format!("{value:.1}{suffix}").replace(".0", "")
 }
 
-fn format_cost(nanodollars: u64) -> String {
-    let dollars = nanodollars as f64 / 1_000_000_000.0;
-    if nanodollars < 1_000_000_000 {
-        format!("{dollars:.2}")
-    } else if nanodollars < 10_000_000_000 {
-        format!("{dollars:.1}")
+/// Nanodollars to a dollar amount: cents under $100, whole dollars above.
+fn dollars(nanodollars: u64) -> String {
+    let d = nanodollars as f64 / 1e9;
+    if d < 100.0 {
+        format!("{d:.2}")
     } else {
-        format!("{dollars:.0}")
+        format!("{d:.0}")
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn format_no_stats() {
-        let s = format_line("", None);
-        assert!(s.contains("三 Edgee"));
-        assert!(!s.contains("reqs"));
+    fn summary() -> SessionSummary {
+        SessionSummary {
+            total_requests: 142,
+            total_cost: 1_240_000_000,
+            total_input_tokens: 328_000,
+            total_cached_input_tokens: 3_772_000,
+            total_output_tokens: 197_000,
+            last_request_model: "claude-sonnet-4.6".into(),
+            ..Default::default()
+        }
+    }
+
+    fn plain(line: &str) -> String {
+        console::strip_ansi_codes(line).into_owned()
     }
 
     #[test]
-    fn format_large_session_compactly() {
-        let stats = SessionSummary {
-            total_input_tokens: 24_127,
-            total_cached_input_tokens: 40_865_520,
-            total_cache_creation_input_tokens: 2_594_168,
-            total_output_tokens: 196_796,
-            total_reasoning_output_tokens: 113_765,
-            total_cost: 19_841_300_000,
-            total_requests: 571,
-            ..Default::default()
-        };
+    fn bare_marker_until_the_first_request() {
+        assert_eq!(plain(&format_line(None)), "◆ Edgee");
         assert_eq!(
-            format_line("", Some(&stats)),
-            format!("{PURPLE}三 Edgee{RESET}  {DIM}in 24.1k  cr 40.9M  cw 2.6M  out 196.8k  rsn 113.8k  $20  571 reqs{RESET}")
+            plain(&format_line(Some(&SessionSummary::default()))),
+            "◆ Edgee"
         );
     }
 
     #[test]
-    fn format_token_magnitudes() {
-        for (tokens, expected) in [
+    fn line_follows_the_claude_band() {
+        assert_eq!(
+            plain(&format_line(Some(&summary()))),
+            "◆ Edgee  claude-sonnet-4.6 · 142 req · 4.1M↑ 197k↓ · 92% cache · $1.24"
+        );
+    }
+
+    #[test]
+    fn savings_are_shown_only_when_there_are_some() {
+        let mut s = summary();
+        s.total_tool_compression_cost_savings = 200_000_000;
+        s.total_output_cost_savings = 110_000_000;
+        assert!(plain(&format_line(Some(&s))).ends_with("· $1.24 · $0.31 saved"));
+    }
+
+    #[test]
+    fn fallback_is_flagged_with_its_count() {
+        let mut s = summary();
+        s.last_request_is_fallback = true;
+        assert!(plain(&format_line(Some(&s))).ends_with("$1.24 · ⚠ fallback"));
+        s.total_fallback_requests = 3;
+        assert!(plain(&format_line(Some(&s))).ends_with("⚠ fallback (3×)"));
+    }
+
+    #[test]
+    fn cache_share_is_skipped_without_input() {
+        let s = SessionSummary {
+            total_requests: 1,
+            ..Default::default()
+        };
+        assert_eq!(plain(&format_line(Some(&s))), "◆ Edgee  1 req · 0↑ 0↓ · $0.00");
+    }
+
+    #[test]
+    fn short_counts() {
+        for (n, expected) in [
             (0, "0"),
             (999, "999"),
-            (1_000, "1.0k"),
-            (1_000_000, "1.0M"),
-            (1_000_000_000, "1.0G"),
+            (1_000, "1k"),
+            (1_500, "1.5k"),
+            (4_100_000, "4.1M"),
+            (2_000_000, "2M"),
         ] {
-            assert_eq!(format_tokens(tokens), expected);
+            assert_eq!(short(n), expected);
         }
     }
 
     #[test]
-    fn format_cost_precision_by_magnitude() {
-        for (nanodollars, expected) in [
-            (0, "0.00"),
-            (990_000_000, "0.99"),
-            (1_000_000_000, "1.0"),
-            (4_123_000_000, "4.1"),
-            (10_000_000_000, "10"),
-            (19_841_300_000, "20"),
-        ] {
-            assert_eq!(format_cost(nanodollars), expected);
-        }
+    fn dollar_amounts() {
+        assert_eq!(dollars(0), "0.00");
+        assert_eq!(dollars(1_240_000_000), "1.24");
+        assert_eq!(dollars(99_994_000_000), "99.99");
+        assert_eq!(dollars(150_000_000_000), "150");
     }
 
     #[test]
-    fn format_includes_all_token_types_and_cost() {
-        let stats = SessionSummary {
-            total_input_tokens: 1_234,
-            total_cached_input_tokens: 2_345,
-            total_cache_creation_input_tokens: 345,
-            total_output_tokens: 678,
-            total_reasoning_output_tokens: 90,
-            total_cost: 12_345_678,
-            total_requests: 12,
-            ..Default::default()
-        };
-        let s = format_line("", Some(&stats));
-        assert!(s.contains("in 1.2k"));
-        assert!(s.contains("cr 2.3k"));
-        assert!(s.contains("cw 345"));
-        assert!(s.contains("out 678"));
-        assert!(s.contains("rsn 90"));
-        assert!(s.contains("$0.01"));
-        assert!(s.contains("12 reqs"));
-        assert!(!s.contains("compression"));
-        assert!(!s.contains("fallback"));
-    }
+    fn cache_honours_its_max_age() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache").join("s.json");
+        write_cache(&path, &summary());
 
-    #[test]
-    fn format_keeps_zero_value_token_types_visible() {
-        let s = format_line("", Some(&SessionSummary::default()));
-        assert!(s.contains("in 0"));
-        assert!(s.contains("cr 0"));
-        assert!(s.contains("cw 0"));
-        assert!(s.contains("out 0"));
-        assert!(s.contains("rsn 0"));
-        assert!(s.contains("$0.00"));
-        assert!(s.contains("0 reqs"));
-    }
-
-    #[test]
-    fn format_with_fallback_warning() {
-        let stats = SessionSummary {
-            total_requests: 5,
-            total_fallback_requests: 3,
-            last_request_is_fallback: true,
-            last_request_model: "claude-sonnet-5".to_string(),
-            ..Default::default()
-        };
-        let s = format_line("", Some(&stats));
-        assert!(s.contains("5 reqs"));
-        assert!(s.contains("⚠ fallback: claude-sonnet-5"));
-        assert!(s.contains("3 this session"));
-        assert!(!s.contains("compression"));
-    }
-
-    #[test]
-    fn format_with_separator_prefix() {
-        let s = format_line("| ", None);
-        assert!(s.starts_with("| "));
-    }
-
-    #[tokio::test]
-    async fn render_without_session_id_is_empty() {
-        let _lock = crate::commands::statusline::settings::env_test_lock();
-        unsafe {
-            std::env::remove_var("EDGEE_SESSION_ID");
-        }
-        let s = render_with_separator("").await;
-        assert!(
-            s.is_empty(),
-            "expected empty render with no session, got {s:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn render_without_org_context_is_empty() {
-        let _lock = crate::commands::statusline::settings::env_test_lock();
-        unsafe {
-            std::env::set_var("EDGEE_SESSION_ID", "test-session");
-            std::env::remove_var("EDGEE_ORG_ID");
-            std::env::remove_var("EDGEE_ORG_SLUG");
-        }
-        let s = render_with_separator("").await;
-        unsafe {
-            std::env::remove_var("EDGEE_SESSION_ID");
-        }
-        assert!(
-            s.is_empty(),
-            "expected empty render with no org ID or slug, got {s:?}"
-        );
-    }
-
-    #[test]
-    fn summary_request_uses_protected_route_and_bearer_token() {
-        let client = reqwest::Client::new();
-        let request = summary_request(
-            &client,
-            "https://api.edgee.app",
-            "org-456",
-            "session-123",
-            "secret-token",
-        )
-        .unwrap();
-
-        assert_eq!(
-            request.url().as_str(),
-            "https://api.edgee.app/v1/organizations/org-456/sessions/session-123/summary"
-        );
-        assert_eq!(
-            request.headers()[reqwest::header::AUTHORIZATION],
-            "Bearer secret-token"
-        );
+        assert_eq!(read_cache(&path, Some(CACHE_TTL)).unwrap().total_requests, 142);
+        assert!(read_cache(&path, Some(Duration::ZERO)).is_none());
+        assert_eq!(read_cache(&path, None).unwrap().total_requests, 142);
+        assert!(read_cache(&dir.path().join("missing.json"), None).is_none());
     }
 }
