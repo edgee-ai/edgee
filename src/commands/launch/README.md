@@ -597,3 +597,24 @@ on macOS, or `phpstorm` / `phpstorm.sh` (`phpstorm64.exe` / `phpstorm.exe` on
 Windows) on PATH. Set `EDGEE_PHPSTORM_BINARY` for another executable location.
 `edgee alias phpstorm` installs a desktop wrapper when the IDE is detected.
 Keep the terminal running until the IDE quits. Live Copilot validation is pending.
+
+## Pi and OMP with existing provider logins
+
+`edgee relay pi` and `edgee relay omp` run the original CLI behind the relay,
+using its existing configuration and provider credentials, including GitHub
+Copilot. Both use the `pi` Edgee key for passthrough and intercept the Copilot hosts in addition
+to the standard inference hosts. They do not inject Pi's Edgee extension or
+write OMP provider blocks. Select and sign in to GitHub Copilot in the agent.
+
+Pi defaults to port 41900 and OMP to 42000; `--port` overrides either.
+`--no-launch` runs just the proxy for an externally started client.
+Pi enables `NODE_USE_ENV_PROXY`; use a Node runtime that supports this flag for
+native fetch traffic. OMP receives `PI_PROXY` and `PI_PROXY_GITHUB_COPILOT`
+([upstream proxy documentation](https://github.com/can1357/oh-my-pi/blob/main/docs/environment-variables.md)).
+These relay paths still need live Copilot validation.
+
+Provider relays (`pi`, `omp`, `opencode`) route ChatGPT Codex subscription calls
+through the Codex pipeline using the `codex` Edgee key. The subscription bearer
+token is preserved. These requests receive a `codex/edgee-relay` User-Agent
+prefix so the gateway selects subscription handling, with the original agent
+identity retained as a suffix. Copilot calls continue to use upstream passthrough.
