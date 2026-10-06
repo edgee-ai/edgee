@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use console::style;
 
-use desktop::{AppSpec, ALL_APPS, CLAUDE_DESKTOP_APP, COPILOT_DESKTOP_APP, INTELLIJ_APP, COPILOT_VSCODE_APP, CURSOR_APP};
+use desktop::{AppSpec, ALL_APPS, CLAUDE_DESKTOP_APP, COPILOT_DESKTOP_APP, INTELLIJ_APP, PHPSTORM_APP, COPILOT_VSCODE_APP, CURSOR_APP};
 
 const MARKER_START: &str = "# >>> edgee launch aliases >>>";
 const MARKER_END: &str = "# <<< edgee launch aliases <<<";
@@ -89,6 +89,9 @@ pub enum Agent {
     /// GitHub Copilot in IntelliJ IDEA desktop wrapper
     #[value(name = "intellij")]
     Intellij,
+    /// GitHub Copilot in PHPStorm desktop wrapper
+    #[value(name = "phpstorm")]
+    Phpstorm,
     All,
 }
 
@@ -107,7 +110,7 @@ impl Agent {
             Self::Kimi => std::slice::from_ref(&KIMI_ALIAS),
             Self::Kilo => std::slice::from_ref(&KILO_ALIAS),
             Self::CopilotCli => std::slice::from_ref(&COPILOT_CLI_ALIAS),
-            Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop | Self::CopilotDesktop | Self::Intellij => &[],
+            Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop | Self::CopilotDesktop | Self::Intellij | Self::Phpstorm => &[],
             Self::All => &ALL_ALIASES,
         }
     }
@@ -119,6 +122,7 @@ impl Agent {
             Self::CopilotVscode => std::slice::from_ref(&COPILOT_VSCODE_APP),
             Self::ClaudeDesktop => std::slice::from_ref(&CLAUDE_DESKTOP_APP),
             Self::Intellij => std::slice::from_ref(&INTELLIJ_APP),
+            Self::Phpstorm => std::slice::from_ref(&PHPSTORM_APP),
             Self::CopilotDesktop => std::slice::from_ref(&COPILOT_DESKTOP_APP),
             Self::All => ALL_APPS,
             _ => &[],
@@ -143,8 +147,9 @@ impl Agent {
             Self::ClaudeDesktop => "claude-desktop",
             Self::CopilotDesktop => "copilot-desktop",
             Self::Intellij => "intellij",
+            Self::Phpstorm => "phpstorm",
             Self::All => {
-                "claude, codebuddy, codex, opencode, crush, pi, omp, deepseek, kimi, kilo, copilot-cli, cursor, copilot-vscode, intellij, copilot-desktop, and claude-desktop"
+                "claude, codebuddy, codex, opencode, crush, pi, omp, deepseek, kimi, kilo, copilot-cli, cursor, copilot-vscode, intellij, phpstorm, copilot-desktop, and claude-desktop"
             }
         }
     }
