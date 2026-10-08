@@ -7,7 +7,9 @@
 //! the user already had keeps working untouched.
 //!
 //! `edgee launch pi` does not share this path anymore; Pi gets the `pi-edgee`
-//! extension instead (see `pi.rs`). OMP still uses the provider-file approach.
+//! extension instead (see `pi.rs`). OMP still uses the provider-file approach
+//! for the provider itself, and loads the same extension in companion mode on
+//! top of it (see "The pi-edgee companion").
 //!
 //! ## Why this writes the user's real config instead of a temp one
 //!
@@ -31,11 +33,30 @@
 //! The flip side: a bare `omp` run outside `edgee launch omp` can see the Edgee
 //! models but cannot authenticate them. That is the deliberate trade, the
 //! credential stays out of the config file.
+//!
+//! ## The pi-edgee companion
+//!
+//! OMP loads Pi extensions, so the statusline and session metadata (name,
+//! repository, pull requests, commits) come from `pi-edgee`, loaded for the
+//! run only. The context env var carries `"agent": "omp"`, which makes the
+//! extension skip its provider and `/login` (this module owns the provider) and
+//! keep `EDGEE_API_KEY` in the environment for `models.yml` to resolve. OMP's
+//! `-e` takes paths, not `npm:` specs, so the pinned release is fetched into
+//! `~/.edgee/extensions/` (see `util/extension.rs`). Nothing is written to the
+//! agent's own directories, and a failed fetch only costs the extras.
+//!
+//! A pi-edgee the user installed or passed with `-e` is left alone, and gets no
+//! context: an older copy would not know the companion mode and would register
+//! a second provider.
+
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use colored::Colorize;
 use serde_json::Value;
 
 use super::util;
+use super::util::extension::{LaunchContext, CONTEXT_ENV, CONTRACT_VERSION};
 use crate::commands::util::plugins;
 
 /// Provider keys under `providers` in `models.yml`. Everything this command
@@ -47,6 +68,15 @@ const ANTHROPIC_PROVIDER_KEY: &str = "edgee-anthropic";
 /// names, never their values.
 const API_KEY_ENV: &str = "EDGEE_API_KEY";
 const SESSION_ID_ENV: &str = "EDGEE_SESSION_ID";
+
+/// npm package and release of the companion extension. `0.3.0` is the first
+/// release with `agent: "omp"` support; a CLI release must not pin a version
+/// that is not published yet.
+const EXTENSION_PACKAGE: &str = "pi-edgee";
+const EXTENSION_VERSION: &str = "0.3.0";
+
+/// Local checkout of the extension to load instead of the pinned release.
+const EXTENSION_OVERRIDE_ENV: &str = "EDGEE_PI_EXTENSION";
 
 /// OMP's picker uses fixed slot names. The catalog's `none` effort maps to the
 /// disabled `off` slot.
@@ -91,7 +121,7 @@ pub struct Options {
     pub args: Vec<String>,
 }
 
-fn home_dir() -> Option<std::path::PathBuf> {
+fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
@@ -99,8 +129,71 @@ fn home_dir() -> Option<std::path::PathBuf> {
 }
 
 /// OMP has no env override for its agent directory.
-fn models_path() -> Option<std::path::PathBuf> {
-    Some(home_dir()?.join(".omp").join("agent").join("models.yml"))
+fn agent_dir() -> Option<PathBuf> {
+    Some(home_dir()?.join(".omp").join("agent"))
+}
+
+fn models_path() -> Option<PathBuf> {
+    Some(agent_dir()?.join("models.yml"))
+}
+
+/// Where the companion extension comes from for this launch.
+#[derive(Debug, PartialEq, Eq)]
+enum ExtensionPlan {
+    /// The user loads their own pi-edgee; add nothing.
+    UserOwned,
+    /// A local checkout named by [`EXTENSION_OVERRIDE_ENV`].
+    Local(PathBuf),
+    /// The pinned release, from the Edgee-owned cache.
+    Release,
+}
+
+/// `-e`/`--extension` values in `args`, in the spellings OMP's parser accepts.
+fn extension_args(args: &[String]) -> impl Iterator<Item = &str> {
+    args.iter().enumerate().filter_map(|(i, arg)| {
+        if let Some(value) = arg.strip_prefix("--extension=") {
+            return Some(value);
+        }
+        matches!(arg.as_str(), "-e" | "--extension")
+            .then(|| args.get(i + 1))
+            .flatten()
+            .map(String::as_str)
+    })
+}
+
+/// Whether `agent_dir/extensions` holds a pi-edgee (a directory or a single file).
+fn has_user_install(agent_dir: &Path) -> bool {
+    std::fs::read_dir(agent_dir.join("extensions"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| entry.file_name().to_string_lossy().starts_with("pi-edgee"))
+}
+
+/// Decides how pi-edgee gets loaded. Pure, so tests need no process-global state.
+fn extension_plan(
+    agent_dir: Option<&Path>,
+    args: &[String],
+    path_override: Option<&str>,
+) -> ExtensionPlan {
+    if extension_args(args).any(|value| value.contains("pi-edgee")) {
+        return ExtensionPlan::UserOwned;
+    }
+    // `--no-extensions` stops OMP discovering an install; explicit `-e` still works.
+    let discovery_disabled = args.iter().any(|a| a == "--no-extensions");
+    if !discovery_disabled && agent_dir.is_some_and(has_user_install) {
+        return ExtensionPlan::UserOwned;
+    }
+    match path_override.filter(|p| !p.is_empty()) {
+        Some(path) => ExtensionPlan::Local(PathBuf::from(path)),
+        None => ExtensionPlan::Release,
+    }
+}
+
+/// `--extension=<dir>`, in the `=` form so the value can never swallow a user
+/// argument that follows it.
+fn extension_flag(dir: &Path) -> String {
+    format!("--extension={}", dir.to_string_lossy())
 }
 
 fn plugin_args(report: &plugins::sync::SyncReport) -> Vec<String> {
@@ -362,14 +455,16 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     }
 
     let pi = creds.pi.as_ref().unwrap();
-    let api_key = &pi.api_key;
+    let api_key = pi.api_key.clone();
+    let api_key_id = pi.api_key_id.clone();
     let session_id = reroute.create_session(&creds, "pi").await?;
     util::spawn_cli_version_report(&creds, &session_id);
 
-    let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let org = super::fetch_active_org(&creds).await;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
 
     let (models, catalog) = tokio::join!(
-        util::fetch_gateway_models(&gateway_url, api_key),
+        util::fetch_gateway_models(&gateway_url, &api_key),
         util::fetch_model_catalog(&creds)
     );
     let models = util::without_app_subscription_models(models, &catalog);
@@ -411,12 +506,80 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let models_path = models_path().context("Could not determine your home directory")?;
     write_providers(&models_path, &providers)?;
 
+    let mcp_disabled = super::mcp_injection_disabled_with_org(org.as_ref());
+    if !mcp_disabled {
+        crate::commands::auth::login::ensure_mcp_preference().await?;
+        creds = crate::config::read()?;
+    }
+    let wants_mcp = creds.enable_mcp.unwrap_or(false);
+    if mcp_disabled && wants_mcp {
+        super::mcp::print_injection_skipped();
+    }
+
+    // Statusline and session metadata come from the pi-edgee companion. Both
+    // are additive, so a missing extension never blocks the launch.
+    let plan = extension_plan(
+        agent_dir().as_deref(),
+        &opts.args,
+        std::env::var(EXTENSION_OVERRIDE_ENV).ok().as_deref(),
+    );
+    let extension_dir = match plan {
+        ExtensionPlan::UserOwned => None,
+        ExtensionPlan::Local(dir) => Some(dir),
+        ExtensionPlan::Release => {
+            match util::extension::ensure_npm_package(EXTENSION_PACKAGE, EXTENSION_VERSION).await {
+                Ok(dir) => Some(dir),
+                Err(e) => {
+                    eprintln!(
+                        "{}",
+                        format!(
+                            "Could not load the Edgee extension, launching without the statusline and session tracking: {e:#}"
+                        )
+                        .yellow()
+                    );
+                    None
+                }
+            }
+        }
+    };
+    let context = match &extension_dir {
+        Some(_) => Some(LaunchContext {
+            version: CONTRACT_VERSION,
+            session_id: session_id.clone(),
+            api_key: api_key.clone(),
+            api_key_id,
+            user_token: creds
+                .user_token
+                .clone()
+                .context("Missing Edgee user token")?,
+            org_id: creds
+                .org_id
+                .clone()
+                .context("No Edgee organization selected")?,
+            org_slug: creds.org_slug.clone().unwrap_or_default(),
+            org_name: org.as_ref().map(|o| o.name.clone()),
+            gateway_url: gateway_url.clone(),
+            console_url: crate::config::console_base_url(),
+            console_api_url: crate::config::console_api_base_url(),
+            mcp_url: crate::config::mcp_base_url(),
+            mcp_disabled: mcp_disabled || !wants_mcp,
+            // The provider in models.yml already carries the debug headers.
+            debug_headers: None,
+            agent: Some("omp"),
+        }),
+        None => None,
+    };
+
     // Org-managed plugins/skills are additive and never block the launch.
     let plugin_report = plugins::sync_for_target(&creds, plugins::Target::Omp).await;
     let mut cmd = std::process::Command::new(util::resolve_binary("omp"));
-    cmd.env(API_KEY_ENV, api_key);
+    cmd.env(API_KEY_ENV, &api_key);
     cmd.env(SESSION_ID_ENV, &session_id);
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
+    if let (Some(dir), Some(context)) = (&extension_dir, &context) {
+        cmd.env(CONTEXT_ENV, serde_json::to_string(context)?);
+        cmd.arg(extension_flag(dir));
+    }
     cmd.args(plugin_args(&plugin_report));
     cmd.args(&opts.args);
     plugins::report_launch(&plugin_report);
@@ -446,6 +609,83 @@ mod tests {
 
     fn read_yaml(path: &std::path::Path) -> Value {
         serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn plans_the_pinned_release_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            extension_plan(Some(dir.path()), &args(&["--resume"]), None),
+            ExtensionPlan::Release
+        );
+        assert_eq!(
+            extension_plan(None, &[], Some("")),
+            ExtensionPlan::Release
+        );
+    }
+
+    #[test]
+    fn the_override_points_at_a_local_checkout() {
+        assert_eq!(
+            extension_plan(None, &[], Some("/work/pi-edgee")),
+            ExtensionPlan::Local(PathBuf::from("/work/pi-edgee"))
+        );
+    }
+
+    #[test]
+    fn leaves_a_pi_edgee_the_user_passes_alone() {
+        for list in [
+            &["-e", "/work/pi-edgee"][..],
+            &["--extension", "/work/pi-edgee"],
+            &["--extension=/work/pi-edgee"],
+        ] {
+            assert_eq!(
+                extension_plan(None, &args(list), None),
+                ExtensionPlan::UserOwned,
+                "{list:?}"
+            );
+        }
+        assert_eq!(
+            extension_plan(None, &args(&["-e", "/work/other"]), None),
+            ExtensionPlan::Release
+        );
+    }
+
+    #[test]
+    fn leaves_an_installed_pi_edgee_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("extensions/pi-edgee")).unwrap();
+        assert_eq!(
+            extension_plan(Some(dir.path()), &[], None),
+            ExtensionPlan::UserOwned
+        );
+        // Discovery is off, so the install would not load: inject ours.
+        assert_eq!(
+            extension_plan(Some(dir.path()), &args(&["--no-extensions"]), None),
+            ExtensionPlan::Release
+        );
+    }
+
+    #[test]
+    fn other_installed_extensions_do_not_count() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("extensions/something-else")).unwrap();
+        assert_eq!(
+            extension_plan(Some(dir.path()), &[], None),
+            ExtensionPlan::Release
+        );
+    }
+
+    #[test]
+    fn extension_flag_uses_the_equals_form() {
+        assert_eq!(
+            extension_flag(Path::new("/home/me/.edgee/extensions/pi-edgee/0.3.0")),
+            "--extension=/home/me/.edgee/extensions/pi-edgee/0.3.0"
+        );
     }
 
     #[test]
