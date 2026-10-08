@@ -303,7 +303,8 @@ The rest of this section describes the provider-file launcher that `omp` still u
 
 ## `omp` - additive provider in OMP's own config
 
-OMP still uses the provider-file approach that `pi` moved away from. `opencode` and `crush` build
+OMP still uses the provider-file approach that `pi` moved away from, with `pi-edgee` loaded on top
+as a companion (below). `opencode` and `crush` build
 a merged config in `$TMPDIR` and point the agent at it (`OPENCODE_CONFIG`, `CRUSH_GLOBAL_CONFIG`),
 so the user's files are never touched. OMP has no such lever and no override for its agent
 directory, so `omp` writes into `~/.omp/agent/models.yml`. It uses two managed keys:
@@ -315,6 +316,27 @@ rather than hijacking one the user depends on.
 
 OMP is Pi-compatible and reuses the `pi` coding-agent key. Sessions therefore share Pi's backend
 attribution and settings rather than provisioning another key.
+
+**Statusline and session tracking: the `pi-edgee` companion.** OMP loads Pi extensions, so the
+footer status and session metadata (name, repository, pull requests, commits) come from the same
+`pi-edgee` package `pi` uses, loaded for the run with `--extension=<dir>`. The launch context carries
+`"agent": "omp"`, which switches the extension to companion mode: no provider, no `/login` (this
+launcher owns the provider), and `EDGEE_API_KEY` stays in the environment for `models.yml` to
+resolve. Metadata goes straight to the Edgee MCP endpoint, so nothing is written to
+`~/.omp/agent/mcp.json` and no prompt is appended. MCP follows the same gates as the other agents
+(org setting, `EDGEE_MCP_INJECTION_DISABLED`, the user's `enable_mcp` preference).
+
+- OMP's `-e` takes paths, not `npm:` specs, so the pinned release is downloaded from the npm
+  registry into `~/.edgee/extensions/pi-edgee/<version>/` (sha512 checked, reused afterwards).
+  Nothing is written to OMP's own directories.
+- A failed fetch warns and launches without the extras; it never blocks the launch.
+- A pi-edgee the user passes with `-e` or keeps in `~/.omp/agent/extensions/` is left alone and gets
+  no context, since an older copy does not know companion mode and would register a second provider.
+- `EDGEE_PI_EXTENSION=<dir>` loads a local checkout instead. The pinned version must already be
+  published when a CLI release is cut; until then the launch degrades to no extension.
+- Known gaps: OMP strips colours from the status row, has no model-switch event (the row refreshes
+  on turn end instead), omp titles the session itself (the extension only falls back to the first
+  prompt if omp has not named it shortly after the first turn).
 
 Four details are load-bearing:
 
