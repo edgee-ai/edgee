@@ -85,12 +85,19 @@ pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()
 
     let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
     let debug_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
+    // The app is always signed in to ChatGPT, so its Codex fetches the catalog itself
+    // with no feature flag. Only wired once the gateway is seen serving it: a catalog
+    // URL Codex can't load would empty the picker. See `super::codex_catalog`.
+    let catalog_url = super::codex_catalog::is_served(&base_url, &api_key)
+        .await
+        .then(|| super::codex_catalog::catalog_url(&base_url));
     let block = render_provider_block(
         &base_url,
         &api_key,
         &session_id,
         crate::git::detect_origin().as_deref(),
         debug_headers.as_ref(),
+        catalog_url.as_deref(),
     );
 
     let binary = app_binary()?;
@@ -217,13 +224,18 @@ fn render_provider_block(
     session_id: &str,
     repo: Option<&str>,
     debug_headers: Option<&crate::crypto::DebugLogHeaderValues>,
+    catalog_url: Option<&str>,
 ) -> ProviderBlock {
+    let catalog_line = catalog_url
+        .map(|url| format!("model_catalog_url = \"{}\"\n", toml_escape(url)))
+        .unwrap_or_default();
     let mut tables = format!(
         "[model_providers.{PROVIDER_ID}]\n\
          name = \"EDGEE\"\n\
          base_url = \"{}\"\n\
          wire_api = \"responses\"\n\
-         requires_openai_auth = true\n\n\
+         requires_openai_auth = true\n\
+         {catalog_line}\n\
          [model_providers.{PROVIDER_ID}.http_headers]\n\
          \"x-edgee-api-key\" = \"{}\"\n\
          \"x-edgee-session-id\" = \"{}\"\n",
@@ -540,6 +552,7 @@ mod tests {
             "session-123",
             None,
             None,
+            None,
         )
     }
 
@@ -642,6 +655,7 @@ mod tests {
             "s",
             Some("git@github.com:edgee-ai/edgee.git"),
             None,
+            None,
         );
         let doc = parse(&patch_config_text("", &b));
         assert_eq!(
@@ -653,12 +667,37 @@ mod tests {
     // A quote in a repo URL must not break out of the TOML string.
     #[test]
     fn values_are_escaped_into_the_toml_string() {
-        let b = render_provider_block("https://edgee.io/v1", "k", "s", Some("a\"b\\c"), None);
+        let b = render_provider_block("https://edgee.io/v1", "k", "s", Some("a\"b\\c"), None, None);
         let doc = parse(&patch_config_text("", &b));
         assert_eq!(
             doc["model_providers"][PROVIDER_ID]["http_headers"]["x-edgee-repo"].as_str(),
             Some("a\"b\\c")
         );
+    }
+
+    #[test]
+    fn catalog_url_is_set_on_our_provider_only_when_served() {
+        let without = parse(&patch_config_text("", &block()));
+        assert!(without["model_providers"][PROVIDER_ID]
+            .get("model_catalog_url")
+            .is_none());
+
+        let b = render_provider_block(
+            "https://edgee.io/v1",
+            "k",
+            "s",
+            None,
+            None,
+            Some("https://edgee.io/v1/models?catalog=edgee"),
+        );
+        let out = patch_config_text("model = \"gpt-5.5\"\n", &b);
+        let doc = parse(&out);
+        assert_eq!(
+            doc["model_providers"][PROVIDER_ID]["model_catalog_url"].as_str(),
+            Some("https://edgee.io/v1/models?catalog=edgee")
+        );
+        // Stripped with the rest of our block.
+        assert!(!strip_managed_blocks(&out).contains("model_catalog_url"));
     }
 
     #[test]

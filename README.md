@@ -154,6 +154,12 @@ edgee launch codex-desktop
 > Edgee but is billed to your desktop key; use `edgee launch codex` to meter it as
 > the CLI. Your `auth.json` is never read or modified.
 
+> **Codex model picker.** `edgee launch codex` and `edgee launch codex-desktop` give
+> Codex your org's Edgee model catalog, so models routed through Edgee (Claude,
+> Kimi, GLM…) show up in the picker with their real context window and reasoning
+> levels. Signed in to ChatGPT, your plan's OpenAI models stay listed first with
+> OpenAI's own metadata.
+
 > **GitHub Copilot CLI, one-time trust (macOS).** Unlike the other CLI agents, this one relays rather than
 > injects env vars: Copilot CLI's only BYOK lever (`COPILOT_PROVIDER_BASE_URL`)
 > replaces GitHub's own model routing and skips GitHub auth entirely, so it can't
