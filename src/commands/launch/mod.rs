@@ -10,6 +10,7 @@ mod claude_mods;
 pub mod codebuddy;
 mod mcp;
 pub mod codex;
+mod codex_catalog;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;
