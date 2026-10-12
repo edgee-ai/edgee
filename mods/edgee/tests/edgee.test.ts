@@ -315,6 +315,21 @@ describe("edgee", () => {
     expect(await ui.find({ type: "Text", text: /MCP call failed/ })).toBeUndefined();
     await ui.unmount();
   });
+  test("the line keeps the band other plugins draw above the prompt", async ($, on) => {
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("command.register", ($, e) => ({ value: { command: e.name } }));
+    on("env.get", () => ({ value: undefined }));
+    on("ui.status", () => ({ value: undefined }));
+    // Another plugin's band beneath ours.
+    on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Text({ children: "other plugin band" }));
+    mock.store(on);
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const band = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS });
+    expect(await band.find({ type: "Text", text: /other plugin band/ })).toBeDefined();
+    expect(await band.find({ type: "Text", text: /● direct/ })).toBeDefined();
+    await band.unmount();
+  });
   test("the pane minimizes to a line above the prompt and back, remembered across sessions", async ($, on) => {
     const opens: string[] = [];
     const closes: string[] = [];
