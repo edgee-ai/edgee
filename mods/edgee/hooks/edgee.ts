@@ -140,7 +140,10 @@ export function register(on: On) {
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (e.props.hasSurvey || !(await $.state.get(minimized)).value) return next(e);
-    return bandView($.ui.resolve(e), {
+    // The band is shared: draw what the plugins beneath draw, then our line right above the prompt.
+    const below = await next(e);
+    const elements = $.ui.resolve(e);
+    const line = bandView(elements, {
       active: await current($),
       catalog: (await $.state.get(catalog)).value ?? [],
       recent: (await $.state.get(requests)).value ?? [],
@@ -149,6 +152,7 @@ export function register(on: On) {
       columns: e.props.bodyColumns,
       clickable: e.viewport?.isFullscreen === true,
     });
+    return elements.Box({ flexDirection: "column", children: [below, line] });
   });
 
   on("command.run", { command: COMMAND }, async ($, e) => {
