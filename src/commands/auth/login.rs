@@ -1,3 +1,5 @@
+use std::io::IsTerminal;
+
 use anyhow::{Context, Result};
 use console::style;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -47,9 +49,17 @@ pub struct OrgBrief {
     pub name: String,
 }
 
+/// Whether to take the headless, prompt-free path. Any of the flags selects it, and so
+/// does a missing terminal: dialoguer fails with "not a terminal" when it cannot draw
+/// its prompts (SSH without a PTY, CI, containers).
+fn wants_headless(opts: &Options, tty: bool) -> bool {
+    opts.json || opts.non_interactive || opts.org.is_some() || !tty
+}
+
 pub async fn run(opts: Options) -> Result<()> {
-    // Any of these flags select the headless, prompt-free path.
-    if opts.json || opts.non_interactive || opts.org.is_some() {
+    // dialoguer draws on stderr and reads keys from stdin, so both must be terminals.
+    let tty = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    if wants_headless(&opts, tty) {
         let outcome = perform_login_noninteractive(opts.org.as_deref()).await?;
         if opts.json {
             println!("{}", serde_json::to_string_pretty(&outcome)?);
@@ -758,6 +768,27 @@ mod tests {
         assert!(creds.codex.is_some());
         assert!(creds.codex_desktop.is_some());
         assert!(creds.opencode.is_some());
+    }
+
+    fn opts(non_interactive: bool, org: Option<&str>, json: bool) -> Options {
+        Options {
+            non_interactive,
+            org: org.map(str::to_string),
+            json,
+        }
+    }
+
+    #[test]
+    fn login_is_interactive_only_with_a_terminal_and_no_flags() {
+        assert!(!wants_headless(&opts(false, None, false), true));
+        assert!(wants_headless(&opts(false, None, false), false));
+    }
+
+    #[test]
+    fn login_flags_force_the_headless_path() {
+        assert!(wants_headless(&opts(true, None, false), true));
+        assert!(wants_headless(&opts(false, Some("acme"), false), true));
+        assert!(wants_headless(&opts(false, None, true), true));
     }
 
     #[test]
