@@ -600,7 +600,8 @@ function savingsCard({ Box, Text }: Elements, savings: EdgeeSavings | undefined,
   const compression = savings?.compression;
   const routing = savings?.rerouting;
   const remaining = savings?.remaining;
-  const saved = compression != null && routing != null ? compression + routing : null;
+  // A session without a reroute has no routing estimate: its compression savings still count.
+  const saved = compression != null || routing != null ? (compression ?? 0) + (routing ?? 0) : null;
   const baseline = saved != null && remaining != null ? saved + remaining : null;
   const percent = (value: number | null | undefined) => value != null && baseline != null && baseline > 0
     ? `${(100 * value / baseline).toFixed(1)}%` : "—";
@@ -624,7 +625,7 @@ function savingsCard({ Box, Text }: Elements, savings: EdgeeSavings | undefined,
     Text({ bold: true, children: "Cost savings" }),
     Box({ flexDirection: width >= 64 ? "row" : "column", alignItems: "center", columnGap: 2, marginTop: 1, children: [
       details,
-      savingsDonut({ Box, Text }, baseline && saved != null ? [compression! / baseline, routing! / baseline] : [0, 0], percent(saved)),
+      savingsDonut({ Box, Text }, baseline ? [(compression ?? 0) / baseline, (routing ?? 0) / baseline] : [0, 0], percent(saved)),
     ] }),
     Text({ dimColor: true, children: savings?.stale ? "Refresh unavailable · last known amounts" : "Session estimates · USD · — unavailable" }),
   ] });
