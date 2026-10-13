@@ -67,6 +67,14 @@ describe("edgee", () => {
     expect(await band.find({ type: "Text", text: /\(stale\)/ })).toBeDefined();
 
     exitCode = 0;
+    // Without a reroute the routing estimate is null: compression alone still fills the ring.
+    payload = { total_cost: 4_000_000_000, total_token_cost_savings: 0, total_output_cost_savings: 1_000_000_000, estimated_routing_savings: null };
+    await clock.advance(30_000);
+    await settled(/saved ⇄ — est. \/ compression \$1.00/);
+    expect(await pane.find({ type: "Text", text: /20.0% cost reduction/ })).toBeDefined();
+    const compressionOnly = await pane.findAll({ type: "Text", text: /[\u2801-\u28ff]/ });
+    expect([...new Set(compressionOnly.map(cell => cell.props.color))].sort()).toEqual(["#55B98A", "#60566B"]);
+
     payload = { total_token_cost_savings: 0, total_output_cost_savings: 0, estimated_routing_savings: null };
     await clock.advance(30_000);
     await settled(/saved ⇄ — est. \/ compression \$0.00/);
@@ -78,7 +86,7 @@ describe("edgee", () => {
     payload = {};
     await clock.advance(30_000);
     await settled(/saved ⇄ — est. \/ compression —/);
-    expect(calls).toBe(6);
+    expect(calls).toBe(7);
     await pane.unmount();
     await band.unmount();
   });
@@ -206,10 +214,9 @@ describe("edgee", () => {
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
     on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
-    on("clock.now", () => ({ value: Date.UTC(2026, 9, 2, 10, 0) }));
     on("ui.status", () => ({ value: undefined }));
     on("ui.open", () => ({ value: { isPlaced: true } }));
-    on("clock.every", () => ({}) as never); // no spinner frames: the test reads the first one
+    mock.clock(on, { now: Date.UTC(2026, 9, 2, 10, 0) }); // never advanced: no spinner frames, the test reads the first one
     let gate: Promise<void> = Promise.resolve();
     on("mcp.call", async ($, e) => {
       calls.push({ tool: e.tool, args: e.args });
@@ -224,6 +231,10 @@ describe("edgee", () => {
 
     // An empty filter offers Claude Code's choice, then providers to browse.
     const rows = async () => (await ui.findAll({ type: "Button" })).map((b) => b.props.key).filter((k) => String(k).startsWith("pick:"));
+    // Opening the pane loads the models in the background: wait for them, across real ticks.
+    for (let i = 0; i < 50 && (await rows()).length === 0; i++) {
+      await new Promise((resolve) => (globalThis as unknown as { setTimeout(fn: () => void, ms: number): void }).setTimeout(() => resolve(undefined), 5));
+    }
     expect(await rows()).toEqual(["pick:__off"]);
     await ui.press({ key: "provider:qwen" });
     expect((await ui.find({ type: "Input", key: "filter" }))?.props.value).toBe("qwen/");
