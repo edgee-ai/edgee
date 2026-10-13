@@ -67,6 +67,14 @@ describe("edgee", () => {
     expect(await band.find({ type: "Text", text: /\(stale\)/ })).toBeDefined();
 
     exitCode = 0;
+    // Without a reroute the routing estimate is null: compression alone still fills the ring.
+    payload = { total_cost: 4_000_000_000, total_token_cost_savings: 0, total_output_cost_savings: 1_000_000_000, estimated_routing_savings: null };
+    await clock.advance(30_000);
+    await settled(/saved ⇄ — est. \/ compression \$1.00/);
+    expect(await pane.find({ type: "Text", text: /20.0% cost reduction/ })).toBeDefined();
+    const compressionOnly = await pane.findAll({ type: "Text", text: /[\u2801-\u28ff]/ });
+    expect([...new Set(compressionOnly.map(cell => cell.props.color))].sort()).toEqual(["#55B98A", "#60566B"]);
+
     payload = { total_token_cost_savings: 0, total_output_cost_savings: 0, estimated_routing_savings: null };
     await clock.advance(30_000);
     await settled(/saved ⇄ — est. \/ compression \$0.00/);
@@ -78,7 +86,7 @@ describe("edgee", () => {
     payload = {};
     await clock.advance(30_000);
     await settled(/saved ⇄ — est. \/ compression —/);
-    expect(calls).toBe(6);
+    expect(calls).toBe(7);
     await pane.unmount();
     await band.unmount();
   });
