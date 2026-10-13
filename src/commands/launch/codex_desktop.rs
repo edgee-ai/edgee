@@ -18,6 +18,10 @@
 //! deliberately out of scope here. [`print_launch_hint`] says so to the user's face —
 //! silence here reads as "the whole app is covered" and gets reported as a bug.
 //!
+//! A Codex conversation started without a project reads like a chat but is a Codex
+//! turn (`"workspace_kind":"projectless"`), so it *is* routed; don't take one for the
+//! ChatGPT tab (that mix-up happened on app 26.1007).
+//!
 //! Lifecycle: patch `config.toml`, spawn the app, supervise it, revert when it quits.
 //! The patch must outlive the launch: the app-server builds a fresh `Config` **per
 //! conversation**, re-reading `config.toml` from disk every time a tab is opened. An
@@ -85,15 +89,22 @@ pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()
 
     let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
     let debug_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
+    // The app is always signed in to ChatGPT, so its Codex fetches the catalog itself
+    // with no feature flag. Only wired once the gateway is seen serving it: a catalog
+    // URL Codex can't load would empty the picker. See `super::codex_catalog`.
+    let catalog_url = super::codex_catalog::is_served(&base_url, &api_key)
+        .await
+        .then(|| super::codex_catalog::catalog_url(&base_url));
     let block = render_provider_block(
         &base_url,
         &api_key,
         &session_id,
         crate::git::detect_origin().as_deref(),
         debug_headers.as_ref(),
+        catalog_url.as_deref(),
     );
 
-    let binary = app_binary()?;
+    let binary = binary()?;
     let config_path = codex_config_path()?;
     let backup = backup_path(&config_path);
 
@@ -217,13 +228,18 @@ fn render_provider_block(
     session_id: &str,
     repo: Option<&str>,
     debug_headers: Option<&crate::crypto::DebugLogHeaderValues>,
+    catalog_url: Option<&str>,
 ) -> ProviderBlock {
+    let catalog_line = catalog_url
+        .map(|url| format!("model_catalog_url = \"{}\"\n", toml_escape(url)))
+        .unwrap_or_default();
     let mut tables = format!(
         "[model_providers.{PROVIDER_ID}]\n\
          name = \"EDGEE\"\n\
          base_url = \"{}\"\n\
          wire_api = \"responses\"\n\
-         requires_openai_auth = true\n\n\
+         requires_openai_auth = true\n\
+         {catalog_line}\n\
          [model_providers.{PROVIDER_ID}.http_headers]\n\
          \"x-edgee-api-key\" = \"{}\"\n\
          \"x-edgee-session-id\" = \"{}\"\n",
@@ -415,7 +431,7 @@ fn spawn_app(binary: &Path) -> Result<tokio::process::Child> {
 }
 
 /// Resolve the ChatGPT desktop app executable.
-fn app_binary() -> Result<PathBuf> {
+pub(crate) fn binary() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let mut candidates = vec![PathBuf::from(
@@ -485,6 +501,10 @@ fn print_launch_hint(base_url: &str, session_id: &str) {
         "  {}",
         style("appear in your stats. Only the Codex tab goes through the gateway.").yellow()
     );
+    println!(
+        "  {}",
+        style("(Codex conversations opened without a project count as the Codex tab.)").dim()
+    );
     println!();
     println!(
         "  {}",
@@ -538,6 +558,7 @@ mod tests {
             "https://edgee.io/v1",
             "sk-edgee-test",
             "session-123",
+            None,
             None,
             None,
         )
@@ -642,6 +663,7 @@ mod tests {
             "s",
             Some("git@github.com:edgee-ai/edgee.git"),
             None,
+            None,
         );
         let doc = parse(&patch_config_text("", &b));
         assert_eq!(
@@ -653,12 +675,37 @@ mod tests {
     // A quote in a repo URL must not break out of the TOML string.
     #[test]
     fn values_are_escaped_into_the_toml_string() {
-        let b = render_provider_block("https://edgee.io/v1", "k", "s", Some("a\"b\\c"), None);
+        let b = render_provider_block("https://edgee.io/v1", "k", "s", Some("a\"b\\c"), None, None);
         let doc = parse(&patch_config_text("", &b));
         assert_eq!(
             doc["model_providers"][PROVIDER_ID]["http_headers"]["x-edgee-repo"].as_str(),
             Some("a\"b\\c")
         );
+    }
+
+    #[test]
+    fn catalog_url_is_set_on_our_provider_only_when_served() {
+        let without = parse(&patch_config_text("", &block()));
+        assert!(without["model_providers"][PROVIDER_ID]
+            .get("model_catalog_url")
+            .is_none());
+
+        let b = render_provider_block(
+            "https://edgee.io/v1",
+            "k",
+            "s",
+            None,
+            None,
+            Some("https://edgee.io/v1/models?catalog=edgee"),
+        );
+        let out = patch_config_text("model = \"gpt-5.5\"\n", &b);
+        let doc = parse(&out);
+        assert_eq!(
+            doc["model_providers"][PROVIDER_ID]["model_catalog_url"].as_str(),
+            Some("https://edgee.io/v1/models?catalog=edgee")
+        );
+        // Stripped with the rest of our block.
+        assert!(!strip_managed_blocks(&out).contains("model_catalog_url"));
     }
 
     #[test]

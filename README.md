@@ -133,7 +133,7 @@ edgee launch copilot-desktop  # GitHub Copilot app (macOS)
 edgee launch claude-desktop
 
 # ChatGPT desktop app
-edgee launch codex-desktop
+edgee launch codex-desktop   # aliases: chatgpt-desktop, chatgpt
 ```
 
 > **Cursor.** Fully quit Cursor before launching. Edgee configures Cursor's
@@ -153,6 +153,12 @@ edgee launch codex-desktop
 > straight to OpenAI. While it runs, a bare `codex` on the CLI also routes through
 > Edgee but is billed to your desktop key; use `edgee launch codex` to meter it as
 > the CLI. Your `auth.json` is never read or modified.
+
+> **Codex model picker.** `edgee launch codex` and `edgee launch codex-desktop` give
+> Codex your org's Edgee model catalog, so models routed through Edgee (Claude,
+> Kimi, GLM…) show up in the picker with their real context window and reasoning
+> levels. Signed in to ChatGPT, your plan's OpenAI models stay listed first with
+> OpenAI's own metadata.
 
 > **GitHub Copilot CLI, one-time trust (macOS).** Unlike the other CLI agents, this one relays rather than
 > injects env vars: Copilot CLI's only BYOK lever (`COPILOT_PROVIDER_BASE_URL`)
@@ -227,13 +233,14 @@ edgee alias intellij        # IntelliJ IDEA Copilot wrapper (requires the IDE in
 edgee alias phpstorm        # PHPStorm Copilot wrapper (requires the IDE installed)
 edgee alias copilot-desktop # GitHub Copilot app wrapper (macOS)
 edgee alias claude-desktop  # Claude Desktop wrapper (skipped if Claude Desktop is not installed)
+edgee alias codex-desktop   # ChatGPT desktop app wrapper (skipped if the app is not installed)
 edgee alias remove          # undo
 ```
 
 This covers two kinds of targets:
 
 1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`, `pi`, `omp`, `deepseek`, `kimi`, `kilo`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
-2. **Apps** (`cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
+2. **Apps** (`cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop`, `codex-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
 
 ### Check savings
 
@@ -374,7 +381,8 @@ a chat client that speaks the vendor's consumer web backend, which it does not:
   Edgee configures.
 
 In both cases those chat conversations bill your Claude or ChatGPT plan directly and do
-not appear in your Edgee stats.
+not appear in your Edgee stats. In the ChatGPT app, a Codex conversation opened without a
+project still counts as the Codex tab and is routed, even though it looks like a chat.
 
 Launch target naming rules (CLI vs apps, suffixes, provider keys) are documented in
 [`src/commands/launch/README.md`](src/commands/launch/README.md).
