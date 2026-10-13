@@ -10,6 +10,7 @@ mod claude_mods;
 pub mod codebuddy;
 mod mcp;
 pub mod codex;
+mod codex_catalog;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;
@@ -79,7 +80,7 @@ enum Command {
     #[command(name = "claude-desktop")]
     ClaudeDesktop(claude_desktop::Options),
     /// ChatGPT desktop app
-    #[command(name = "codex-desktop")]
+    #[command(name = "codex-desktop", visible_aliases = ["chatgpt-desktop", "chatgpt"])]
     CodexDesktop(codex_desktop::Options),
 }
 
@@ -374,6 +375,21 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("does not attach a session ID"));
+    }
+
+    /// Users know the app as ChatGPT, not as Codex.
+    #[test]
+    fn chatgpt_names_launch_codex_desktop() {
+        for name in ["codex-desktop", "chatgpt-desktop", "chatgpt"] {
+            let opts = crate::Options::try_parse_from(["edgee", "launch", name]).expect("parses");
+            let crate::commands::Command::Launch(launch) = opts.command else {
+                panic!("wrong command")
+            };
+            assert!(
+                matches!(launch.command, Command::CodexDesktop(_)),
+                "{name}"
+            );
+        }
     }
 
     fn claude_args(argv: &[&str]) -> Vec<String> {

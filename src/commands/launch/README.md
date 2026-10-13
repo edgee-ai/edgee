@@ -82,7 +82,8 @@ imply support for other AI plugins in the IDE.
 
 ### 4. Aliases are optional discoverability only
 
-Aliases may exist for muscle memory (`vscode-copilot` → `copilot-vscode`) but the
+Aliases may exist for muscle memory (`vscode-copilot` → `copilot-vscode`,
+`chatgpt-desktop` / `chatgpt` → `codex-desktop`, since users know that app as ChatGPT) but the
 canonical name in docs, README tables, and new code is the one above.
 
 Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
@@ -188,6 +189,14 @@ product decision rather than a port of `claude-desktop`:
   The Codex tab's `/backend-api/codex/responses` path carries neither. Rewriting or
   re-originating those requests is what that machinery exists to detect, and the
   exposure lands on the user's ChatGPT account.
+
+A **Codex conversation without a project** is not the ChatGPT tab, even though it
+reads like a chat: the app runs it on `codex app-server` with
+`"workspace_kind":"projectless"` in `x-codex-turn-metadata` and a working directory
+under `~/Documents/Codex/<date>/`, so it **is** routed. Seen on 2026-10-12 (app
+26.1007), where such a "bonjour" was first mistaken for a routed ChatGPT-tab chat.
+Tell the two apart by `originator`/`x-codex-turn-metadata` in a debug log, never by
+how the conversation looks.
 
 `print_launch_hint` states the limitation at launch. Keep it there: without it, "launching
 the ChatGPT desktop app through Edgee" reads as covering the whole app, which is exactly

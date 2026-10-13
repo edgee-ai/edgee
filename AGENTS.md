@@ -99,7 +99,8 @@ Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
 - Claude Code inline UI lives in `mods/edgee/`. Claude no longer uses `edgee statusline`; Claude
   launch cleans legacy user/project-local settings via `src/commands/claude_settings.rs`.
 - `edgee alias` — installs CLI PATH shims/shell aliases and desktop app wrappers (`cursor`,
-  `copilot-vscode`) when the host app is installed.
+  `copilot-vscode`, `intellij`, `phpstorm`, `copilot-desktop`, `claude-desktop`, `codex-desktop`)
+  when the host app is installed.
 - `edgee relay` — hidden (`hide = true`). Local MITM proxy powering the app launch targets;
   transport is an implementation detail, not public UX.
 - `edgee reset` — clears credentials.
