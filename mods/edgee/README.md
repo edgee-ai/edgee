@@ -54,7 +54,7 @@ Type to search; ↑/↓ (or Tab) move the highlight from the search field down
 the rows, Enter picks the highlighted row (in the search
 field, the first match). Picking a provider fills the search with it;
 `m` (or the `[–]` button in the header) minimizes the pane;
-Esc hands the keyboard back to the prompt.
+Esc minimizes it too and hands the keyboard back to the prompt.
 
 ### Minimized
 

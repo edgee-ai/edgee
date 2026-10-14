@@ -278,7 +278,7 @@ describe("edgee", () => {
   });
 
   test("starts minimized by default and opens the pane on request", async ($, on) => {
-    const opens: { id: string; focus?: true }[] = [];
+    const opens: { id: string; focus?: true; closeOnEscape?: true }[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
     on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
@@ -287,7 +287,7 @@ describe("edgee", () => {
     on("mcp.call", () => text({ models: MODELS }));
     mock.store(on);
     on("ui.open", ($, e) => {
-      opens.push({ id: e.id, focus: e.focus });
+      opens.push({ id: e.id, focus: e.focus, closeOnEscape: e.closeOnEscape });
       return { value: { isPlaced: true } };
     });
 
@@ -295,11 +295,13 @@ describe("edgee", () => {
     expect(opens).toEqual([]);
 
 
+    // Opened to take the keyboard, Esc folds it back into the line.
     await $.command.run({ command: "edgee", args: "panel" } as any);
-    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: true });
+    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: true, closeOnEscape: true });
 
+    // Restored without the keyboard, an Esc at the prompt leaves it be.
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: undefined });
+    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: undefined, closeOnEscape: undefined });
   });
 
   test("retries the model list until the Edgee MCP server connects", async ($, on) => {
