@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use console::style;
+
+use super::output::{self, ShortcutStatus};
 
 /// A GUI launch target that gets a desktop wrapper (not a CLI PATH shim).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,7 +86,15 @@ pub const PHPSTORM_APP: AppSpec = AppSpec {
     legacy_display_names: &[],
 };
 
-pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, INTELLIJ_APP, PHPSTORM_APP, COPILOT_VSCODE_APP, CLAUDE_DESKTOP_APP, CODEX_DESKTOP_APP, COPILOT_DESKTOP_APP];
+pub const ALL_APPS: &[AppSpec] = &[
+    CURSOR_APP,
+    INTELLIJ_APP,
+    PHPSTORM_APP,
+    COPILOT_VSCODE_APP,
+    CLAUDE_DESKTOP_APP,
+    CODEX_DESKTOP_APP,
+    COPILOT_DESKTOP_APP,
+];
 
 #[derive(Clone, Copy)]
 pub enum Action {
@@ -93,55 +102,53 @@ pub enum Action {
     Remove,
 }
 
-/// Install or remove desktop wrappers for `apps`. Skips install when the
-/// underlying editor is not detected (prints a dim note).
-pub fn apply_apps(apps: &[AppSpec], action: Action) -> Result<()> {
+/// Install or remove desktop wrappers, reporting only apps in this request.
+pub fn apply_apps(apps: &[AppSpec], action: Action) -> Result<usize> {
     if apps.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     let edgee = edgee_executable()?;
+    let mut apps = apps.to_vec();
+    apps.sort_by_key(|app| app.display_name.to_lowercase());
+    let width = apps
+        .iter()
+        .map(|app| app.display_name.len())
+        .max()
+        .unwrap_or(0);
+    let mut applied = 0;
 
-    for app in apps {
-        match action {
+    for app in &apps {
+        let status = match action {
             Action::Install => {
                 if !target_app_installed(app) {
-                    println!(
-                        "  {} {} ({})",
-                        style("skipped").yellow(),
-                        app.id,
-                        style(format!("{} not found — install the app first", app.host_label)).dim()
-                    );
                     continue;
                 }
-                let path = install_wrapper(app, &edgee)?;
-                println!(
-                    "  {} {} ({})",
-                    style("installed").green(),
-                    path.display(),
-                    style("app wrapper").dim()
-                );
-            }
-            Action::Remove => {
-                if let Some(path) = remove_wrapper(app)? {
-                    println!(
-                        "  {} {} ({})",
-                        style("removed").green(),
-                        path.display(),
-                        style("app wrapper").dim()
-                    );
+                let existed = wrapper_path_named(app, app.display_name)?.exists()
+                    || !legacy_wrappers(app).is_empty();
+                install_wrapper(app, &edgee)?;
+                applied += 1;
+                if existed {
+                    ShortcutStatus::Updated
                 } else {
-                    println!(
-                        "  {} {} ({})",
-                        style("unchanged").dim(),
-                        app.id,
-                        style("no app wrapper").dim()
-                    );
+                    ShortcutStatus::Installed
                 }
             }
+            Action::Remove => {
+                if remove_wrapper(app)?.is_some() {
+                    applied += 1;
+                    ShortcutStatus::Removed
+                } else {
+                    continue;
+                }
+            }
+        };
+        if applied == 1 {
+            output::shortcuts_heading();
         }
+        output::shortcut(app.display_name, width, status);
     }
-    Ok(())
+    Ok(applied)
 }
 
 pub(crate) fn edgee_executable() -> Result<PathBuf> {
@@ -489,7 +496,9 @@ fn remove_current_wrapper(app: &AppSpec) -> Result<Option<PathBuf>> {
 #[cfg(target_os = "macos")]
 fn macos_wrapper_path(display_name: &str) -> Result<PathBuf> {
     let home = home_dir().ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
-    Ok(home.join("Applications").join(format!("{display_name}.app")))
+    Ok(home
+        .join("Applications")
+        .join(format!("{display_name}.app")))
 }
 
 #[cfg(target_os = "macos")]
@@ -542,7 +551,14 @@ fn macos_source_icns(app: &AppSpec) -> Option<PathBuf> {
         _ => return None,
     };
     let resources = bundle.join("Contents/Resources");
-    let fallback = ["Cursor.icns", "Code.icns", "Claude.icns", "app.icns", "electron.icns", "icon.icns"];
+    let fallback = [
+        "Cursor.icns",
+        "Code.icns",
+        "Claude.icns",
+        "app.icns",
+        "electron.icns",
+        "icon.icns",
+    ];
     for name in preferred.iter().chain(fallback.iter()) {
         let p = resources.join(name);
         if p.is_file() {
@@ -643,8 +659,8 @@ fn write_executable(path: &Path, body: &str) -> Result<()> {
 
     let tmp = path.with_extension("tmp");
     {
-        let mut f = std::fs::File::create(&tmp)
-            .with_context(|| format!("creating {}", tmp.display()))?;
+        let mut f =
+            std::fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         f.write_all(body.as_bytes())
             .with_context(|| format!("writing {}", tmp.display()))?;
         f.set_permissions(std::fs::Permissions::from_mode(0o755))
@@ -814,14 +830,18 @@ mod tests {
         let plist = macos_info_plist(&CODEX_DESKTOP_APP, "edgee-launch");
         assert!(plist.contains("ai.edgee.launch.codex.desktop"));
         assert!(plist.contains("ChatGPT (Edgee)"));
-        let script = macos_launcher_script(Path::new("/opt/edgee"), CODEX_DESKTOP_APP.launch_target);
+        let script =
+            macos_launcher_script(Path::new("/opt/edgee"), CODEX_DESKTOP_APP.launch_target);
         assert!(script.contains("launch codex-desktop"));
     }
 
     #[test]
     fn claude_wrapper_is_named_claude_and_replaces_the_old_name() {
         assert_eq!(CLAUDE_DESKTOP_APP.display_name, "Claude (Edgee)");
-        assert_eq!(CLAUDE_DESKTOP_APP.legacy_display_names, ["Claude Desktop (Edgee)"]);
+        assert_eq!(
+            CLAUDE_DESKTOP_APP.legacy_display_names,
+            ["Claude Desktop (Edgee)"]
+        );
     }
 
     #[test]

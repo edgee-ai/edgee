@@ -59,6 +59,7 @@ fn developer_instructions_arg(session_id: &str, repo: Option<&str>, session_url:
 }
 
 pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    ensure_saved_thread_provider()?;
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -195,6 +196,11 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     }
 
     Ok(())
+}
+
+/// Also run when removing the alias, to repair threads from older Edgee versions.
+pub(crate) fn ensure_saved_thread_provider() -> Result<()> {
+    super::codex_config::ensure_fallback(&plugins::codex_home_source().join("config.toml"))
 }
 
 #[cfg(test)]

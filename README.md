@@ -160,6 +160,13 @@ edgee launch codex-desktop   # aliases: chatgpt-desktop, chatgpt
 > levels. Signed in to ChatGPT, your plan's OpenAI models stay listed first with
 > OpenAI's own metadata.
 
+> **Resuming Codex threads without Edgee.** Codex saves the provider ID with each
+> thread. Edgee keeps a compatibility definition for `edgee-cli` in your Codex
+> config so those threads can reopen after removing the alias or quitting the
+> desktop app. It contains no Edgee URL or credentials: outside an Edgee launch,
+> it uses normal OpenAI authentication. Removing the Codex alias also adds this
+> definition for threads created with older Edgee versions.
+
 > **GitHub Copilot CLI, one-time trust (macOS).** Unlike the other CLI agents, this one relays rather than
 > injects env vars: Copilot CLI's only BYOK lever (`COPILOT_PROVIDER_BASE_URL`)
 > replaces GitHub's own model routing and skips GitHub auth entirely, so it can't
@@ -241,6 +248,11 @@ This covers two kinds of targets:
 
 1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`, `pi`, `omp`, `deepseek`, `kimi`, `kilo`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
 2. **Apps** (`cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop`, `codex-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
+
+All CLI aliases are installed, including for agents you may install later. The
+command output only lists agents whose real executable is available on your
+machine. `edgee launch` checks for that executable before login or first-run
+settings and provides installation instructions if it is missing.
 
 ### Check savings
 
