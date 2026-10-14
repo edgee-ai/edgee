@@ -1377,7 +1377,7 @@ fn spki_sha256(key_pem: &str) -> Result<String> {
 /// Resolve the Claude Desktop executable to launch behind the relay. Claude
 /// Desktop ships on macOS and Windows; we spawn the app's own binary (not
 /// `open`/a shim) so the relay's proxy env and CA trust propagate to it.
-fn claude_desktop_binary() -> Result<PathBuf> {
+pub(crate) fn claude_desktop_binary() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let mut candidates = vec![PathBuf::from("/Applications/Claude.app/Contents/MacOS/Claude")];
