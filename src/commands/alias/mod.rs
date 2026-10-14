@@ -206,7 +206,13 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
     let cli = agent.aliases();
 
     if matches!(action, Action::Remove) && cli.iter().any(|spec| spec.name == CODEX_ALIAS.name) {
-        crate::commands::launch::codex::ensure_saved_thread_provider()?;
+        if let Err(error) = crate::commands::launch::codex::ensure_saved_thread_provider() {
+            eprintln!(
+                "Warning: Could not configure Codex saved-thread compatibility: {error:#}. \
+                 Alias removal will continue. Fix the Codex config.toml or its permissions, \
+                 then run `edgee alias remove codex` again."
+            );
+        }
     }
 
     let targets = [
