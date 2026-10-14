@@ -104,3 +104,39 @@ fn aliases_are_installed_for_missing_agents_but_only_real_binaries_are_displayed
     assert!(result.status.success());
     assert!(!String::from_utf8_lossy(&result.stdout).contains("Terminal aliases"));
 }
+
+#[test]
+fn alias_removal_continues_when_codex_config_cannot_be_repaired() {
+    for unreadable in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        for agent in ["kimi", "codex"] {
+            let result = edgee(home.path(), &["alias", agent]);
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let config = home.path().join(".codex/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        if unreadable {
+            fs::create_dir(&config).unwrap();
+        } else {
+            fs::write(&config, "model = [").unwrap();
+        }
+
+        let result = edgee(home.path(), &["alias", "remove", "all"]);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(result.status.success(), "{stderr}");
+        assert!(stderr.contains("Could not configure Codex"), "{stderr}");
+        assert!(stderr.contains("Alias removal will continue"), "{stderr}");
+        for agent in ["kimi", "codex"] {
+            assert!(!home.path().join(".edgee/bin").join(agent).exists());
+        }
+        if unreadable {
+            assert!(config.is_dir());
+        } else {
+            assert_eq!(fs::read_to_string(config).unwrap(), "model = [");
+        }
+    }
+}
