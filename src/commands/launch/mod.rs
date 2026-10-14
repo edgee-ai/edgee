@@ -11,6 +11,8 @@ pub mod codebuddy;
 mod mcp;
 pub mod codex;
 mod codex_catalog;
+mod codex_config;
+mod preflight;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;
@@ -93,6 +95,7 @@ pub struct Options {
 }
 
 pub async fn run(opts: Options) -> anyhow::Result<()> {
+    preflight::check(&opts.command)?;
     if opts.reroute.target.is_some() && matches!(opts.command, Command::Cursor(_)) {
         anyhow::bail!(
             "Cursor launch does not attach a session ID. Choose another launch target to use --reroute."
