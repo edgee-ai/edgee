@@ -7,7 +7,7 @@
 //   /edgee <model> [minutes]  reroute the session (default 60, max 1440)
 //   /edgee off                route normally again
 //   /edgee panel              open and focus the side pane: a model selector, each API request and the model that served it
-//   /edgee minimize           fold the pane into one line above the prompt (its [–] does too; the line's [+] unfolds it)
+//   /edgee minimize           fold the pane into one line above the prompt (its [–] and Esc do too; the line's [+] unfolds it)
 
 import type { EngineInterface, On, RenderElement, TextProps, BoxProps, TurnStepInput, TurnStepResult } from "claude-code";
 import type { EdgeeModelTotals, EdgeePicker, EdgeeRequest, EdgeeReroute, EdgeeSavings } from "../types/index.d.ts";
@@ -135,6 +135,13 @@ export function register(on: On) {
   on("ui.press", { plugin: "edgee", element: "expand" }, async ($, e, next) => {
     const result = await next(e);
     await openPane($);
+    return result;
+  });
+
+  // Esc, or the pane's close mark, closes it as the person's close: fold it into the line rather than lose it.
+  on("ui.close", async ($, e, next) => {
+    const result = await next(e);
+    if (e.id === PANE && e.origin.kind === "person") await setMinimized($, true);
     return result;
   });
 
@@ -280,7 +287,8 @@ async function current($: $): Promise<EdgeeReroute | null> {
 
 async function openPane($: $, { focus = true } = {}): Promise<string> {
   await setMinimized($, false);
-  const opened = await $.ui.open({ id: PANE, title: "Edgee requests", ...(focus ? { focus: true } : {}) });
+  // Only a pane that takes the keyboard folds on Esc: a restored one leaves Esc at the prompt alone.
+  const opened = await $.ui.open({ id: PANE, title: "Edgee requests", ...(focus ? { focus: true, closeOnEscape: true } : {}) });
   // Not awaited: the MCP server may still be connecting; the picker shows a loading state meanwhile.
   void loadCatalog($);
   return opened.isPlaced ? "Edgee requests pane opened." : `Edgee requests pane waits: ${opened.reason}`;
@@ -586,7 +594,7 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
       rule("Recent requests"),
       Box({ flexDirection: "column", paddingX: 1, children: timeline }),
       row(isFocused
-        ? [span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span("  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" back", { dimColor: true })]
+        ? [span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span("  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" fold", { dimColor: true })]
         : [span("/edgee panel", { color: ACCENT, bold: true }), span(" focus  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span(" fold", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
     ],
   });
