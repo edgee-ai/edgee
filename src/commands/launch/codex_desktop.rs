@@ -521,7 +521,7 @@ fn print_launch_hint(base_url: &str, session_id: &str) {
     println!(
         "  {} {}",
         style("routes:").dim(),
-        style("the Codex tab").cyan()
+        style("Codex and Work (local tasks)").cyan()
     );
     println!(
         "  {}",
@@ -530,22 +530,22 @@ fn print_launch_hint(base_url: &str, session_id: &str) {
     println!("  {}", style("freshly started instance.").dim());
     println!();
     // Without this the user reasonably reads "launching the app through Edgee" as
-    // covering the whole app, and ChatGPT-tab spend silently bypasses the gateway.
+    // covering the whole app, including Chat and cloud tasks that bypass the gateway.
     println!(
         "  {}",
-        style("The ChatGPT tab is NOT routed: it talks to OpenAI directly, so those").yellow()
+        style("Edgee routes local Codex and Work activity in the ChatGPT desktop app.").yellow()
     );
     println!(
         "  {}",
-        style("conversations bill your ChatGPT plan and never reach Edgee — they won't").yellow()
+        style("Chat and tasks running in the cloud do NOT go through Edgee and won't").yellow()
     );
     println!(
         "  {}",
-        style("appear in your stats. Only the Codex tab goes through the gateway.").yellow()
+        style("appear in your Edgee stats.").yellow()
     );
     println!(
         "  {}",
-        style("(Codex conversations opened without a project count as the Codex tab.)").dim()
+        style("(Local Codex conversations without a project are also routed.)").dim()
     );
     println!();
     println!(
