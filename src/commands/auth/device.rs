@@ -85,6 +85,12 @@ async fn poll(client: &reqwest::Client, base: &str, auth: &Authorization) -> Res
             }
             return Ok(token);
         }
+        // Transient API failures (including optimistic-lock conflicts) leave the
+        // approval available for another attempt until the original deadline.
+        if response.status().is_server_error() {
+            interval = (interval * 2).min(60);
+            continue;
+        }
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             interval = (interval + 5).min(60);
             continue;
@@ -178,6 +184,30 @@ mod tests {
             .unwrap();
         assert_eq!(token.access_token, "token");
         assert_eq!(token.user_id.as_deref(), Some("user"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retries_transient_server_errors_without_restarting_login() {
+        let (base, server) = server(vec![
+            (503, "temporarily unavailable"),
+            (200, r#"{"access_token":"token","user_id":"user"}"#),
+        ])
+        .await;
+        let token = poll(&reqwest::Client::new(), &base, &authorization())
+            .await
+            .unwrap();
+        assert_eq!(token.access_token, "token");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn transient_errors_do_not_extend_the_authorization_deadline() {
+        let (base, server) = server(vec![(500, r#"{"error":"server_error"}"#)]).await;
+        let mut auth = authorization();
+        auth.expires_in = 2;
+        let result = poll(&reqwest::Client::new(), &base, &auth).await;
+        assert!(result.err().unwrap().to_string().contains("expired"));
         server.await.unwrap();
     }
 
