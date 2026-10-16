@@ -1,3 +1,4 @@
+mod device;
 pub mod list;
 pub mod login;
 pub mod logout;

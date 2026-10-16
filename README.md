@@ -79,6 +79,17 @@ Sign in after install:
 edgee auth login
 ```
 
+Interactive login lets you choose between opening a browser on this machine and using
+a browser on another device. To select the latter directly:
+
+```bash
+edgee auth login --device
+```
+
+Open the displayed URL, enter the code from your terminal, and authorize the CLI.
+The code expires after 10 minutes. SSH sessions use this flow automatically,
+including when authentication starts during `edgee launch`. No port forwarding is needed.
+
 ---
 
 ## Quickstart
