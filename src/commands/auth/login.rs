@@ -9,6 +9,9 @@ use tokio::net::TcpListener;
 
 #[derive(Debug, clap::Parser)]
 pub struct Options {
+    /// Authenticate with a code from any browser, without a localhost callback.
+    #[arg(long)]
+    pub device: bool,
     /// Run without interactive prompts: open the browser immediately and
     /// auto-select the organization when the account has exactly one. Intended
     /// for GUI front-ends that can't answer TTY prompts.
@@ -60,7 +63,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // dialoguer draws on stderr and reads keys from stdin, so both must be terminals.
     let tty = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
     if wants_headless(&opts, tty) {
-        let outcome = perform_login_noninteractive(opts.org.as_deref()).await?;
+        let outcome = perform_login_noninteractive_with_device(opts.org.as_deref(), opts.device).await?;
         if opts.json {
             println!("{}", serde_json::to_string_pretty(&outcome)?);
         } else if outcome.needs_org_selection {
@@ -73,7 +76,7 @@ pub async fn run(opts: Options) -> Result<()> {
         return Ok(());
     }
 
-    let email = perform_login().await?;
+    let email = perform_login_with_device(opts.device).await?;
     let profile = crate::config::active_profile_name();
 
     println!();
@@ -92,6 +95,10 @@ pub async fn run(opts: Options) -> Result<()> {
 /// account has several orgs and none is specified, the token is still stored and
 /// the returned outcome reports `needs_org_selection` with the candidates.
 pub async fn perform_login_noninteractive(org_pref: Option<&str>) -> Result<LoginOutcome> {
+    perform_login_noninteractive_with_device(org_pref, false).await
+}
+
+async fn perform_login_noninteractive_with_device(org_pref: Option<&str>, device: bool) -> Result<LoginOutcome> {
     let mut creds = crate::config::Credentials::default();
 
     if let Ok(v) = std::env::var("EDGEE_CONSOLE_URL") {
@@ -107,7 +114,7 @@ pub async fn perform_login_noninteractive(org_pref: Option<&str>) -> Result<Logi
         creds.mcp_url = Some(v);
     }
 
-    let (user_token, email, user_id) = browser_auth(false).await?;
+    let (user_token, email, user_id) = browser_auth(false, device).await?;
 
     // Store the token before org selection so it survives a later failure.
     creds.user_token = Some(user_token.clone());
@@ -169,6 +176,10 @@ pub async fn perform_login_noninteractive(org_pref: Option<&str>) -> Result<Logi
 }
 
 pub async fn perform_login() -> Result<String> {
+    perform_login_with_device(false).await
+}
+
+async fn perform_login_with_device(device: bool) -> Result<String> {
     // Authenticate via browser — do NOT clear credentials before we have a new token,
     // so an aborted re-login doesn't wipe an existing valid token.
     let mut creds = crate::config::Credentials::default();
@@ -180,7 +191,7 @@ pub async fn perform_login() -> Result<String> {
     if let Ok(v) = std::env::var("EDGEE_MCP_URL") { creds.mcp_url = Some(v); }
 
     let (user_token, email, user_id) = {
-        let (token, email, user_id) = browser_auth(true).await?;
+        let (token, email, user_id) = browser_auth(true, device).await?;
         println!();
         println!("  {}", style("Authenticated!").green().bold());
         (token, email, user_id)
@@ -532,23 +543,16 @@ fn provider_config_mut<'a>(
     }
 }
 
-async fn browser_auth(interactive: bool) -> Result<(String, Option<String>, Option<String>)> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-
-    let callback = format!("http://127.0.0.1:{port}");
-    let url = format!(
-        "{}/authorize/oauth/apikey?callback={}&name=Edgee+CLI",
-        crate::config::console_base_url(),
-        percent_encode(&callback),
-    );
-
+async fn browser_auth(interactive: bool, device: bool) -> Result<(String, Option<String>, Option<String>)> {
+    if device || std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some() {
+        return super::device::authenticate().await;
+    }
     if interactive {
         println!();
         println!(
             "  {} {}",
             style("Login required.").bold(),
-            style("Your browser will open to authenticate with Edgee.").dim()
+            style("Sign in to connect your Edgee account to the CLI.").dim()
         );
         println!(
             "  {}",
@@ -567,15 +571,34 @@ async fn browser_auth(interactive: bool) -> Result<(String, Option<String>, Opti
         );
         println!();
 
-        let confirmed = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Open browser to continue?")
-            .default(true)
-            .interact()?;
+        let selection = dialoguer::Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("How would you like to sign in?")
+            .items([
+                "Open a browser on this machine",
+                "Use a browser on another device",
+            ])
+            .default(0)
+            .interact_opt()?;
 
-        if !confirmed {
-            anyhow::bail!("Login cancelled.");
+        match selection {
+            Some(0) => {}
+            Some(_) => return super::device::authenticate().await,
+            None => anyhow::bail!("Login cancelled."),
         }
+    }
 
+    // Only the local-browser flow needs a loopback listener.
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+
+    let callback = format!("http://127.0.0.1:{port}");
+    let url = format!(
+        "{}/authorize/oauth/apikey?callback={}&name=Edgee+CLI",
+        crate::config::console_base_url(),
+        percent_encode(&callback),
+    );
+
+    if interactive {
         println!();
         println!("  {}", style("If the browser does not open, visit:").dim());
         println!("  {}", style(&url).cyan().underlined());
@@ -772,6 +795,7 @@ mod tests {
 
     fn opts(non_interactive: bool, org: Option<&str>, json: bool) -> Options {
         Options {
+            device: false,
             non_interactive,
             org: org.map(str::to_string),
             json,
