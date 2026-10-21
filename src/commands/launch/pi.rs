@@ -28,16 +28,17 @@
 //! environment. `EDGEE_API_KEY`/`EDGEE_SESSION_ID` are still exported so a
 //! user-installed pi-edgee that predates the contract keeps working.
 //!
-//! OMP does not use this path; it keeps its provider-file launcher in `omp.rs`.
+//! OMP loads the same extension in companion mode from `omp.rs`; the shared
+//! context and fetch helpers live in `util/extension.rs`.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use serde::Serialize;
 use serde_json::Value;
 
 use super::util;
+use super::util::extension::{CONTEXT_ENV, CONTRACT_VERSION, DebugHeaders, LaunchContext};
 use crate::commands::util::plugins;
 
 /// npm release of `pi-edgee` that implements [`CONTRACT_VERSION`]. A CLI
@@ -46,13 +47,6 @@ const PI_EDGEE_SPEC: &str = "npm:pi-edgee@0.2.0";
 
 /// Local checkout or alternative spec to load instead of [`PI_EDGEE_SPEC`].
 const EXTENSION_OVERRIDE_ENV: &str = "EDGEE_PI_EXTENSION";
-
-/// Child-only env var carrying the [`LaunchContext`] JSON.
-const CONTEXT_ENV: &str = "EDGEE_PI_CONTEXT";
-
-/// `version` written into the context and the minimum `edgee.cliContract` a
-/// user-installed pi-edgee must advertise in its `package.json`.
-const CONTRACT_VERSION: u64 = 1;
 
 /// Provider keys the previous launcher wrote under `providers` in `models.json`.
 const LEGACY_PROVIDER_KEYS: [&str; 2] = ["edgee", "edgee-anthropic"];
@@ -88,37 +82,6 @@ fn agent_dir() -> Option<PathBuf> {
         return Some(PathBuf::from(dir));
     }
     home_dir().map(|h| h.join(".pi").join("agent"))
-}
-
-/// Everything pi-edgee needs to act as the CLI-selected identity. No `Debug`:
-/// it holds credentials.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LaunchContext {
-    version: u64,
-    session_id: String,
-    api_key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    api_key_id: Option<String>,
-    user_token: String,
-    org_id: String,
-    org_slug: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    org_name: Option<String>,
-    gateway_url: String,
-    console_url: String,
-    console_api_url: String,
-    mcp_url: String,
-    mcp_disabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    debug_headers: Option<DebugHeaders>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DebugHeaders {
-    pubkey: String,
-    salt: String,
 }
 
 /// Whether to add `-e <spec>`, and what to tell the user about their own copy.
@@ -470,6 +433,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         mcp_url: crate::config::mcp_base_url(),
         mcp_disabled: super::mcp_injection_disabled_with_org(org.as_ref()),
         debug_headers,
+        agent: None,
     };
 
     let agent_dir = agent_dir();
@@ -874,46 +838,5 @@ mod tests {
         write(&path, content);
         assert_eq!(cleanup_legacy_providers(&path).unwrap(), LegacyCleanup::Nothing);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
-    }
-
-    fn sample_context(debug: bool) -> LaunchContext {
-        LaunchContext {
-            version: CONTRACT_VERSION,
-            session_id: "42999158-ae9f-5b44-8834-27675aacf427".into(),
-            api_key: "ek_test".into(),
-            api_key_id: None,
-            user_token: "tok_test".into(),
-            org_id: "org-1".into(),
-            org_slug: "acme".into(),
-            org_name: Some("Acme".into()),
-            gateway_url: "https://api.edgee.ai".into(),
-            console_url: "https://www.edgee.ai".into(),
-            console_api_url: "https://api.edgee.app".into(),
-            mcp_url: "https://api.edgee.app/mcp".into(),
-            mcp_disabled: false,
-            debug_headers: debug.then(|| DebugHeaders {
-                pubkey: "pk".into(),
-                salt: "salt".into(),
-            }),
-        }
-    }
-
-    #[test]
-    fn context_uses_the_camel_case_wire_format() {
-        let json = serde_json::to_value(sample_context(true)).unwrap();
-        assert_eq!(json["version"], 1);
-        assert_eq!(json["sessionId"], "42999158-ae9f-5b44-8834-27675aacf427");
-        assert_eq!(json["apiKey"], "ek_test");
-        assert_eq!(json["userToken"], "tok_test");
-        assert_eq!(json["consoleApiUrl"], "https://api.edgee.app");
-        assert_eq!(json["mcpDisabled"], false);
-        assert_eq!(json["debugHeaders"]["pubkey"], "pk");
-    }
-
-    #[test]
-    fn context_omits_unset_optionals() {
-        let json = serde_json::to_value(sample_context(false)).unwrap();
-        assert!(json.get("debugHeaders").is_none());
-        assert!(json.get("apiKeyId").is_none());
     }
 }
