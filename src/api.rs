@@ -1034,7 +1034,9 @@ impl ApiClient {
         Ok(())
     }
 
-    /// Reads live session savings without closing the session.
+    /// Reads live session savings without closing the session. Uses the
+    /// summary endpoint: the Claude mod polls this, and the full session detail
+    /// runs several raw-table ClickHouse queries the savings don't need.
     pub async fn get_session_savings(
         &self,
         org_id: &str,
@@ -1044,7 +1046,14 @@ impl ApiClient {
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("Invalid console API URL"))?
             .pop_if_empty()
-            .extend(["v1", "organizations", org_id, "sessions", session_id]);
+            .extend([
+                "v1",
+                "organizations",
+                org_id,
+                "sessions",
+                session_id,
+                "summary",
+            ]);
         let resp = self
             .http
             .get(url)
@@ -1158,7 +1167,9 @@ mod tests {
             client.base_url = format!("http://{address}");
             let result = client.get_session_savings("org", "session").await;
             let request = server.await.unwrap();
-            assert!(request.starts_with("GET /v1/organizations/org/sessions/session HTTP/1.1"));
+            assert!(
+                request.starts_with("GET /v1/organizations/org/sessions/session/summary HTTP/1.1")
+            );
             assert!(request
                 .to_lowercase()
                 .contains("authorization: bearer test-token"));
