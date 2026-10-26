@@ -40,6 +40,11 @@ const picker = { plugin: "edgee", key: "picker" } as const; // the selector's fi
 const minimized = { plugin: "edgee", key: "minimized" } as const; // the pane folded into a line above the prompt
 const savings = { plugin: "edgee", key: "savings" } as const;
 let refreshingSavings = false;
+let savingsPending = false; // a refresh was asked for while one ran: run once more after it
+let savingsRound = 0; // bumped by each turn: an older turn's scheduled refreshes skip
+// Usage reaches the analytics store in batches, after the request: refresh a
+// few times once a turn ends, then stop. An idle session costs no query.
+const SAVINGS_DELAYS_MS = [3_000, 15_000, 60_000];
 // Start minimized by default; remember an explicit choice across sessions.
 const MINIMIZED_KEY = "minimized";
 
@@ -58,8 +63,6 @@ export function register(on: On) {
     if (!folded) await openPane($, { focus: false });
     if (await $.env.get("EDGEE_CLI_PATH")) {
       void refreshSavings($).catch(() => {}); // the host may unload during a refresh
-      // Analytics can arrive after the turn ends; keep refreshing while idle too.
-      $.clock.every(30_000, () => void refreshSavings($).catch(() => {}));
     }
     return result;
   });
@@ -68,8 +71,9 @@ export function register(on: On) {
     const result = await next(e);
     if (!e.agentId) {
       await current($); // drop the reroute once expired, so the pane and band redraw
-      void refreshSavings($).catch(() => {});
     }
+    // A subagent's turn too: its requests can land after the main turn ended.
+    scheduleSavings($);
     return result;
   });
 
@@ -395,10 +399,23 @@ async function record($: $, e: TurnStepInput, result: TurnStepResult | undefined
   });
 }
 
+// Refreshes after a turn, replacing what an earlier turn scheduled.
+function scheduleSavings($: $): void {
+  const round = ++savingsRound;
+  for (const ms of SAVINGS_DELAYS_MS) {
+    $.clock.after(ms, () => {
+      if (round === savingsRound) void refreshSavings($).catch(() => {});
+    });
+  }
+}
+
 // Use the CLI's profile-aware authentication; credentials never enter plugin state.
 // Replace the snapshot each time: the API totals already cover the whole session.
 async function refreshSavings($: $): Promise<void> {
-  if (refreshingSavings) return;
+  if (refreshingSavings) {
+    savingsPending = true;
+    return;
+  }
   refreshingSavings = true;
   try {
     const binary = await $.env.get("EDGEE_CLI_PATH");
@@ -423,6 +440,10 @@ async function refreshSavings($: $): Promise<void> {
     await $.state.set(savings, { compression: null, rerouting: null, remaining: null, ...value, stale: true });
   } finally {
     refreshingSavings = false;
+    if (savingsPending) {
+      savingsPending = false;
+      void refreshSavings($).catch(() => {});
+    }
   }
 }
 
