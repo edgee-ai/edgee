@@ -346,6 +346,42 @@ describe("edgee", () => {
     expect(await ui.find({ type: "Text", text: /MCP call failed/ })).toBeUndefined();
     await ui.unmount();
   });
+  test("a tool error stops the model list retries until the next turn", async ($, on) => {
+    let hasTraffic = false;
+    let listCalls = 0;
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("command.register", ($, e) => ({ value: { command: e.name } }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
+    on("ui.status", () => ({ value: undefined }));
+    on("ui.open", () => ({ value: { isPlaced: true } }));
+    on("turn.complete", () => ({ text: "" }));
+    on("mcp.call", () => {
+      listCalls++;
+      if (!hasTraffic) return { value: { content: [{ type: "text", text: "Session has no gateway traffic yet; send a request first" }], isError: true } };
+      return text({ models: MODELS });
+    });
+    const clock = mock.clock(on);
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.command.run({ command: "edgee", args: "panel" } as any);
+    const ui = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    // The model list loads in the background: wait for its failure, across real ticks.
+    for (let i = 0; i < 50 && !(await ui.find({ type: "Text", text: /no gateway traffic yet/ })); i++) {
+      await new Promise((resolve) => (globalThis as any).setTimeout(resolve, 5));
+    }
+    expect(await ui.find({ type: "Text", text: /no gateway traffic yet/ })).toBeDefined();
+    await clock.advance(30_000);
+    expect(listCalls).toBe(1);
+
+    hasTraffic = true;
+    await $.turn.complete({ reason: "answer", answer: "ok", durationMs: 1 } as any);
+    for (let i = 0; i < 50 && !(await ui.find({ type: "Button", key: "pick:__off" })); i++) {
+      await new Promise((resolve) => (globalThis as any).setTimeout(resolve, 5));
+    }
+    expect(listCalls).toBe(2);
+    expect(await ui.find({ type: "Button", key: "pick:__off" })).toBeDefined();
+    await ui.unmount();
+  });
   test("the line keeps the band other plugins draw above the prompt", async ($, on) => {
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
