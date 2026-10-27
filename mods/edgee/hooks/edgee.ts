@@ -40,6 +40,11 @@ const picker = { plugin: "edgee", key: "picker" } as const; // the selector's fi
 const minimized = { plugin: "edgee", key: "minimized" } as const; // the pane folded into a line above the prompt
 const savings = { plugin: "edgee", key: "savings" } as const;
 let refreshingSavings = false;
+let savingsPending = false; // a refresh was asked for while one ran: run once more after it
+let savingsRound = 0; // bumped by each turn: an older turn's scheduled refreshes skip
+// Usage reaches the analytics store in batches, after the request: refresh a
+// few times once a turn ends, then stop. An idle session costs no query.
+const SAVINGS_DELAYS_MS = [3_000, 15_000, 60_000];
 // Start minimized by default; remember an explicit choice across sessions.
 const MINIMIZED_KEY = "minimized";
 
@@ -58,8 +63,6 @@ export function register(on: On) {
     if (!folded) await openPane($, { focus: false });
     if (await $.env.get("EDGEE_CLI_PATH")) {
       void refreshSavings($).catch(() => {}); // the host may unload during a refresh
-      // Analytics can arrive after the turn ends; keep refreshing while idle too.
-      $.clock.every(30_000, () => void refreshSavings($).catch(() => {}));
     }
     return result;
   });
@@ -68,8 +71,12 @@ export function register(on: On) {
     const result = await next(e);
     if (!e.agentId) {
       await current($); // drop the reroute once expired, so the pane and band redraw
-      void refreshSavings($).catch(() => {});
+      // The models are served per session key, known once a request went through.
+      const { value } = await $.state.get(picker);
+      if (value?.failed && !(await $.state.get(catalog)).value?.length) void loadCatalog($, 1);
     }
+    // A subagent's turn too: its requests can land after the main turn ended.
+    scheduleSavings($);
     return result;
   });
 
@@ -260,12 +267,13 @@ function clampMinutes(arg: string | undefined): number | null {
 }
 
 // Calls one Edgee MCP tool and returns its result parsed from JSON when it is JSON.
+// A tool's own error throws EdgeeToolError: the server answered, retrying won't help.
 async function callEdgee($: $, tool: string, args: Record<string, unknown>): Promise<unknown> {
   const result = await $.mcp.call(SERVER, tool, args);
   const text = (result.content ?? [])
     .flatMap((b) => (b.type === "text" && typeof b.text === "string" ? [b.text] : []))
     .join("\n");
-  if (result.isError) throw new Error(text || `${tool} failed`);
+  if (result.isError) throw new EdgeeToolError(text || `${tool} failed`);
   if (result.structuredContent !== undefined) return result.structuredContent;
   try {
     return JSON.parse(text);
@@ -273,6 +281,8 @@ async function callEdgee($: $, tool: string, args: Record<string, unknown>): Pro
     return text;
   }
 }
+
+class EdgeeToolError extends Error {}
 
 // The active reroute, or null once it has expired.
 async function current($: $): Promise<EdgeeReroute | null> {
@@ -318,8 +328,8 @@ async function storedMinimized($: $): Promise<unknown> {
 }
 
 // Loads the selector's models; a failure leaves the requests view working.
-// At session start the `edgee` MCP server is often still connecting, so a
-// failed load retries every second for a while before it reports.
+// The `edgee` MCP server is often still connecting at session start: retry that
+// every second. A tool error (no traffic yet) reports at once; the next turn reloads.
 async function loadCatalog($: $, attemptsLeft = CATALOG_ATTEMPTS): Promise<void> {
   const sessionId = await $.env.get("EDGEE_SESSION_ID");
   if (!sessionId) return;
@@ -328,7 +338,7 @@ async function loadCatalog($: $, attemptsLeft = CATALOG_ATTEMPTS): Promise<void>
     const { value } = await $.state.get(picker);
     if (value?.failed) await updatePicker($, { notice: undefined, failed: false });
   } catch (err) {
-    if (attemptsLeft > 1) {
+    if (attemptsLeft > 1 && !(err instanceof EdgeeToolError)) {
       $.clock.after(CATALOG_RETRY_MS, () => void loadCatalog($, attemptsLeft - 1));
       return;
     }
@@ -395,10 +405,23 @@ async function record($: $, e: TurnStepInput, result: TurnStepResult | undefined
   });
 }
 
+// Refreshes after a turn, replacing what an earlier turn scheduled.
+function scheduleSavings($: $): void {
+  const round = ++savingsRound;
+  for (const ms of SAVINGS_DELAYS_MS) {
+    $.clock.after(ms, () => {
+      if (round === savingsRound) void refreshSavings($).catch(() => {});
+    });
+  }
+}
+
 // Use the CLI's profile-aware authentication; credentials never enter plugin state.
 // Replace the snapshot each time: the API totals already cover the whole session.
 async function refreshSavings($: $): Promise<void> {
-  if (refreshingSavings) return;
+  if (refreshingSavings) {
+    savingsPending = true;
+    return;
+  }
   refreshingSavings = true;
   try {
     const binary = await $.env.get("EDGEE_CLI_PATH");
@@ -423,6 +446,10 @@ async function refreshSavings($: $): Promise<void> {
     await $.state.set(savings, { compression: null, rerouting: null, remaining: null, ...value, stale: true });
   } finally {
     refreshingSavings = false;
+    if (savingsPending) {
+      savingsPending = false;
+      void refreshSavings($).catch(() => {});
+    }
   }
 }
 

@@ -21,6 +21,7 @@ describe("edgee", () => {
     const env: Record<string, string> = { EDGEE_SESSION_ID: "sess-1", EDGEE_CLI_PATH: "/edgee/bin/edgee", EDGEE_PROFILE: "dev" };
     on("env.get", ($, e) => ({ value: env[e.name] }));
     on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Box({ children: [] }));
+    on("turn.complete", () => ({ text: "" }));
     const clock = mock.clock(on);
     mock.store(on);
     let payload: unknown = { total_cost: 6_250_000_000, total_token_cost_savings: 1_000_000_000, total_output_cost_savings: 250_000_000, estimated_routing_savings: 2_500_000_000 };
@@ -57,36 +58,53 @@ describe("edgee", () => {
 
     expect(await band.find({ type: "Text", text: /saved ⇄ \$2.50 est. \/ compression \$1.25/ })).toBeDefined();
 
+    // A turn refreshes shortly after it ends, once its usage has landed.
+    const turn = async () => {
+      await $.turn.complete({ reason: "answer", answer: "ok", durationMs: 1 } as any);
+      await clock.advance(3_000);
+    };
+
     // Updated snapshots replace the previous totals.
     payload = { total_token_cost_savings: 1_250_000_000, total_output_cost_savings: 250_000_000, estimated_routing_savings: 2_500_000_000 };
-    await clock.advance(30_000);
+    await turn();
     await settled(/compression \$1.50/);
     exitCode = 1;
-    await clock.advance(30_000);
+    await turn();
     await settled(/compression \$1.50 \(stale\)/);
     expect(await band.find({ type: "Text", text: /\(stale\)/ })).toBeDefined();
 
     exitCode = 0;
     // Without a reroute the routing estimate is null: compression alone still fills the ring.
     payload = { total_cost: 4_000_000_000, total_token_cost_savings: 0, total_output_cost_savings: 1_000_000_000, estimated_routing_savings: null };
-    await clock.advance(30_000);
+    await turn();
     await settled(/saved ⇄ — est. \/ compression \$1.00/);
     expect(await pane.find({ type: "Text", text: /20.0% cost reduction/ })).toBeDefined();
     const compressionOnly = await pane.findAll({ type: "Text", text: /[\u2801-\u28ff]/ });
     expect([...new Set(compressionOnly.map(cell => cell.props.color))].sort()).toEqual(["#55B98A", "#60566B"]);
 
     payload = { total_token_cost_savings: 0, total_output_cost_savings: 0, estimated_routing_savings: null };
-    await clock.advance(30_000);
+    await turn();
     await settled(/saved ⇄ — est. \/ compression \$0.00/);
     expect(await band.find({ type: "Text", text: /saved ⇄ — est. \/ compression \$0.00/ })).toBeDefined();
     payload = { total_token_cost_savings: 100, total_output_cost_savings: 0, estimated_routing_savings: 1 };
-    await clock.advance(30_000);
+    await turn();
     await settled(/saved ⇄ <\$0.01 est. \/ compression <\$0.01/);
     expect(await band.find({ type: "Text", text: /saved ⇄ <\$0.01 est. \/ compression <\$0.01/ })).toBeDefined();
     payload = {};
-    await clock.advance(30_000);
+    await turn();
     await settled(/saved ⇄ — est. \/ compression —/);
     expect(calls).toBe(7);
+    // The last turn refreshes twice more for late usage; earlier turns' refreshes were replaced.
+    const tick = () => new Promise((resolve) => (globalThis as any).setTimeout(resolve, 5));
+    await clock.advance(12_000);
+    for (let i = 0; i < 50 && calls < 8; i++) await tick();
+    await clock.advance(45_000);
+    for (let i = 0; i < 50 && calls < 9; i++) await tick();
+    expect(calls).toBe(9);
+    // Idle: no more refreshes.
+    await clock.advance(3_600_000);
+    for (let i = 0; i < 10; i++) await tick();
+    expect(calls).toBe(9);
     await pane.unmount();
     await band.unmount();
   });
@@ -326,6 +344,42 @@ describe("edgee", () => {
     await clock.advance(1_000);
     expect(await ui.find({ type: "Button", key: "pick:__off" })).toBeDefined();
     expect(await ui.find({ type: "Text", text: /MCP call failed/ })).toBeUndefined();
+    await ui.unmount();
+  });
+  test("a tool error stops the model list retries until the next turn", async ($, on) => {
+    let hasTraffic = false;
+    let listCalls = 0;
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("command.register", ($, e) => ({ value: { command: e.name } }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
+    on("ui.status", () => ({ value: undefined }));
+    on("ui.open", () => ({ value: { isPlaced: true } }));
+    on("turn.complete", () => ({ text: "" }));
+    on("mcp.call", () => {
+      listCalls++;
+      if (!hasTraffic) return { value: { content: [{ type: "text", text: "Session has no gateway traffic yet; send a request first" }], isError: true } };
+      return text({ models: MODELS });
+    });
+    const clock = mock.clock(on);
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.command.run({ command: "edgee", args: "panel" } as any);
+    const ui = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    // The model list loads in the background: wait for its failure, across real ticks.
+    for (let i = 0; i < 50 && !(await ui.find({ type: "Text", text: /no gateway traffic yet/ })); i++) {
+      await new Promise((resolve) => (globalThis as any).setTimeout(resolve, 5));
+    }
+    expect(await ui.find({ type: "Text", text: /no gateway traffic yet/ })).toBeDefined();
+    await clock.advance(30_000);
+    expect(listCalls).toBe(1);
+
+    hasTraffic = true;
+    await $.turn.complete({ reason: "answer", answer: "ok", durationMs: 1 } as any);
+    for (let i = 0; i < 50 && !(await ui.find({ type: "Button", key: "pick:__off" })); i++) {
+      await new Promise((resolve) => (globalThis as any).setTimeout(resolve, 5));
+    }
+    expect(listCalls).toBe(2);
+    expect(await ui.find({ type: "Button", key: "pick:__off" })).toBeDefined();
     await ui.unmount();
   });
   test("the line keeps the band other plugins draw above the prompt", async ($, on) => {
