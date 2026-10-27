@@ -49,6 +49,8 @@ hudsucker = "0.24"
 rcgen = "0.14"
 sha1 = "0.10"
 sha2 = "0.10"
+tar = "0.4.46"
+flate2 = "1.1.10"
 
 [target.'cfg(windows)'.dependencies]
 which = "8"
