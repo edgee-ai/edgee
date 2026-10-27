@@ -11,6 +11,29 @@ use crate::commands::util::plugins;
 /// while leaving the request identical to what OpenCode would send on its own.
 const OPENCODE_OUTPUT_TOKEN_MAX: u64 = 32_000;
 
+/// Claude models go through `/v1/messages`: Chat Completions drops Claude's
+/// signed thinking blocks, so each turn would re-plan from scratch. The SDK
+/// appends `/messages` to the shared `{gateway}/v1` base URL.
+const ANTHROPIC_NPM: &str = "@ai-sdk/anthropic";
+
+/// v2 name for the same SDK.
+const ANTHROPIC_PACKAGE_V2: &str = "@opencode/ai/providers/anthropic";
+
+fn is_anthropic_model(id: &str) -> bool {
+    id.starts_with("anthropic/")
+}
+
+/// Anthropic SDK provider options, not the Chat `reasoningEffort`.
+fn anthropic_variant(effort: &str) -> Value {
+    if effort == "none" {
+        return serde_json::json!({ "thinking": { "type": "disabled" } });
+    }
+    serde_json::json!({
+        "thinking": { "type": "adaptive", "display": "summarized" },
+        "effort": effort,
+    })
+}
+
 /// OpenCode 2.x config shape is incompatible with v1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConfigVersion {
@@ -188,6 +211,7 @@ fn build_edgee_provider(
     // OpenCode's picker is populated with the live catalog. The gateway `id`
     // (e.g. `anthropic/claude-opus-4-8`) is already the routing identifier the
     // gateway accepts, so it serves as both the map key and the display name.
+    // Claude models override the package per model (see `ANTHROPIC_NPM`).
     let mut headers = serde_json::json!({
         "x-edgee-api-key": api_key,
         "x-edgee-session-id": session_id,
@@ -242,6 +266,10 @@ fn build_edgee_provider(
                     "cache_write": cost.cache_write,
                 });
             }
+            let anthropic = is_anthropic_model(id);
+            if anthropic {
+                entry["provider"] = serde_json::json!({ "npm": ANTHROPIC_NPM });
+            }
             if let Some(efforts) = metadata
                 .map(|m| m.reasoning_efforts.as_slice())
                 .filter(|efforts| !efforts.is_empty())
@@ -251,10 +279,12 @@ fn build_edgee_provider(
                     efforts
                         .iter()
                         .map(|effort| {
-                            (
-                                effort.clone(),
-                                serde_json::json!({ "reasoningEffort": effort }),
-                            )
+                            let settings = if anthropic {
+                                anthropic_variant(effort)
+                            } else {
+                                serde_json::json!({ "reasoningEffort": effort })
+                            };
+                            (effort.clone(), settings)
                         })
                         .collect(),
                 );
@@ -326,6 +356,10 @@ fn build_edgee_provider_v2(
                     },
                 });
             }
+            let anthropic = is_anthropic_model(id);
+            if anthropic {
+                entry["package"] = Value::String(ANTHROPIC_PACKAGE_V2.to_string());
+            }
             if let Some(efforts) = metadata
                 .map(|m| m.reasoning_efforts.as_slice())
                 .filter(|efforts| !efforts.is_empty())
@@ -333,10 +367,12 @@ fn build_edgee_provider_v2(
                 entry["variants"] = efforts
                     .iter()
                     .map(|effort| {
-                        serde_json::json!({
-                            "id": effort,
-                            "settings": { "reasoningEffort": effort },
-                        })
+                        let settings = if anthropic {
+                            anthropic_variant(effort)
+                        } else {
+                            serde_json::json!({ "reasoningEffort": effort })
+                        };
+                        serde_json::json!({ "id": effort, "settings": settings })
                     })
                     .collect();
             }
@@ -765,10 +801,10 @@ mod tests {
     #[test]
     fn declares_reasoning_variants_from_the_catalog() {
         let provider = provider_with_reasoning(
-            "anthropic/claude-opus-5",
+            "openai/gpt-5",
             &["none", "low", "medium", "high", "xhigh", "max"],
         );
-        let model = &provider["models"]["anthropic/claude-opus-5"];
+        let model = &provider["models"]["openai/gpt-5"];
 
         assert_eq!(model["reasoning"], serde_json::json!(true));
         for effort in ["none", "low", "medium", "high", "xhigh", "max"] {
@@ -778,6 +814,41 @@ mod tests {
             );
         }
         assert_eq!(model["variants"].as_object().map(|v| v.len()), Some(6));
+    }
+
+    #[test]
+    fn claude_models_use_the_anthropic_sdk_and_its_variant_shape() {
+        let provider = provider_with_reasoning(
+            "anthropic/claude-opus-4-8",
+            &["none", "low", "medium", "high", "xhigh", "max"],
+        );
+        let model = &provider["models"]["anthropic/claude-opus-4-8"];
+
+        assert_eq!(model["provider"]["npm"], serde_json::json!(ANTHROPIC_NPM));
+        assert_eq!(
+            model["variants"]["none"],
+            serde_json::json!({ "thinking": { "type": "disabled" } })
+        );
+        assert_eq!(model["variants"].as_object().map(|v| v.len()), Some(6));
+        assert_eq!(
+            model["variants"]["high"],
+            serde_json::json!({
+                "thinking": { "type": "adaptive", "display": "summarized" },
+                "effort": "high",
+            })
+        );
+    }
+
+    #[test]
+    fn other_models_keep_the_provider_wide_openai_compatible_sdk() {
+        let provider = provider_with_reasoning("openai/gpt-5", &["none", "high"]);
+        let model = &provider["models"]["openai/gpt-5"];
+
+        assert!(model.get("provider").is_none());
+        assert_eq!(
+            model["variants"]["none"],
+            serde_json::json!({ "reasoningEffort": "none" })
+        );
     }
 
     #[test]
@@ -966,7 +1037,7 @@ mod tests {
 
     #[test]
     fn v2_models_declare_model_id_capabilities_limit_and_variant_array() {
-        let id = "anthropic/claude-opus-5";
+        let id = "openai/gpt-5";
         let catalog: util::ModelCatalog = [(
             id.to_string(),
             util::ModelMetadata {
@@ -1013,6 +1084,53 @@ mod tests {
         );
         assert!(model.get("modalities").is_none());
         assert!(model.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn v2_claude_models_use_the_anthropic_package_and_its_variant_shape() {
+        let catalog: util::ModelCatalog = [
+            "anthropic/claude-opus-4-8".to_string(),
+            "openai/gpt-5".to_string(),
+        ]
+        .into_iter()
+        .map(|id| {
+            (
+                id,
+                util::ModelMetadata {
+                    reasoning_efforts: vec!["none".to_string(), "high".to_string()],
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+        let provider = build_edgee_provider_v2(
+            "key",
+            "sess",
+            "https://gw.test",
+            &["anthropic/claude-opus-4-8".to_string(), "openai/gpt-5".to_string()],
+            &catalog,
+            None,
+        );
+
+        let claude = &provider["models"]["anthropic/claude-opus-4-8"];
+        assert_eq!(claude["package"], serde_json::json!(ANTHROPIC_PACKAGE_V2));
+        assert_eq!(
+            claude["variants"],
+            serde_json::json!([
+                { "id": "none", "settings": { "thinking": { "type": "disabled" } } },
+                {
+                    "id": "high",
+                    "settings": {
+                        "thinking": { "type": "adaptive", "display": "summarized" },
+                        "effort": "high",
+                    },
+                },
+            ])
+        );
+
+        let gpt = &provider["models"]["openai/gpt-5"];
+        assert!(gpt.get("package").is_none());
+        assert_eq!(gpt["variants"].as_array().map(Vec::len), Some(2));
     }
 
     #[test]
