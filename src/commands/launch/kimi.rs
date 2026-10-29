@@ -118,7 +118,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let api_key = &kimi.api_key;
     let session_id = reroute.create_session(&creds, "kimi").await?;
 
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "kimi").await;
 
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
 

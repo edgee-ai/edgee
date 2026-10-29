@@ -85,7 +85,7 @@ pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()
         })?;
     let session_id = reroute.create_session(&creds, "codex_desktop").await?;
 
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "codex_desktop").await;
 
     let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
     let debug_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());

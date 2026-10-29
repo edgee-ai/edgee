@@ -364,7 +364,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let pi = creds.pi.as_ref().unwrap();
     let api_key = &pi.api_key;
     let session_id = reroute.create_session(&creds, "pi").await?;
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "pi").await;
 
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
 

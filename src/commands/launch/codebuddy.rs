@@ -49,7 +49,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let api_key = &codebuddy.api_key;
     let session_id = reroute.create_session(&creds, "codebuddy").await?;
 
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "codebuddy").await;
 
     let repo_entry = crate::git::detect_origin()
         .map(|url| format!(",\"x-edgee-repo\"=\"{url}\""))

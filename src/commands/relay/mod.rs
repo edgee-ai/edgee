@@ -309,7 +309,7 @@ async fn run_with_reroute(
     // session's org, which is how the Edgee MCP server resolves a session that
     // has no gateway records yet. Without it, `setSessionName` on the first turn
     // answers "Session not found" for members of more than one org.
-    crate::commands::launch::util::spawn_cli_version_report(&creds, &session_id);
+    crate::commands::launch::util::report_cli_session(&creds, &session_id, &provider).await;
     let org_slug = creds.org_slug.clone().unwrap_or_default();
     let repo = crate::git::detect_origin();
 
