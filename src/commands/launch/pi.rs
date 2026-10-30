@@ -441,7 +441,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     }
 
     let session_id = reroute.create_session(&creds, "pi").await?;
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "pi").await;
 
     let org = super::fetch_active_org(&creds).await;
     let gateway_url = super::gateway_base_url_with_org(org.as_ref());

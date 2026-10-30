@@ -514,7 +514,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let opencode = creds.opencode.as_ref().unwrap();
     let api_key = &opencode.api_key;
     let session_id = reroute.create_session(&creds, "opencode").await?;
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "opencode").await;
 
 
     let mut config = find_user_config().unwrap_or_else(|| {
