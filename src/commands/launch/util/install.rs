@@ -21,8 +21,5 @@ pub async fn report_cli_session(creds: &Credentials, session_id: &str, provider:
     };
     // Bound startup latency if the control plane is unavailable. Older clients
     // without a key ID retain version-only reporting and traffic-based lookup.
-    let result = tokio::time::timeout(Duration::from_secs(5), report).await;
-    if !matches!(result, Ok(Ok(()))) {
-        eprintln!("Warning: Edgee session registration failed. Model selection may be unavailable until traffic is recorded; retry /edgee list after your first request.");
-    }
+    let _ = tokio::time::timeout(Duration::from_secs(5), report).await;
 }
