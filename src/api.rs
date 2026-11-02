@@ -1017,12 +1017,16 @@ impl ApiClient {
         org_id: &str,
         session_id: &str,
         version: &str,
+        api_key_id: Option<&str>,
     ) -> Result<()> {
         let url = format!(
             "{}/v1/organizations/{}/sessions/{}/cli-version",
             self.base_url, org_id, session_id
         );
-        let body = serde_json::json!({ "version": version });
+        let mut body = serde_json::json!({ "version": version });
+        if let Some(key_id) = api_key_id {
+            body["api_key_id"] = serde_json::json!(key_id);
+        }
         let resp = self
             .http
             .post(&url)
@@ -1034,7 +1038,9 @@ impl ApiClient {
         Ok(())
     }
 
-    /// Reads live session savings without closing the session.
+    /// Reads live session savings without closing the session. Uses the
+    /// summary endpoint: the Claude mod polls this, and the full session detail
+    /// runs several raw-table ClickHouse queries the savings don't need.
     pub async fn get_session_savings(
         &self,
         org_id: &str,
@@ -1044,7 +1050,14 @@ impl ApiClient {
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("Invalid console API URL"))?
             .pop_if_empty()
-            .extend(["v1", "organizations", org_id, "sessions", session_id]);
+            .extend([
+                "v1",
+                "organizations",
+                org_id,
+                "sessions",
+                session_id,
+                "summary",
+            ]);
         let resp = self
             .http
             .get(url)
@@ -1158,7 +1171,9 @@ mod tests {
             client.base_url = format!("http://{address}");
             let result = client.get_session_savings("org", "session").await;
             let request = server.await.unwrap();
-            assert!(request.starts_with("GET /v1/organizations/org/sessions/session HTTP/1.1"));
+            assert!(
+                request.starts_with("GET /v1/organizations/org/sessions/session/summary HTTP/1.1")
+            );
             assert!(request
                 .to_lowercase()
                 .contains("authorization: bearer test-token"));
@@ -1240,6 +1255,67 @@ mod tests {
                     "expires_at": "2026-10-02T12:00:00Z"
                 })
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn session_registration_sends_key_and_supports_version_only_clients() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for key_id in [Some("claude-key"), None] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let client = ApiClient::with_base_url(
+                "token",
+                &format!("http://{}", listener.local_addr().unwrap()),
+            )
+            .unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut data = Vec::new();
+                let body = loop {
+                    let mut buf = [0; 4096];
+                    let count = stream.read(&mut buf).await.unwrap();
+                    assert!(count > 0, "request closed before body arrived");
+                    data.extend_from_slice(&buf[..count]);
+                    let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&data[..end]);
+                    assert!(head.starts_with(
+                        "POST /v1/organizations/org/sessions/session/cli-version HTTP/1.1"
+                    ));
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    if data.len() >= end + 4 + length {
+                        break serde_json::from_slice::<serde_json::Value>(
+                            &data[end + 4..end + 4 + length],
+                        )
+                        .unwrap();
+                    }
+                };
+                assert_eq!(body["version"], "0.15.3");
+                match key_id {
+                    Some(id) => assert_eq!(body["api_key_id"], id),
+                    None => assert!(body.get("api_key_id").is_none()),
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await
+                    .unwrap();
+            });
+            client
+                .set_session_cli_version("org", "session", "0.15.3", key_id)
+                .await
+                .unwrap();
+            server.await.unwrap();
         }
     }
 

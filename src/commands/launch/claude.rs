@@ -76,7 +76,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         .map(|url| format!("\nx-edgee-repo: {url}"))
         .unwrap_or_default();
 
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "claude").await;
 
     let gateway_url = super::gateway_base_url_with_org(org.as_ref());
     let debug_log_header = util::resolve_debug_log_keypair()?

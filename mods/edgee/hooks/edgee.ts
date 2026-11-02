@@ -7,7 +7,7 @@
 //   /edgee <model> [minutes]  reroute the session (default 60, max 1440)
 //   /edgee off                route normally again
 //   /edgee panel              open and focus the side pane: a model selector, each API request and the model that served it
-//   /edgee minimize           fold the pane into one line above the prompt (its [–] does too; the line's [+] unfolds it)
+//   /edgee minimize           fold the pane into one line above the prompt (its [–] and Esc do too; the line's [+] unfolds it)
 
 import type { EngineInterface, On, RenderElement, TextProps, BoxProps, TurnStepInput, TurnStepResult } from "claude-code";
 import type { EdgeeModelTotals, EdgeePicker, EdgeeRequest, EdgeeReroute, EdgeeSavings } from "../types/index.d.ts";
@@ -40,6 +40,11 @@ const picker = { plugin: "edgee", key: "picker" } as const; // the selector's fi
 const minimized = { plugin: "edgee", key: "minimized" } as const; // the pane folded into a line above the prompt
 const savings = { plugin: "edgee", key: "savings" } as const;
 let refreshingSavings = false;
+let savingsPending = false; // a refresh was asked for while one ran: run once more after it
+let savingsRound = 0; // bumped by each turn: an older turn's scheduled refreshes skip
+// Usage reaches the analytics store in batches, after the request: refresh a
+// few times once a turn ends, then stop. An idle session costs no query.
+const SAVINGS_DELAYS_MS = [3_000, 15_000, 60_000];
 // Start minimized by default; remember an explicit choice across sessions.
 const MINIMIZED_KEY = "minimized";
 
@@ -58,8 +63,6 @@ export function register(on: On) {
     if (!folded) await openPane($, { focus: false });
     if (await $.env.get("EDGEE_CLI_PATH")) {
       void refreshSavings($).catch(() => {}); // the host may unload during a refresh
-      // Analytics can arrive after the turn ends; keep refreshing while idle too.
-      $.clock.every(30_000, () => void refreshSavings($).catch(() => {}));
     }
     return result;
   });
@@ -68,8 +71,12 @@ export function register(on: On) {
     const result = await next(e);
     if (!e.agentId) {
       await current($); // drop the reroute once expired, so the pane and band redraw
-      void refreshSavings($).catch(() => {});
+      // The models are served per session key, known once a request went through.
+      const { value } = await $.state.get(picker);
+      if (value?.failed && !(await $.state.get(catalog)).value?.length) void loadCatalog($, 1);
     }
+    // A subagent's turn too: its requests can land after the main turn ended.
+    scheduleSavings($);
     return result;
   });
 
@@ -138,9 +145,19 @@ export function register(on: On) {
     return result;
   });
 
+  // Esc, or the pane's close mark, closes it as the person's close: fold it into the line rather than lose it.
+  on("ui.close", async ($, e, next) => {
+    const result = await next(e);
+    if (e.id === PANE && e.origin.kind === "person") await setMinimized($, true);
+    return result;
+  });
+
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (e.props.hasSurvey || !(await $.state.get(minimized)).value) return next(e);
-    return bandView($.ui.resolve(e), {
+    // The band is shared: draw what the plugins beneath draw, then our line right above the prompt.
+    const below = await next(e);
+    const elements = $.ui.resolve(e);
+    const line = bandView(elements, {
       active: await current($),
       catalog: (await $.state.get(catalog)).value ?? [],
       recent: (await $.state.get(requests)).value ?? [],
@@ -149,6 +166,7 @@ export function register(on: On) {
       columns: e.props.bodyColumns,
       clickable: e.viewport?.isFullscreen === true,
     });
+    return elements.Box({ flexDirection: "column", children: [below, line] });
   });
 
   on("command.run", { command: COMMAND }, async ($, e) => {
@@ -249,12 +267,13 @@ function clampMinutes(arg: string | undefined): number | null {
 }
 
 // Calls one Edgee MCP tool and returns its result parsed from JSON when it is JSON.
+// A tool's own error throws EdgeeToolError: the server answered, retrying won't help.
 async function callEdgee($: $, tool: string, args: Record<string, unknown>): Promise<unknown> {
   const result = await $.mcp.call(SERVER, tool, args);
   const text = (result.content ?? [])
     .flatMap((b) => (b.type === "text" && typeof b.text === "string" ? [b.text] : []))
     .join("\n");
-  if (result.isError) throw new Error(text || `${tool} failed`);
+  if (result.isError) throw new EdgeeToolError(text || `${tool} failed`);
   if (result.structuredContent !== undefined) return result.structuredContent;
   try {
     return JSON.parse(text);
@@ -262,6 +281,8 @@ async function callEdgee($: $, tool: string, args: Record<string, unknown>): Pro
     return text;
   }
 }
+
+class EdgeeToolError extends Error {}
 
 // The active reroute, or null once it has expired.
 async function current($: $): Promise<EdgeeReroute | null> {
@@ -276,7 +297,8 @@ async function current($: $): Promise<EdgeeReroute | null> {
 
 async function openPane($: $, { focus = true } = {}): Promise<string> {
   await setMinimized($, false);
-  const opened = await $.ui.open({ id: PANE, title: "Edgee requests", ...(focus ? { focus: true } : {}) });
+  // Only a pane that takes the keyboard folds on Esc: a restored one leaves Esc at the prompt alone.
+  const opened = await $.ui.open({ id: PANE, title: "Edgee requests", ...(focus ? { focus: true, closeOnEscape: true } : {}) });
   // Not awaited: the MCP server may still be connecting; the picker shows a loading state meanwhile.
   void loadCatalog($);
   return opened.isPlaced ? "Edgee requests pane opened." : `Edgee requests pane waits: ${opened.reason}`;
@@ -306,8 +328,8 @@ async function storedMinimized($: $): Promise<unknown> {
 }
 
 // Loads the selector's models; a failure leaves the requests view working.
-// At session start the `edgee` MCP server is often still connecting, so a
-// failed load retries every second for a while before it reports.
+// The `edgee` MCP server is often still connecting at session start: retry that
+// every second. A tool error (no traffic yet) reports at once; the next turn reloads.
 async function loadCatalog($: $, attemptsLeft = CATALOG_ATTEMPTS): Promise<void> {
   const sessionId = await $.env.get("EDGEE_SESSION_ID");
   if (!sessionId) return;
@@ -316,7 +338,7 @@ async function loadCatalog($: $, attemptsLeft = CATALOG_ATTEMPTS): Promise<void>
     const { value } = await $.state.get(picker);
     if (value?.failed) await updatePicker($, { notice: undefined, failed: false });
   } catch (err) {
-    if (attemptsLeft > 1) {
+    if (attemptsLeft > 1 && !(err instanceof EdgeeToolError)) {
       $.clock.after(CATALOG_RETRY_MS, () => void loadCatalog($, attemptsLeft - 1));
       return;
     }
@@ -383,10 +405,23 @@ async function record($: $, e: TurnStepInput, result: TurnStepResult | undefined
   });
 }
 
+// Refreshes after a turn, replacing what an earlier turn scheduled.
+function scheduleSavings($: $): void {
+  const round = ++savingsRound;
+  for (const ms of SAVINGS_DELAYS_MS) {
+    $.clock.after(ms, () => {
+      if (round === savingsRound) void refreshSavings($).catch(() => {});
+    });
+  }
+}
+
 // Use the CLI's profile-aware authentication; credentials never enter plugin state.
 // Replace the snapshot each time: the API totals already cover the whole session.
 async function refreshSavings($: $): Promise<void> {
-  if (refreshingSavings) return;
+  if (refreshingSavings) {
+    savingsPending = true;
+    return;
+  }
   refreshingSavings = true;
   try {
     const binary = await $.env.get("EDGEE_CLI_PATH");
@@ -411,6 +446,10 @@ async function refreshSavings($: $): Promise<void> {
     await $.state.set(savings, { compression: null, rerouting: null, remaining: null, ...value, stale: true });
   } finally {
     refreshingSavings = false;
+    if (savingsPending) {
+      savingsPending = false;
+      void refreshSavings($).catch(() => {});
+    }
   }
 }
 
@@ -582,7 +621,7 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
       rule("Recent requests"),
       Box({ flexDirection: "column", paddingX: 1, children: timeline }),
       row(isFocused
-        ? [span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span("  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" back", { dimColor: true })]
+        ? [span("tab", { color: ACCENT, bold: true }), span(" move  ", { dimColor: true }), span("↑↓", { color: ACCENT, bold: true }), span(" choose  ", { dimColor: true }), span("⏎", { color: ACCENT, bold: true }), span(" pick  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span("  ", { dimColor: true }), span("esc", { color: ACCENT, bold: true }), span(" fold", { dimColor: true })]
         : [span("/edgee panel", { color: ACCENT, bold: true }), span(" focus  ", { dimColor: true }), span("/edgee minimize", { color: ACCENT, bold: true }), span(" fold", { dimColor: true })], { justifyContent: "center", marginTop: 1 }),
     ],
   });
@@ -596,7 +635,8 @@ function savingsCard({ Box, Text }: Elements, savings: EdgeeSavings | undefined,
   const compression = savings?.compression;
   const routing = savings?.rerouting;
   const remaining = savings?.remaining;
-  const saved = compression != null && routing != null ? compression + routing : null;
+  // A session without a reroute has no routing estimate: its compression savings still count.
+  const saved = compression != null || routing != null ? (compression ?? 0) + (routing ?? 0) : null;
   const baseline = saved != null && remaining != null ? saved + remaining : null;
   const percent = (value: number | null | undefined) => value != null && baseline != null && baseline > 0
     ? `${(100 * value / baseline).toFixed(1)}%` : "—";
@@ -620,7 +660,7 @@ function savingsCard({ Box, Text }: Elements, savings: EdgeeSavings | undefined,
     Text({ bold: true, children: "Cost savings" }),
     Box({ flexDirection: width >= 64 ? "row" : "column", alignItems: "center", columnGap: 2, marginTop: 1, children: [
       details,
-      savingsDonut({ Box, Text }, baseline && saved != null ? [compression! / baseline, routing! / baseline] : [0, 0], percent(saved)),
+      savingsDonut({ Box, Text }, baseline ? [(compression ?? 0) / baseline, (routing ?? 0) / baseline] : [0, 0], percent(saved)),
     ] }),
     Text({ dimColor: true, children: savings?.stale ? "Refresh unavailable · last known amounts" : "Session estimates · USD · — unavailable" }),
   ] });

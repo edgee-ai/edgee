@@ -21,6 +21,7 @@ describe("edgee", () => {
     const env: Record<string, string> = { EDGEE_SESSION_ID: "sess-1", EDGEE_CLI_PATH: "/edgee/bin/edgee", EDGEE_PROFILE: "dev" };
     on("env.get", ($, e) => ({ value: env[e.name] }));
     on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Box({ children: [] }));
+    on("turn.complete", () => ({ text: "" }));
     const clock = mock.clock(on);
     mock.store(on);
     let payload: unknown = { total_cost: 6_250_000_000, total_token_cost_savings: 1_000_000_000, total_output_cost_savings: 250_000_000, estimated_routing_savings: 2_500_000_000 };
@@ -57,28 +58,53 @@ describe("edgee", () => {
 
     expect(await band.find({ type: "Text", text: /saved ⇄ \$2.50 est. \/ compression \$1.25/ })).toBeDefined();
 
+    // A turn refreshes shortly after it ends, once its usage has landed.
+    const turn = async () => {
+      await $.turn.complete({ reason: "answer", answer: "ok", durationMs: 1 } as any);
+      await clock.advance(3_000);
+    };
+
     // Updated snapshots replace the previous totals.
     payload = { total_token_cost_savings: 1_250_000_000, total_output_cost_savings: 250_000_000, estimated_routing_savings: 2_500_000_000 };
-    await clock.advance(30_000);
+    await turn();
     await settled(/compression \$1.50/);
     exitCode = 1;
-    await clock.advance(30_000);
+    await turn();
     await settled(/compression \$1.50 \(stale\)/);
     expect(await band.find({ type: "Text", text: /\(stale\)/ })).toBeDefined();
 
     exitCode = 0;
+    // Without a reroute the routing estimate is null: compression alone still fills the ring.
+    payload = { total_cost: 4_000_000_000, total_token_cost_savings: 0, total_output_cost_savings: 1_000_000_000, estimated_routing_savings: null };
+    await turn();
+    await settled(/saved ⇄ — est. \/ compression \$1.00/);
+    expect(await pane.find({ type: "Text", text: /20.0% cost reduction/ })).toBeDefined();
+    const compressionOnly = await pane.findAll({ type: "Text", text: /[\u2801-\u28ff]/ });
+    expect([...new Set(compressionOnly.map(cell => cell.props.color))].sort()).toEqual(["#55B98A", "#60566B"]);
+
     payload = { total_token_cost_savings: 0, total_output_cost_savings: 0, estimated_routing_savings: null };
-    await clock.advance(30_000);
+    await turn();
     await settled(/saved ⇄ — est. \/ compression \$0.00/);
     expect(await band.find({ type: "Text", text: /saved ⇄ — est. \/ compression \$0.00/ })).toBeDefined();
     payload = { total_token_cost_savings: 100, total_output_cost_savings: 0, estimated_routing_savings: 1 };
-    await clock.advance(30_000);
+    await turn();
     await settled(/saved ⇄ <\$0.01 est. \/ compression <\$0.01/);
     expect(await band.find({ type: "Text", text: /saved ⇄ <\$0.01 est. \/ compression <\$0.01/ })).toBeDefined();
     payload = {};
-    await clock.advance(30_000);
+    await turn();
     await settled(/saved ⇄ — est. \/ compression —/);
-    expect(calls).toBe(6);
+    expect(calls).toBe(7);
+    // The last turn refreshes twice more for late usage; earlier turns' refreshes were replaced.
+    const tick = () => new Promise((resolve) => (globalThis as any).setTimeout(resolve, 5));
+    await clock.advance(12_000);
+    for (let i = 0; i < 50 && calls < 8; i++) await tick();
+    await clock.advance(45_000);
+    for (let i = 0; i < 50 && calls < 9; i++) await tick();
+    expect(calls).toBe(9);
+    // Idle: no more refreshes.
+    await clock.advance(3_600_000);
+    for (let i = 0; i < 10; i++) await tick();
+    expect(calls).toBe(9);
     await pane.unmount();
     await band.unmount();
   });
@@ -206,10 +232,9 @@ describe("edgee", () => {
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
     on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
-    on("clock.now", () => ({ value: Date.UTC(2026, 9, 2, 10, 0) }));
     on("ui.status", () => ({ value: undefined }));
     on("ui.open", () => ({ value: { isPlaced: true } }));
-    on("clock.every", () => ({}) as never); // no spinner frames: the test reads the first one
+    mock.clock(on, { now: Date.UTC(2026, 9, 2, 10, 0) }); // never advanced: no spinner frames, the test reads the first one
     let gate: Promise<void> = Promise.resolve();
     on("mcp.call", async ($, e) => {
       calls.push({ tool: e.tool, args: e.args });
@@ -224,6 +249,10 @@ describe("edgee", () => {
 
     // An empty filter offers Claude Code's choice, then providers to browse.
     const rows = async () => (await ui.findAll({ type: "Button" })).map((b) => b.props.key).filter((k) => String(k).startsWith("pick:"));
+    // Opening the pane loads the models in the background: wait for them, across real ticks.
+    for (let i = 0; i < 50 && (await rows()).length === 0; i++) {
+      await new Promise((resolve) => (globalThis as unknown as { setTimeout(fn: () => void, ms: number): void }).setTimeout(() => resolve(undefined), 5));
+    }
     expect(await rows()).toEqual(["pick:__off"]);
     await ui.press({ key: "provider:qwen" });
     expect((await ui.find({ type: "Input", key: "filter" }))?.props.value).toBe("qwen/");
@@ -267,7 +296,7 @@ describe("edgee", () => {
   });
 
   test("starts minimized by default and opens the pane on request", async ($, on) => {
-    const opens: { id: string; focus?: true }[] = [];
+    const opens: { id: string; focus?: true; closeOnEscape?: true }[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("command.register", ($, e) => ({ value: { command: e.name } }));
     on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
@@ -276,7 +305,7 @@ describe("edgee", () => {
     on("mcp.call", () => text({ models: MODELS }));
     mock.store(on);
     on("ui.open", ($, e) => {
-      opens.push({ id: e.id, focus: e.focus });
+      opens.push({ id: e.id, focus: e.focus, closeOnEscape: e.closeOnEscape });
       return { value: { isPlaced: true } };
     });
 
@@ -284,11 +313,13 @@ describe("edgee", () => {
     expect(opens).toEqual([]);
 
 
+    // Opened to take the keyboard, Esc folds it back into the line.
     await $.command.run({ command: "edgee", args: "panel" } as any);
-    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: true });
+    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: true, closeOnEscape: true });
 
+    // Restored without the keyboard, an Esc at the prompt leaves it be.
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: undefined });
+    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: undefined, closeOnEscape: undefined });
   });
 
   test("retries the model list until the Edgee MCP server connects", async ($, on) => {
@@ -314,6 +345,57 @@ describe("edgee", () => {
     expect(await ui.find({ type: "Button", key: "pick:__off" })).toBeDefined();
     expect(await ui.find({ type: "Text", text: /MCP call failed/ })).toBeUndefined();
     await ui.unmount();
+  });
+  test("a tool error stops the model list retries until the next turn", async ($, on) => {
+    let hasTraffic = false;
+    let listCalls = 0;
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("command.register", ($, e) => ({ value: { command: e.name } }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
+    on("ui.status", () => ({ value: undefined }));
+    on("ui.open", () => ({ value: { isPlaced: true } }));
+    on("turn.complete", () => ({ text: "" }));
+    on("mcp.call", () => {
+      listCalls++;
+      if (!hasTraffic) return { value: { content: [{ type: "text", text: "Session has no gateway traffic yet; send a request first" }], isError: true } };
+      return text({ models: MODELS });
+    });
+    const clock = mock.clock(on);
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.command.run({ command: "edgee", args: "panel" } as any);
+    const ui = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "Pane", requestId: "edgee-requests", props: PANE_PROPS });
+    // The model list loads in the background: wait for its failure, across real ticks.
+    for (let i = 0; i < 50 && !(await ui.find({ type: "Text", text: /no gateway traffic yet/ })); i++) {
+      await new Promise((resolve) => (globalThis as any).setTimeout(resolve, 5));
+    }
+    expect(await ui.find({ type: "Text", text: /no gateway traffic yet/ })).toBeDefined();
+    await clock.advance(30_000);
+    expect(listCalls).toBe(1);
+
+    hasTraffic = true;
+    await $.turn.complete({ reason: "answer", answer: "ok", durationMs: 1 } as any);
+    for (let i = 0; i < 50 && !(await ui.find({ type: "Button", key: "pick:__off" })); i++) {
+      await new Promise((resolve) => (globalThis as any).setTimeout(resolve, 5));
+    }
+    expect(listCalls).toBe(2);
+    expect(await ui.find({ type: "Button", key: "pick:__off" })).toBeDefined();
+    await ui.unmount();
+  });
+  test("the line keeps the band other plugins draw above the prompt", async ($, on) => {
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("command.register", ($, e) => ({ value: { command: e.name } }));
+    on("env.get", () => ({ value: undefined }));
+    on("ui.status", () => ({ value: undefined }));
+    // Another plugin's band beneath ours.
+    on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Text({ children: "other plugin band" }));
+    mock.store(on);
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const band = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS });
+    expect(await band.find({ type: "Text", text: /other plugin band/ })).toBeDefined();
+    expect(await band.find({ type: "Text", text: /● direct/ })).toBeDefined();
+    await band.unmount();
   });
   test("the pane minimizes to a line above the prompt and back, remembered across sessions", async ($, on) => {
     const opens: string[] = [];

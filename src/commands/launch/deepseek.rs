@@ -125,7 +125,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let api_key = creds.provider_api_key("deepseek")
         .context("DeepSeek key missing. Retry `edgee launch deepseek` to provision it.")?;
     let session_id = reroute.create_session(&creds, "deepseek").await?;
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "deepseek").await;
 
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
     let (models, catalog) = tokio::join!(

@@ -59,6 +59,7 @@ fn developer_instructions_arg(session_id: &str, repo: Option<&str>, session_url:
 }
 
 pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    ensure_saved_thread_provider()?;
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -103,7 +104,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let api_key = &codex.api_key;
     let session_id = reroute.create_session(&creds, "codex").await?;
 
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "codex").await;
 
     let repo_origin = crate::git::detect_origin();
     let repo_entry = repo_origin.as_ref()
@@ -116,7 +117,8 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         })
         .unwrap_or_default();
     let base_url = format!("{}/v1", super::gateway_base_url_with_org(org.as_ref()));
-    let mut cmd = std::process::Command::new(util::resolve_binary("codex"));
+    let codex_bin = util::resolve_binary("codex");
+    let mut cmd = std::process::Command::new(&codex_bin);
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
     cmd.args([
@@ -132,6 +134,10 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         // logged in to codex — the header is simply omitted.
         "-c", "model_providers.edgee-cli.requires_openai_auth=true",
     ]);
+    // Edgee model catalog for Codex's picker and model metadata; see `codex_catalog`.
+    for arg in super::codex_catalog::cli_args(&codex_bin, "edgee-cli", &base_url, api_key).await {
+        cmd.args(["-c", &arg]);
+    }
     // Org plugins. Codex exposes no way to add a skills directory — only to
     // relocate the whole config root via CODEX_HOME — so we build a symlink
     // mirror of it and add ours there. Symlinks mean the user's auth.json,
@@ -190,6 +196,11 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     }
 
     Ok(())
+}
+
+/// Also run when removing the alias, to repair threads from older Edgee versions.
+pub(crate) fn ensure_saved_thread_provider() -> Result<()> {
+    super::codex_config::ensure_fallback(&plugins::codex_home_source().join("config.toml"))
 }
 
 #[cfg(test)]
