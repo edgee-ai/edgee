@@ -38,42 +38,128 @@ fn owned_request_key_ids(keys: Vec<OwnedRequestKey>, user_id: &str) -> Vec<Strin
         .collect()
 }
 
-/// Org-wide usage aggregate from `GET /v1/organizations/{org}/usage` (ClickHouse
-/// backed, windowed by `period`). Only the fields the CLI/front-ends surface are
-/// decoded; everything else in the summary is ignored. `#[serde(default)]` keeps
-/// it decoding if the console omits a field.
+/// Go encodes nil slices as `null`, which `#[serde(default)]` alone rejects.
+fn null_as_default<'de, D, T>(d: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// Usage aggregate from `GET /v1/organizations/{org}/usage` (ClickHouse backed,
+/// windowed by `period`) — the same payload the console dashboard renders. Only
+/// the fields the CLI/front-ends surface are decoded. Everything defaults so a
+/// field the API omits never fails the whole fetch.
 #[derive(Debug, Default, Deserialize)]
+#[serde(default)]
 pub struct OrgUsageSummary {
-    #[serde(default)]
     pub total_requests: u64,
-    #[serde(default)]
     pub distinct_sessions: u64,
-    #[serde(default)]
     pub error_requests: u64,
-    #[serde(default)]
     pub input_tokens: u64,
-    #[serde(default)]
     pub cached_input_tokens: u64,
-    #[serde(default)]
     pub cache_creation_input_tokens: u64,
-    #[serde(default)]
     pub reasoning_output_tokens: u64,
-    #[serde(default)]
     pub output_tokens: u64,
+    pub total_tokens: u64,
     /// Nano-USD (divide by 1e9 for dollars), matching the console's cost fields.
-    #[serde(default)]
     pub total_cost: u64,
-    #[serde(default)]
+    pub input_cost: u64,
+    pub cached_input_cost: u64,
+    pub cache_creation_input_cost: u64,
+    pub output_cost: u64,
+    pub reasoning_output_cost: u64,
+    pub avg_duration_ms: Option<f64>,
+    /// Legacy input-side savings rollup. Kept for existing JSON readers; the
+    /// dashboard's figure is the three per-strategy fields below.
     pub token_cost_savings: u64,
-    #[serde(default)]
+    pub tool_compression_cost_savings: u64,
+    pub mcp_surface_cost_savings: u64,
+    pub output_cost_savings: u64,
     pub uncompressed_tools_tokens: u64,
-    #[serde(default)]
     pub compressed_tools_tokens: u64,
 }
 
+/// Change vs the previous window of the same length, in percent.
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[serde(default)]
+pub struct UsageDelta {
+    pub total_cost_percent: Option<f64>,
+    pub total_requests_percent: Option<f64>,
+    pub total_tokens_percent: Option<f64>,
+}
+
+/// Routing outcome for the window. `estimated_routing_savings` is signed (a
+/// reroute can cost more) and `None` when no request carried a priced estimate.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct FallbackSummary {
+    pub routed_requests: u64,
+    pub fallback_requests: u64,
+    pub reroute_requests: u64,
+    pub estimated_routing_savings: Option<i64>,
+    pub routing_savings_estimate_count: u64,
+}
+
+/// One `stats_by_model` row: usage for one (key, provider, model).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct UsageByModel {
+    pub key_uuid: String,
+    pub provider: String,
+    pub model: String,
+    pub total_requests: u64,
+    pub total_tokens: u64,
+    pub total_cost: u64,
+}
+
+/// The API-key metadata the usage payload carries (`stats_by_api_key`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct UsageApiKey {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub key_type: Option<String>,
+    pub coding_assistant: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct OrgUsage {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub summary: OrgUsageSummary,
+    #[serde(default)]
+    pub delta: Option<UsageDelta>,
+    #[serde(default)]
+    pub fallback: Option<FallbackSummary>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub stats_by_model: Vec<UsageByModel>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub stats_by_api_key: Vec<UsageApiKey>,
+}
+
+/// One row of `GET /v1/organizations/{org}/sessions`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ApiSession {
+    pub session_id: String,
+    pub key_uuid: String,
+    pub total_requests: u64,
+    pub total_cost: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_errors: u64,
+    pub last_request: String,
+    pub total_tool_compression_cost_savings: u64,
+    pub total_mcp_surface_cost_savings: u64,
+    pub total_output_cost_savings: u64,
+    pub estimated_routing_savings: Option<i64>,
+}
+
 #[derive(Deserialize)]
-struct UsageResponse {
-    summary: OrgUsageSummary,
+struct SessionsResponse {
+    #[serde(default, deserialize_with = "null_as_default")]
+    data: Vec<ApiSession>,
 }
 
 #[derive(Deserialize)]
@@ -729,7 +815,7 @@ impl ApiClient {
         org_id: &str,
         period: &str,
         user_id: Option<&str>,
-    ) -> Result<OrgUsageSummary> {
+    ) -> Result<OrgUsage> {
         let url = format!(
             "{}/v1/organizations/{}/usage?period={}{}",
             self.base_url,
@@ -744,19 +830,14 @@ impl ApiClient {
             .await
             .context("Failed to fetch org usage")?;
         check_status(&resp, "fetch org usage")?;
-        let body: UsageResponse = resp.json().await.context("Invalid usage response")?;
-        Ok(body.summary)
+        resp.json().await.context("Invalid usage response")
     }
 
-    /// Latest request for this user's current keys in the selected usage window.
-    /// Logs do not support a user_id filter for admins, so filter by owned key IDs.
-    pub async fn get_last_request(
-        &self,
-        org_id: &str,
-        period: &str,
-        user_id: &str,
-    ) -> Result<Option<LastRequest>> {
-        anyhow::ensure!(!user_id.is_empty(), "Missing user ID for request history");
+    /// IDs of the org's API keys owned by `user_id`. Used to scope requests and
+    /// sessions to one person: those endpoints ignore `user_id` for admins, so
+    /// filtering by owned keys is the only way to keep an admin's view personal.
+    pub async fn get_owned_key_ids(&self, org_id: &str, user_id: &str) -> Result<Vec<String>> {
+        anyhow::ensure!(!user_id.is_empty(), "Missing user ID for key lookup");
         let response = self
             .http
             .get(format!(
@@ -768,13 +849,22 @@ impl ApiClient {
             .context("Failed to fetch request keys")?;
         check_status(&response, "fetch request keys")?;
         let keys: Vec<OwnedRequestKey> = response.json().await.context("Invalid request keys")?;
-        let ids = owned_request_key_ids(keys, user_id);
+        Ok(owned_request_key_ids(keys, user_id))
+    }
+
+    /// Latest request across `key_ids` in the selected usage window.
+    pub async fn get_last_request(
+        &self,
+        org_id: &str,
+        period: &str,
+        key_ids: &[String],
+    ) -> Result<Option<LastRequest>> {
         // An empty key filter would expose the entire org to admins.
-        if ids.is_empty() {
+        if key_ids.is_empty() {
             return Ok(None);
         }
         let mut query = vec![("period", period), ("page", "1"), ("page_size", "1")];
-        query.extend(ids.iter().map(|id| ("api_key_id", id.as_str())));
+        query.extend(key_ids.iter().map(|id| ("api_key_id", id.as_str())));
         let mut url =
             reqwest::Url::parse(&format!("{}/v1/organizations/{org_id}/logs", self.base_url))?;
         url.query_pairs_mut().extend_pairs(query);
@@ -787,6 +877,41 @@ impl ApiClient {
         check_status(&response, "fetch latest request")?;
         let logs: RequestLogsResponse = response.json().await.context("Invalid request logs")?;
         Ok(logs.data.into_iter().next())
+    }
+
+    /// Most recent sessions across `key_ids` in the window, newest first.
+    pub async fn get_sessions(
+        &self,
+        org_id: &str,
+        period: &str,
+        key_ids: &[String],
+        page_size: usize,
+    ) -> Result<Vec<ApiSession>> {
+        // Same guard as `get_last_request`: no keys means no personal scope.
+        if key_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let size = page_size.to_string();
+        let mut query = vec![
+            ("period", period),
+            ("page", "1"),
+            ("page_size", size.as_str()),
+        ];
+        query.extend(key_ids.iter().map(|id| ("api_key_id", id.as_str())));
+        let mut url = reqwest::Url::parse(&format!(
+            "{}/v1/organizations/{org_id}/sessions",
+            self.base_url
+        ))?;
+        url.query_pairs_mut().extend_pairs(query);
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Failed to fetch sessions")?;
+        check_status(&response, "fetch sessions")?;
+        let body: SessionsResponse = response.json().await.context("Invalid sessions response")?;
+        Ok(body.data)
     }
 
     /// Number of sessions currently online (live "active" count), narrowed to one
