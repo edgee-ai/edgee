@@ -50,10 +50,9 @@ Always pass this launch ID as sessionId to the Edgee MCP tools below. Edgee maps
 
 You MUST use the following Edgee MCP tools during this session:
 
-1. `setSessionName` — call this at the END of your first response in the conversation (after you have done the work for the user's first message, as your last tool call before you reply), with a short descriptive name (3-6 words) summarizing what the user is asking for. Never call it before doing anything else. Arguments:
+1. `setSessionName` — give the session a short descriptive name (3-6 words) summarizing what the user is working on. Call it once you understand the task, which may take more than one exchange, and call it again whenever the task becomes clearer or changes (the real scope shows up after exploring the code, the user pivots, or the user asks for a name). Always call it at the END of a response, as your last tool call before you reply, never before doing anything else. Arguments:
    - sessionId: "{session_id}"
    - name: the descriptive name.
-   If at any later point during the session you come up with a clearly better name (e.g., the task's real scope becomes obvious only after exploring the code, or the user pivots the request), call `setSessionName` again with the improved name. Prefer calling it once, but do not hesitate to update when a materially better name emerges.
 
 2. `addSessionPullRequest` — call this EVERY TIME you create OR edit a pull request (e.g., via `gh pr create`, `gh pr edit`, or any other tool). Immediately after the PR is created or modified, call this tool with:
    - sessionId: "{session_id}"
@@ -63,7 +62,7 @@ You MUST use the following Edgee MCP tools during this session:
 
     if let Some(repo) = repo {
         prompt.push_str(&format!(
-            "\n\n3. `setSessionGitRepo` — call this EXACTLY ONCE, together with (or right after) `setSessionName`. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
+            "\n\n3. `setSessionGitRepo` — call this EXACTLY ONCE (the repository does not change), at the end of a response. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
         ));
     }
 
@@ -80,7 +79,8 @@ mod tests {
         // lands a few seconds after each request; naming first would hit the
         // previous conversation after /clear or /new.
         let prompt = session_instructions("launch-1", Some("owner/repo"), "https://console/s");
-        assert!(prompt.contains("at the END of your first response"));
+        assert!(prompt.contains("at the END of a response"));
+        assert!(!prompt.contains("Prefer calling it once"));
         assert!(!prompt.contains("immediately after the user's first message"));
         assert!(!prompt.contains("substitutes"));
         assert!(prompt.contains(r#"sessionId: "launch-1""#));
