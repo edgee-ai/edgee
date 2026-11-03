@@ -43,14 +43,14 @@ pub(super) fn session_instructions(session_id: &str, repo: Option<&str>, session
     let mut prompt = format!(
         r#"You are running inside the Edgee CLI and have access to the Edgee MCP server for tracking session metadata.
 
-Your Edgee launch ID (used for MCP only when no native agent session ID is available) is: {session_id}
-Your launch-alias session page is: {session_url}
+Your Edgee launch ID is: {session_id}
+Your session page is: {session_url}
 
-For current-session Edgee MCP calls, use the sessionId shown below. The gateway directly substitutes this agent's recognized native session ID whenever present, without session-association reads, writes or caches, including on-premise gateways. Explicit targets for different sessions remain unchanged. Native agent IDs are the canonical visible identity for API responses, session history, session links and MCP. The API resolves native IDs through existing usage records; first-call usage can arrive later than the tool call. If native-session lookup returns a session-not-available error, retry after usage arrives; never switch to the Edgee ID when a native ID exists. Use the Edgee ID only when no native ID is available. Do not guess a native ID, use a thread/cache ID, or create a separate session. The pre-launch page above remains an alias and resolves to the agent-facing session once usage arrives; prefer the API-returned session_id for later links. Resuming the same native ID groups launches together; a reset with a new native ID starts a separate visible session.
+Always pass this launch ID as sessionId to the Edgee MCP tools below. Edgee maps it to your current conversation from the requests you have already sent, so a tool call must come after at least one model response in the current conversation, never before it. If a tool returns a session-not-available error, do not retry immediately: call it again at the end of a later response.
 
 You MUST use the following Edgee MCP tools during this session:
 
-1. `setSessionName` — call this immediately after the user's first message with a short descriptive name (3-6 words) summarizing what the user is asking for. Arguments:
+1. `setSessionName` — call this at the END of your first response in the conversation (after you have done the work for the user's first message, as your last tool call before you reply), with a short descriptive name (3-6 words) summarizing what the user is asking for. Never call it before doing anything else. Arguments:
    - sessionId: "{session_id}"
    - name: the descriptive name.
    If at any later point during the session you come up with a clearly better name (e.g., the task's real scope becomes obvious only after exploring the code, or the user pivots the request), call `setSessionName` again with the improved name. Prefer calling it once, but do not hesitate to update when a materially better name emerges.
@@ -63,7 +63,7 @@ You MUST use the following Edgee MCP tools during this session:
 
     if let Some(repo) = repo {
         prompt.push_str(&format!(
-            "\n\n3. `setSessionGitRepo` — call this EXACTLY ONCE at the start of the session, together with (or right after) `setSessionName`. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
+            "\n\n3. `setSessionGitRepo` — call this EXACTLY ONCE, together with (or right after) `setSessionName`. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
         ));
     }
 
@@ -73,6 +73,18 @@ You MUST use the following Edgee MCP tools during this session:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_tools_run_after_the_first_response_not_before() {
+        // The API maps the launch ID to the current conversation from usage, which
+        // lands a few seconds after each request; naming first would hit the
+        // previous conversation after /clear or /new.
+        let prompt = session_instructions("launch-1", Some("owner/repo"), "https://console/s");
+        assert!(prompt.contains("at the END of your first response"));
+        assert!(!prompt.contains("immediately after the user's first message"));
+        assert!(!prompt.contains("substitutes"));
+        assert!(prompt.contains(r#"sessionId: "launch-1""#));
+    }
 
     #[test]
     fn http_transport_authenticates_and_binds_current_launch() {
