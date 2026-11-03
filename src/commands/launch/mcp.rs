@@ -1,15 +1,20 @@
 //! Shared Edgee MCP wiring for CLI agents: the server entry and the
 //! session-tracking instructions.
 
-/// The `mcpServers.edgee` entry, in the `{type, url, headers}` shape both Claude
-/// Code and Copilot CLI read. Authenticates with the console user token.
-pub(super) fn edgee_http_server(token: &str) -> serde_json::Value {
+/// User authentication and launch routing context.
+pub(super) fn edgee_http_headers(token: &str, launch_id: &str) -> std::collections::HashMap<String, String> {
+    std::collections::HashMap::from([
+        ("Authorization".to_string(), format!("Bearer {token}")),
+        ("X-Edgee-Launch-Id".to_string(), launch_id.to_string()),
+    ])
+}
+
+/// Edgee HTTP server entry with explicit launch context.
+pub(super) fn edgee_http_server(token: &str, launch_id: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "http",
         "url": crate::config::mcp_base_url(),
-        "headers": {
-            "Authorization": format!("Bearer {token}")
-        }
+        "headers": edgee_http_headers(token, launch_id)
     })
 }
 
@@ -26,21 +31,22 @@ pub(super) fn print_injection_skipped() {
     println!("{}", console::style(format!("  {reason}, skipping.")).dim());
 }
 
-/// Console page for `session_id`, org-scoped when the org slug is known.
-pub(super) fn session_url(creds: &crate::config::Credentials, session_id: &str) -> String {
-    let base = crate::config::console_base_url();
-    match creds.org_slug.as_deref().filter(|slug| !slug.is_empty()) {
-        Some(slug) => format!("{base}/sessions/{slug}/{session_id}"),
-        None => format!("{base}/sessions/{session_id}"),
-    }
+/// Explicit launch-alias page, before the native identity is known.
+pub(super) fn session_url(
+    creds: &crate::config::Credentials,
+    session_id: &str,
+) -> anyhow::Result<String> {
+    crate::config::console_launch_session_url(creds.org_slug.as_deref(), session_id)
 }
 
 pub(super) fn session_instructions(session_id: &str, repo: Option<&str>, session_url: &str) -> String {
     let mut prompt = format!(
         r#"You are running inside the Edgee CLI and have access to the Edgee MCP server for tracking session metadata.
 
-Your Edgee session ID is: {session_id}
-Your Edgee public session page is: {session_url}
+Your Edgee launch ID (used for MCP only when no native agent session ID is available) is: {session_id}
+Your launch-alias session page is: {session_url}
+
+For current-session Edgee MCP calls, use the sessionId shown below. The gateway directly substitutes this agent's recognized native session ID whenever present, without session-association reads, writes or caches, including on-premise gateways. Explicit targets for different sessions remain unchanged. Native agent IDs are the canonical visible identity for API responses, session history, session links and MCP. The API resolves native IDs through existing usage records; first-call usage can arrive later than the tool call. If native-session lookup returns a session-not-available error, retry after usage arrives; never switch to the Edgee ID when a native ID exists. Use the Edgee ID only when no native ID is available. Do not guess a native ID, use a thread/cache ID, or create a separate session. The pre-launch page above remains an alias and resolves to the agent-facing session once usage arrives; prefer the API-returned session_id for later links. Resuming the same native ID groups launches together; a reset with a new native ID starts a separate visible session.
 
 You MUST use the following Edgee MCP tools during this session:
 
@@ -62,4 +68,18 @@ You MUST use the following Edgee MCP tools during this session:
     }
 
     prompt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_transport_authenticates_and_binds_current_launch() {
+        let server = edgee_http_server("user-token", "launch-current");
+        let wire = serde_json::to_string(&server).unwrap();
+        let config: serde_json::Value = serde_json::from_str(&wire).unwrap();
+        assert_eq!(config["headers"]["Authorization"], "Bearer user-token");
+        assert_eq!(config["headers"]["X-Edgee-Launch-Id"], "launch-current");
+    }
 }

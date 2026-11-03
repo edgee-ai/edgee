@@ -645,6 +645,9 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStats {
+    /// Agent-facing ID returned by the API, including when queried by launch alias.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub session_id: String,
     pub total_requests: u64,
     pub total_cost: u64,
     pub total_input_tokens: u64,
@@ -694,6 +697,8 @@ impl SessionStats {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SessionSummary {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub session_id: String,
     pub total_requests: u64,
     /// Nanodollars.
     pub total_cost: u64,
@@ -739,6 +744,8 @@ pub struct SessionRerouteRequest<'a> {
 /// Session savings in nano-USD. Missing fields mean unavailable, not zero.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SessionSavings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub total_cost: Option<u64>,
     pub total_token_cost_savings: Option<u64>,
     pub total_output_cost_savings: Option<u64>,
@@ -898,10 +905,10 @@ impl ApiClient {
             ("page_size", size.as_str()),
         ];
         query.extend(key_ids.iter().map(|id| ("api_key_id", id.as_str())));
-        let mut url = reqwest::Url::parse(&format!(
-            "{}/v1/organizations/{org_id}/sessions",
-            self.base_url
-        ))?;
+        let mut url = crate::config::url_with_path(
+            &self.base_url,
+            &["v1", "organizations", org_id, "sessions"],
+        )?;
         url.query_pairs_mut().extend_pairs(query);
         let response = self
             .http
@@ -921,15 +928,16 @@ impl ApiClient {
         org_id: &str,
         user_id: Option<&str>,
     ) -> Result<u64> {
-        let url = format!(
-            "{}/v1/organizations/{}/sessions/online-count{}",
-            self.base_url,
-            org_id,
-            user_id.map_or(String::new(), |id| format!("?user_id={id}"))
-        );
+        let mut url = crate::config::url_with_path(
+            &self.base_url,
+            &["v1", "organizations", org_id, "sessions", "online-count"],
+        )?;
+        if let Some(user_id) = user_id {
+            url.query_pairs_mut().append_pair("user_id", user_id);
+        }
         let resp = self
             .http
-            .get(&url)
+            .get(url)
             .send()
             .await
             .context("Failed to fetch online session count")?;
@@ -1116,16 +1124,34 @@ impl ApiClient {
             .context("Invalid API key response")
     }
 
+    fn session_url(&self, org: &str, session_id: &str, action: &str) -> Result<reqwest::Url> {
+        crate::config::url_with_path(
+            &self.base_url,
+            &["v1", "organizations", org, "sessions", session_id, action],
+        )
+    }
+
+    fn launch_session_url(&self, org: &str, launch_id: &str, action: &str) -> Result<reqwest::Url> {
+        crate::config::url_with_path(
+            &self.base_url,
+            &[
+                "v1",
+                "organizations",
+                org,
+                "launch-sessions",
+                launch_id,
+                action,
+            ],
+        )
+    }
+
     pub async fn put_session_reroute(
         &self,
         org_id: &str,
         session_id: &str,
         request: &SessionRerouteRequest<'_>,
     ) -> Result<()> {
-        let url = format!(
-            "{}/v1/organizations/{}/sessions/{}/reroute",
-            self.base_url, org_id, session_id
-        );
+        let url = self.launch_session_url(org_id, session_id, "reroute")?;
         let resp = self
             .http
             .put(url)
@@ -1144,17 +1170,14 @@ impl ApiClient {
         version: &str,
         api_key_id: Option<&str>,
     ) -> Result<()> {
-        let url = format!(
-            "{}/v1/organizations/{}/sessions/{}/cli-version",
-            self.base_url, org_id, session_id
-        );
+        let url = self.launch_session_url(org_id, session_id, "cli-version")?;
         let mut body = serde_json::json!({ "version": version });
         if let Some(key_id) = api_key_id {
             body["api_key_id"] = serde_json::json!(key_id);
         }
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .json(&body)
             .send()
             .await
@@ -1163,26 +1186,27 @@ impl ApiClient {
         Ok(())
     }
 
-    /// Reads live session savings without closing the session. Uses the
-    /// summary endpoint: the Claude mod polls this, and the full session detail
-    /// runs several raw-table ClickHouse queries the savings don't need.
+    /// Reads live native-session savings without closing the session. Uses the
+    /// summary endpoint rather than the full session detail's raw usage queries.
     pub async fn get_session_savings(
         &self,
         org_id: &str,
         session_id: &str,
     ) -> Result<SessionSavings> {
-        let mut url = reqwest::Url::parse(&self.base_url)?;
-        url.path_segments_mut()
-            .map_err(|_| anyhow::anyhow!("Invalid console API URL"))?
-            .pop_if_empty()
-            .extend([
-                "v1",
-                "organizations",
-                org_id,
-                "sessions",
-                session_id,
-                "summary",
-            ]);
+        let url = self.session_url(org_id, session_id, "summary")?;
+        self.session_savings_at(url).await
+    }
+
+    pub async fn get_launch_session_savings(
+        &self,
+        org_id: &str,
+        launch_id: &str,
+    ) -> Result<SessionSavings> {
+        self.session_savings_at(self.launch_session_url(org_id, launch_id, "summary")?)
+            .await
+    }
+
+    async fn session_savings_at(&self, url: reqwest::Url) -> Result<SessionSavings> {
         let resp = self
             .http
             .get(url)
@@ -1205,13 +1229,10 @@ impl ApiClient {
         org_id: &str,
         session_id: &str,
     ) -> Result<Option<SessionStats>> {
-        let url = format!(
-            "{}/v1/organizations/{}/sessions/{}/end",
-            self.base_url, org_id, session_id
-        );
+        let url = self.launch_session_url(org_id, session_id, "end")?;
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .send()
             .await
             .context("Failed to get session stats")?;
@@ -1227,13 +1248,10 @@ impl ApiClient {
 
     /// Running totals of a session, without ending it. `org` is an org ID or slug.
     pub async fn get_session_summary(&self, org: &str, session_id: &str) -> Result<SessionSummary> {
-        let url = format!(
-            "{}/v1/organizations/{org}/sessions/{session_id}/summary",
-            self.base_url
-        );
+        let url = self.session_url(org, session_id, "summary")?;
         let resp = self
             .http
-            .get(&url)
+            .get(url)
             .send()
             .await
             .context("Failed to get session summary")?;
@@ -1241,6 +1259,24 @@ impl ApiClient {
         resp.json()
             .await
             .context("Invalid session summary response")
+    }
+
+    /// Summary for a launcher-known raw ID, without native/launch ambiguity.
+    pub async fn get_launch_session_summary(
+        &self,
+        org: &str,
+        launch_id: &str,
+    ) -> Result<SessionSummary> {
+        let resp = self
+            .http
+            .get(self.launch_session_url(org, launch_id, "summary")?)
+            .send()
+            .await
+            .context("Failed to get launch session summary")?;
+        check_status(&resp, "get launch session summary")?;
+        resp.json()
+            .await
+            .context("Invalid launch session summary response")
     }
 }
 
@@ -1263,6 +1299,59 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn session_summary_and_end_preserve_opaque_ids() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = ApiClient::with_base_url(
+            "token",
+            &format!("http://{}/api/", listener.local_addr().unwrap()),
+        )
+        .unwrap();
+        let server = tokio::spawn(async move {
+            for (method, action, status) in [
+                ("GET", "summary", "200 OK"),
+                ("POST", "end", "404 Not Found"),
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buf = [0; 1024];
+                    let count = stream.read(&mut buf).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buf[..count]);
+                    if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8(request).unwrap();
+                let collection = if action == "end" {
+                    "launch-sessions"
+                } else {
+                    "sessions"
+                };
+                assert!(request.starts_with(&format!(
+                    "{method} /api/v1/organizations/org%2Fteam/{collection}/agent:run%2F%E4%BC%9A%E8%A9%B1%3Fq%23fragment%25/{action} HTTP/1.1"
+                )));
+                let body = r#"{"session_id":"agent:run/会話?q#fragment%","total_requests":2}"#;
+                stream.write_all(format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+                ).as_bytes()).await.unwrap();
+            }
+        });
+        let id = "agent:run/会話?q#fragment%";
+        let summary = client.get_session_summary("org/team", id).await.unwrap();
+        assert_eq!(summary.session_id, id);
+        assert_eq!(summary.total_requests, 2);
+        assert!(client
+            .get_session_stats("org/team", id)
+            .await
+            .unwrap()
+            .is_none());
+        server.await.unwrap();
+    }
+
     #[tokio::test]
     async fn session_savings_reads_without_ending_session_and_preserves_unknowns() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1294,10 +1383,12 @@ mod tests {
             });
             let mut client = super::ApiClient::new("test-token").unwrap();
             client.base_url = format!("http://{address}");
-            let result = client.get_session_savings("org", "session").await;
+            let result = client
+                .get_session_savings("org", "agent:run/会話?q#fragment%")
+                .await;
             let request = server.await.unwrap();
             assert!(
-                request.starts_with("GET /v1/organizations/org/sessions/session/summary HTTP/1.1")
+                request.starts_with("GET /v1/organizations/org/sessions/agent:run%2F%E4%BC%9A%E8%A9%B1%3Fq%23fragment%25/summary HTTP/1.1")
             );
             assert!(request
                 .to_lowercase()
@@ -1364,11 +1455,13 @@ mod tests {
                 effort: None,
                 expires_at: "2026-10-02T12:00:00Z",
             };
-            let result = client.put_session_reroute("org", "session", &request).await;
+            let result = client
+                .put_session_reroute("org", "agent:run/会話?q#fragment%", &request)
+                .await;
             assert_eq!(result.is_ok(), status == "200 OK");
             let (headers, body) = server.await.unwrap();
             assert!(
-                headers.starts_with("PUT /v1/organizations/org/sessions/session/reroute HTTP/1.1")
+                headers.starts_with("PUT /v1/organizations/org/launch-sessions/agent:run%2F%E4%BC%9A%E8%A9%B1%3Fq%23fragment%25/reroute HTTP/1.1")
             );
             assert!(headers
                 .to_ascii_lowercase()
@@ -1407,7 +1500,7 @@ mod tests {
                     };
                     let head = String::from_utf8_lossy(&data[..end]);
                     assert!(head.starts_with(
-                        "POST /v1/organizations/org/sessions/session/cli-version HTTP/1.1"
+                        "POST /v1/organizations/org/launch-sessions/agent:run%2F%E4%BC%9A%E8%A9%B1%3Fq%23fragment%25/cli-version HTTP/1.1"
                     ));
                     let length = head
                         .lines()
@@ -1437,7 +1530,7 @@ mod tests {
                     .unwrap();
             });
             client
-                .set_session_cli_version("org", "session", "0.15.3", key_id)
+                .set_session_cli_version("org", "agent:run/会話?q#fragment%", "0.15.3", key_id)
                 .await
                 .unwrap();
             server.await.unwrap();

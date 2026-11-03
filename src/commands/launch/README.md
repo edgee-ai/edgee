@@ -531,6 +531,9 @@ and placed before the user's args. Verified against Copilot CLI 1.0.90:
   server is named `edgee-session`, not `edgee`: Copilot's MCP namespace is flat,
   and an injected server silently shadows an org plugin's server of the same
   name.
+  Edgee MCP transports share `mcp::edgee_http_headers`: user bearer token plus
+  `X-Edgee-Launch-Id` set to the actual launcher ID. Claude, Codex, Copilot CLI
+  and OpenCode all require this context; native session tool arguments stay native.
 - **Session instructions** via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`. Copilot only
   reads `.github/instructions/*.instructions.md` from those directories.
 - **Org plugins**: the Claude bundle, one `--plugin-dir=` per plugin. Copilot

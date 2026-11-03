@@ -140,7 +140,17 @@ async fn print_session_stats(
         Err(_) => None,
     };
 
-    let logs_url = session_log::logs_url_for_session(creds, session_id);
+    let logs_url = match stats.as_ref().map(|stats| stats.session_id.as_str()).filter(|id| !id.is_empty()) {
+        Some(native_id) => session_log::logs_url_for_session(creds, native_id),
+        None => crate::config::console_launch_session_url(creds.org_slug.as_deref(), session_id),
+    };
+    let logs_url = match logs_url {
+        Ok(url) => url,
+        Err(error) => {
+            eprintln!("Failed to build session URL: {error}");
+            return;
+        }
+    };
 
     println!();
     println!(

@@ -394,7 +394,8 @@ async fn run_with_reroute(
         opts.log_output.as_deref(),
         &gateway,
         &session_id,
-    );
+        &org_slug,
+    )?;
 
     // Run proxy-only when no agent is named, or when `--no-launch` is set (e.g.
     // driving an external client like Claude Desktop against a named provider's
@@ -1483,7 +1484,8 @@ fn print_banner(
     log_output: Option<&Path>,
     gateway: &GatewayTarget,
     session_id: &str,
-) {
+    org_slug: &str,
+) -> Result<()> {
     println!("{}", style("edgee relay").bold().green());
     println!("  proxy:    http://{addr}");
     println!("  CA cert:  {}", cert_path.display());
@@ -1493,14 +1495,15 @@ fn print_banner(
     );
     println!("  session:  {session_id}");
     println!(
-        "  console:  {}/sessions/{session_id}",
-        crate::config::console_base_url()
+        "  console:  {}",
+        crate::config::console_launch_session_url(Some(org_slug), session_id)?
     );
     match log_output {
         Some(p) => println!("  logs:     {}", p.display()),
         None => println!("  logs:     disabled"),
     }
     println!();
+    Ok(())
 }
 
 /// Hint printed before launching Claude Desktop behind the relay. Unlike the

@@ -173,6 +173,10 @@ impl Reroute {
         let Some(reroute) = &self.0 else {
             return Ok(session_id);
         };
+        client
+            .set_session_cli_version(org_id, &session_id, env!("CARGO_PKG_VERSION"), Some(key_id))
+            .await
+            .context("Agent was not launched. Registering the launch session failed; check your access and retry")?;
         let expires_at = (OffsetDateTime::now_utc()
             + time::Duration::minutes(i64::from(reroute.duration)))
         .format(&Rfc3339)?;
@@ -383,22 +387,30 @@ mod tests {
 
     #[tokio::test]
     async fn reserve_puts_the_session_id_it_returns() {
-        let (base_url, seen) = mock_api(vec![(
-            "PUT /v1/organizations/org/sessions/",
-            "200 OK",
-            serde_json::json!({}),
-        )])
-        .await;
+        let (base_url, seen) = mock_api(vec![
+            (
+                "POST /v1/organizations/org/launch-sessions/",
+                "200 OK",
+                serde_json::json!({}),
+            ),
+            (
+                "PUT /v1/organizations/org/launch-sessions/",
+                "200 OK",
+                serde_json::json!({}),
+            ),
+        ]).await;
         let client = ApiClient::with_base_url("token", &base_url).unwrap();
         let session = validated().reserve(&client, "org", "key").await.unwrap();
 
         let seen = seen.lock().unwrap();
-        let [(line, body)] = seen.as_slice() else {
-            panic!("expected one request, got {seen:?}")
+        let [(registered, metadata), (line, body)] = seen.as_slice() else {
+            panic!("expected registration before reroute, got {seen:?}")
         };
+        assert_eq!(registered, &format!("POST /v1/organizations/org/launch-sessions/{session}/cli-version"));
+        assert_eq!(metadata["api_key_id"], "key");
         assert_eq!(
             line,
-            &format!("PUT /v1/organizations/org/sessions/{session}/reroute")
+            &format!("PUT /v1/organizations/org/launch-sessions/{session}/reroute")
         );
         assert_eq!(body["api_key_id"], "key");
         assert_eq!(body["source_model"], "*");
@@ -409,12 +421,18 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_reroute_blocks_the_launch() {
-        let (base_url, _) = mock_api(vec![(
-            "PUT /v1/organizations/org/sessions/",
-            "403 Forbidden",
-            serde_json::json!({}),
-        )])
-        .await;
+        let (base_url, _) = mock_api(vec![
+            (
+                "POST /v1/organizations/org/launch-sessions/",
+                "200 OK",
+                serde_json::json!({}),
+            ),
+            (
+                "PUT /v1/organizations/org/launch-sessions/",
+                "403 Forbidden",
+                serde_json::json!({}),
+            ),
+        ]).await;
         let client = ApiClient::with_base_url("token", &base_url).unwrap();
         let err = validated()
             .reserve(&client, "org", "key")

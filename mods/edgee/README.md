@@ -80,7 +80,7 @@ The mod replaces Edgee's legacy statusline. Without mod support or Edgee MCP,
 there is no Edgee inline display. Gateway spend, reasoning-token totals, and
 fallback alerts are not shown by this mod; consult the Edgee console.
 
-Savings come from session analytics through `edgee stats --json --session <id>`,
+Savings come from session analytics through `edgee stats --json --launch-session <id>`,
 using the CLI binary and profile that launched Claude. They include the whole
 gateway session (including background calls) and may lag behind the request
 timeline. Routing savings are estimates for requests with available pricing;
