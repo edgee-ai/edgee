@@ -1219,7 +1219,9 @@ impl ApiClient {
             .context("Invalid session savings response")
     }
 
-    /// Closes the session and returns its stats.
+    /// Closes the launch and returns only its usage, across any native session resets.
+    /// Resuming a native session in another launch does not repeat its earlier usage.
+    /// The returned session ID still identifies the latest native session for links.
     ///
     /// `None` means the gateway never saw this session (404) — the agent ran but
     /// no request went through Edgee — as opposed to an error, which means we
