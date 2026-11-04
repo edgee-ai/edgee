@@ -69,7 +69,7 @@ async fn summary(session_id: &str, org: &str) -> Option<SessionSummary> {
 async fn fetch(session_id: &str, org: &str) -> Option<SessionSummary> {
     let token = crate::config::read().ok()?.user_token.filter(|t| !t.is_empty())?;
     let client = ApiClient::new(&token).ok()?;
-    tokio::time::timeout(FETCH_TIMEOUT, client.get_session_summary(org, session_id))
+    tokio::time::timeout(FETCH_TIMEOUT, client.get_launch_session_summary(org, session_id))
         .await
         .ok()?
         .ok()

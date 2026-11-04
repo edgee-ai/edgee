@@ -1,15 +1,20 @@
 //! Shared Edgee MCP wiring for CLI agents: the server entry and the
 //! session-tracking instructions.
 
-/// The `mcpServers.edgee` entry, in the `{type, url, headers}` shape both Claude
-/// Code and Copilot CLI read. Authenticates with the console user token.
-pub(super) fn edgee_http_server(token: &str) -> serde_json::Value {
+/// User authentication and launch routing context.
+pub(super) fn edgee_http_headers(token: &str, launch_id: &str) -> std::collections::HashMap<String, String> {
+    std::collections::HashMap::from([
+        ("Authorization".to_string(), format!("Bearer {token}")),
+        ("X-Edgee-Launch-Id".to_string(), launch_id.to_string()),
+    ])
+}
+
+/// Edgee HTTP server entry with explicit launch context.
+pub(super) fn edgee_http_server(token: &str, launch_id: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "http",
         "url": crate::config::mcp_base_url(),
-        "headers": {
-            "Authorization": format!("Bearer {token}")
-        }
+        "headers": edgee_http_headers(token, launch_id)
     })
 }
 
@@ -26,28 +31,28 @@ pub(super) fn print_injection_skipped() {
     println!("{}", console::style(format!("  {reason}, skipping.")).dim());
 }
 
-/// Console page for `session_id`, org-scoped when the org slug is known.
-pub(super) fn session_url(creds: &crate::config::Credentials, session_id: &str) -> String {
-    let base = crate::config::console_base_url();
-    match creds.org_slug.as_deref().filter(|slug| !slug.is_empty()) {
-        Some(slug) => format!("{base}/sessions/{slug}/{session_id}"),
-        None => format!("{base}/sessions/{session_id}"),
-    }
+/// Explicit launch-alias page, before the native identity is known.
+pub(super) fn session_url(
+    creds: &crate::config::Credentials,
+    session_id: &str,
+) -> anyhow::Result<String> {
+    crate::config::console_launch_session_url(creds.org_slug.as_deref(), session_id)
 }
 
 pub(super) fn session_instructions(session_id: &str, repo: Option<&str>, session_url: &str) -> String {
     let mut prompt = format!(
         r#"You are running inside the Edgee CLI and have access to the Edgee MCP server for tracking session metadata.
 
-Your Edgee session ID is: {session_id}
-Your Edgee public session page is: {session_url}
+Your Edgee launch ID is: {session_id}
+Your session page is: {session_url}
+
+Always pass this launch ID as sessionId to the Edgee MCP tools below. Edgee maps it to your current conversation from the requests you have already sent, so a tool call must come after at least one model response in the current conversation, never before it. If a tool returns a session-not-available error, do not retry immediately: call it again at the end of a later response.
 
 You MUST use the following Edgee MCP tools during this session:
 
-1. `setSessionName` — call this immediately after the user's first message with a short descriptive name (3-6 words) summarizing what the user is asking for. Arguments:
+1. `setSessionName` — give the session a short descriptive name (3-6 words) summarizing what the user is working on. Call it once you understand the task, which may take more than one exchange, and call it again whenever the task becomes clearer or changes (the real scope shows up after exploring the code, the user pivots, or the user asks for a name). Always call it at the END of a response, as your last tool call before you reply, never before doing anything else. Arguments:
    - sessionId: "{session_id}"
    - name: the descriptive name.
-   If at any later point during the session you come up with a clearly better name (e.g., the task's real scope becomes obvious only after exploring the code, or the user pivots the request), call `setSessionName` again with the improved name. Prefer calling it once, but do not hesitate to update when a materially better name emerges.
 
 2. `addSessionPullRequest` — call this EVERY TIME you create OR edit a pull request (e.g., via `gh pr create`, `gh pr edit`, or any other tool). Immediately after the PR is created or modified, call this tool with:
    - sessionId: "{session_id}"
@@ -57,9 +62,36 @@ You MUST use the following Edgee MCP tools during this session:
 
     if let Some(repo) = repo {
         prompt.push_str(&format!(
-            "\n\n3. `setSessionGitRepo` — call this EXACTLY ONCE at the start of the session, together with (or right after) `setSessionName`. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
+            "\n\n3. `setSessionGitRepo` — call this EXACTLY ONCE (the repository does not change), at the end of a response. Arguments:\n   - sessionId: \"{session_id}\"\n   - repo: \"{repo}\"\n   Do not call this tool again during the session."
         ));
     }
 
     prompt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_tools_run_after_the_first_response_not_before() {
+        // The API maps the launch ID to the current conversation from usage, which
+        // lands a few seconds after each request; naming first would hit the
+        // previous conversation after /clear or /new.
+        let prompt = session_instructions("launch-1", Some("owner/repo"), "https://console/s");
+        assert!(prompt.contains("at the END of a response"));
+        assert!(!prompt.contains("Prefer calling it once"));
+        assert!(!prompt.contains("immediately after the user's first message"));
+        assert!(!prompt.contains("substitutes"));
+        assert!(prompt.contains(r#"sessionId: "launch-1""#));
+    }
+
+    #[test]
+    fn http_transport_authenticates_and_binds_current_launch() {
+        let server = edgee_http_server("user-token", "launch-current");
+        let wire = serde_json::to_string(&server).unwrap();
+        let config: serde_json::Value = serde_json::from_str(&wire).unwrap();
+        assert_eq!(config["headers"]["Authorization"], "Bearer user-token");
+        assert_eq!(config["headers"]["X-Edgee-Launch-Id"], "launch-current");
+    }
 }

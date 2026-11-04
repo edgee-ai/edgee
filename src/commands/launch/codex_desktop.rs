@@ -578,12 +578,17 @@ fn print_session_complete(creds: &crate::config::Credentials, session_id: &str) 
 }
 
 fn print_stats_url(creds: &crate::config::Credentials, session_id: &str) {
+    let url = match crate::config::console_launch_session_url(creds.org_slug.as_deref(), session_id) {
+        Ok(url) => url,
+        Err(error) => {
+            eprintln!("Failed to build session URL: {error}");
+            return;
+        }
+    };
     println!(
         "  {} {}",
         style("Usage & compression stats:").dim(),
-        style(crate::commands::util::session_log::logs_url_for_session(
-            creds, session_id
-        ))
+        style(url)
         .cyan()
         .underlined()
     );

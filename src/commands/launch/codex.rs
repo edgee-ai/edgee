@@ -25,14 +25,13 @@ const EDGEE_ENABLED_TOOLS: &[&str] = &[
 /// server — the same server claude.rs points `--mcp-config` at, delivered here
 /// as TOML overrides instead of a JSON file, the same way `codex_mcp_args`
 /// delivers plugin MCP servers.
-fn edgee_mcp_args(token: &str) -> Vec<String> {
+fn edgee_mcp_args(token: &str, launch_id: &str) -> Vec<String> {
     let mut args = vec![format!(
         "mcp_servers.edgee.url={}",
         plugins::config::toml_string(&crate::config::mcp_base_url())
     )];
 
-    let mut headers = std::collections::HashMap::new();
-    headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+    let headers = super::mcp::edgee_http_headers(token, launch_id);
     args.push(format!(
         "mcp_servers.edgee.http_headers={}",
         plugins::config::toml_table(&headers)
@@ -154,13 +153,10 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let use_mcp = creds.enable_mcp.unwrap_or(false) && !mcp_disabled;
     if use_mcp {
         let token = creds.user_token.as_deref().unwrap_or("");
-        for arg in edgee_mcp_args(token) {
+        for arg in edgee_mcp_args(token, &session_id) {
             cmd.args(["-c", &arg]);
         }
-        let session_url = match creds.org_slug.as_deref().filter(|slug| !slug.is_empty()) {
-            Some(slug) => format!("{}/sessions/{slug}/{session_id}", crate::config::console_base_url()),
-            None => format!("{}/sessions/{session_id}", crate::config::console_base_url()),
-        };
+        let session_url = super::mcp::session_url(&creds, &session_id)?;
         cmd.args(["-c", &developer_instructions_arg(&session_id, repo_origin.as_deref(), &session_url)]);
     }
     if let Some(skills_root) = plugin_report.skills_root.as_ref() {
@@ -211,7 +207,7 @@ mod tests {
     fn developer_instructions_round_trip_session_metadata() {
         let session_id = "session-123";
         let repo = "https://example.com/a/\"repo\"";
-        let url = "https://console.example/sessions/org/session-123";
+        let url = "https://console.example/~/org/sessions/session-123";
         let arg = developer_instructions_arg(session_id, Some(repo), url);
         let parsed: toml::Table = arg.parse().unwrap();
         let instructions = parsed["developer_instructions"].as_str().unwrap();
@@ -233,13 +229,15 @@ mod tests {
 
     #[test]
     fn edgee_mcp_args_are_well_formed_toml_overrides() {
-        let args = edgee_mcp_args("tok_123");
+        let args = edgee_mcp_args("tok_123", "launch-current");
 
         assert!(args
             .iter()
             .any(|a| a.starts_with("mcp_servers.edgee.url=") && a.contains(&crate::config::mcp_base_url())));
-        assert!(args
-            .contains(&r#"mcp_servers.edgee.http_headers={"Authorization"="Bearer tok_123"}"#.to_string()));
+        let headers = args.iter().find(|arg| arg.starts_with("mcp_servers.edgee.http_headers=")).unwrap();
+        let parsed: toml::Table = headers.parse().unwrap();
+        assert_eq!(parsed["mcp_servers"]["edgee"]["http_headers"]["Authorization"].as_str(), Some("Bearer tok_123"));
+        assert_eq!(parsed["mcp_servers"]["edgee"]["http_headers"]["X-Edgee-Launch-Id"].as_str(), Some("launch-current"));
         assert!(args.contains(&format!(
             "mcp_servers.edgee.enabled_tools=[{}]",
             EDGEE_ENABLED_TOOLS
@@ -255,7 +253,7 @@ mod tests {
     /// plugin MCP servers.
     #[test]
     fn edgee_mcp_args_escape_control_characters_in_the_token() {
-        let args = edgee_mcp_args("say \"hi\"\nthere");
+        let args = edgee_mcp_args("say \"hi\"\nthere", "launch-current");
         let headers = args
             .iter()
             .find(|a| a.starts_with("mcp_servers.edgee.http_headers="))

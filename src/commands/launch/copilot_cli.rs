@@ -77,11 +77,11 @@ pub(crate) async fn prepare(
             .tempdir()
             .context("creating the Copilot session directory")?;
         let token = creds.user_token.as_deref().unwrap_or("");
-        let mcp_config = write_mcp_config(dir.path(), token)?;
+        let mcp_config = write_mcp_config(dir.path(), token, session_id)?;
         let instructions = super::mcp::session_instructions(
             session_id,
             crate::git::detect_origin().as_deref(),
-            &super::mcp::session_url(&creds, session_id),
+            &super::mcp::session_url(&creds, session_id)?,
         );
         let instructions_dir = write_instructions(dir.path(), &instructions)?;
 
@@ -127,15 +127,15 @@ fn plugin_dir_args(dirs: &[PathBuf]) -> Vec<OsString> {
         .collect()
 }
 
-fn mcp_config(token: &str) -> serde_json::Value {
-    let mut server = super::mcp::edgee_http_server(token);
+fn mcp_config(token: &str, launch_id: &str) -> serde_json::Value {
+    let mut server = super::mcp::edgee_http_server(token, launch_id);
     server["tools"] = serde_json::json!(["*"]);
     serde_json::json!({ "mcpServers": { MCP_SERVER_NAME: server } })
 }
 
-fn write_mcp_config(dir: &Path, token: &str) -> Result<PathBuf> {
+fn write_mcp_config(dir: &Path, token: &str, launch_id: &str) -> Result<PathBuf> {
     let path = dir.join("mcp.json");
-    std::fs::write(&path, serde_json::to_string_pretty(&mcp_config(token))?)
+    std::fs::write(&path, serde_json::to_string_pretty(&mcp_config(token, launch_id))?)
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
 }
@@ -193,10 +193,11 @@ mod tests {
 
     #[test]
     fn mcp_config_matches_copilot_schema() {
-        let config = mcp_config("tok");
+        let config = mcp_config("tok", "launch-current");
         let server = &config["mcpServers"]["edgee-session"];
         assert_eq!(server["type"], "http");
         assert_eq!(server["headers"]["Authorization"], "Bearer tok");
+        assert_eq!(server["headers"]["X-Edgee-Launch-Id"], "launch-current");
         assert_eq!(server["tools"], serde_json::json!(["*"]));
         assert!(server["url"].as_str().is_some_and(|u| !u.is_empty()));
     }

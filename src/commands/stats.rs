@@ -21,6 +21,9 @@ setup_command! {
     /// Read live savings for one session (JSON, nano-USD).
     #[arg(long, requires = "json", conflicts_with_all = ["local", "limit"])]
     pub session: Option<String>,
+    /// Read live savings using an explicit Edgee launch alias.
+    #[arg(long, hide = true, requires = "json", conflicts_with_all = ["session", "local", "limit"])]
+    pub launch_session: Option<String>,
 }
 
 /// Compression percentage from before/after tool-token totals, or `None` when
@@ -173,7 +176,7 @@ fn build_stats_json(logs: &[util::SessionLogEntry], limit: Option<usize>) -> Sta
         .iter()
         .take(limit.unwrap_or(logs.len()))
         .map(|e| SessionBrief {
-            session_id: e.session_id.clone(),
+            session_id: e.visible_session_id().to_string(),
             tool_name: e.tool_name.clone(),
             ended_at: e.ended_at.clone(),
             ended_at_unix: e.ended_at_unix,
@@ -442,14 +445,18 @@ async fn fetch_remote_stats(period: &str, sessions_limit: usize) -> Result<Optio
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    if let Some(session_id) = opts.session {
+    if let Some(session_id) = opts.session.as_ref().or(opts.launch_session.as_ref()) {
         let creds = crate::config::read()?;
         let token = creds.user_token.as_deref().filter(|s| !s.is_empty())
             .context("Log in with `edgee auth login` to read session savings")?;
         let org = creds.org_id.as_deref().filter(|s| !s.is_empty())
             .context("Select an organization with `edgee auth login` to read session savings")?;
-        let savings = crate::api::ApiClient::new(token)?
-            .get_session_savings(org, &session_id).await?;
+        let client = crate::api::ApiClient::new(token)?;
+        let savings = if opts.launch_session.is_some() {
+            client.get_launch_session_savings(org, session_id).await?
+        } else {
+            client.get_session_savings(org, session_id).await?
+        };
         return util::emit_json(&savings);
     }
 
@@ -1117,7 +1124,7 @@ fn render_local(logs: &[util::SessionLogEntry], limit: Option<usize>, note: Opti
         "  {}  {}  {}",
         paint(&latest.tool_name, ACCENT, true),
         style(format!("{} UTC", util::fmt_timestamp(&latest.ended_at))).dim(),
-        style(&latest.session_id).dim(),
+        style(latest.visible_session_id()).dim(),
     );
     requests_line(st.total_requests, st.total_errors, st.total_cost);
     render_tokens(

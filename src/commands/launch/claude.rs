@@ -141,8 +141,8 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     }
     let use_mcp = wants_mcp && !mcp_disabled;
     if use_mcp {
-        let mcp_config_path = write_mcp_config(&creds)?;
-        let session_url = super::mcp::session_url(&creds, &session_id);
+        let mcp_config_path = write_mcp_config(&creds, &session_id)?;
+        let session_url = super::mcp::session_url(&creds, &session_id)?;
         let system_prompt =
             super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
         let system_prompt_path = write_system_prompt_file(&system_prompt)?;
@@ -239,10 +239,10 @@ fn mcp_injection_args(
 
 /// Writes an MCP config file to the Edgee config directory with the user's auth token.
 /// Returns the path to the written file.
-fn write_mcp_config(creds: &crate::config::Credentials) -> Result<std::path::PathBuf> {
+fn write_mcp_config(creds: &crate::config::Credentials, launch_id: &str) -> Result<std::path::PathBuf> {
     let token = creds.user_token.as_deref().unwrap_or("");
     let mcp_config = serde_json::json!({
-        "mcpServers": { "edgee": super::mcp::edgee_http_server(token) }
+        "mcpServers": { "edgee": super::mcp::edgee_http_server(token, launch_id) }
     });
 
     let dir = crate::config::config_dir();

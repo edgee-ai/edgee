@@ -429,7 +429,7 @@ async function refreshSavings($: $): Promise<void> {
     if (!binary || !sessionId) return;
     const profile = await $.env.get("EDGEE_PROFILE");
     const result = await $.process.run(
-      [binary, ...(profile ? ["--profile", profile] : []), "stats", "--json", "--session", sessionId],
+      [binary, ...(profile ? ["--profile", profile] : []), "stats", "--json", "--launch-session", sessionId],
       { timeoutMs: 10_000, env: { EDGEE_NO_UPDATE_CHECK: "1" } },
     );
     if (result.exitCode !== 0 || result.isStdoutTruncated) throw new Error("Savings unavailable");

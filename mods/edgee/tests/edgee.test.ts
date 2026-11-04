@@ -29,7 +29,7 @@ describe("edgee", () => {
     let calls = 0;
     on("process.run", ($, e) => {
       calls++;
-      expect(e.argv).toEqual(["/edgee/bin/edgee", "--profile", "dev", "stats", "--json", "--session", "sess-1"]);
+      expect(e.argv).toEqual(["/edgee/bin/edgee", "--profile", "dev", "stats", "--json", "--launch-session", "sess-1"]);
       expect(e.init?.env).toEqual({ EDGEE_NO_UPDATE_CHECK: "1" });
       return { value: { exitCode, stdout: JSON.stringify(payload), stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
     });

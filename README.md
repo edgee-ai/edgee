@@ -90,6 +90,21 @@ Open the displayed URL, enter the code from your terminal, and authorize the CLI
 The code expires after 10 minutes. SSH sessions use this flow automatically,
 including when authentication starts during `edgee launch`. No port forwarding is needed.
 
+Session listings, history, session links and Edgee MCP use the coding agent's
+native session ID when available. The CLI reserves an Edgee launch ID before the
+agent starts; startup links use explicit `/launch-sessions/{id}` aliases once usage
+associates them with native IDs. Later `/sessions/{id}` links use the API-returned
+`session_id`. Resuming the same native ID groups launches; resetting to a new native ID starts a separate visible
+session. Native IDs are opaque and encoded as one URL path segment.
+
+Usage arrives asynchronously. If Edgee MCP reports that a native session is not
+available yet, retry after usage arrives; never replace a known native ID with the
+launch ID. Only agents without a native ID use the Edgee ID as their visible
+session identity. Internal gateway routing and budgets still use the launch ID when
+present; native-only traffic routes by its native ID. Every injected Edgee MCP
+transport preserves user-token authentication and sends `X-Edgee-Launch-Id` with
+the actual launch ID, allowing resumed-session controls to target the current run.
+
 ---
 
 ## Quickstart
