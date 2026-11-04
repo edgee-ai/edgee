@@ -1637,6 +1637,53 @@ fn print_external_help(addr: &SocketAddr, cert_path: &Path) {
 mod tests {
     use super::*;
 
+    /// Exercise the relay's actual leaf issuer against Apple's SSL policy.
+    /// OpenSSL/rustls accept a missing EKU, but macOS requires serverAuth.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn relay_leaf_satisfies_macos_ssl_policy() {
+        use std::io::Cursor;
+        use std::process::Command;
+
+        use hudsucker::certificate_authority::CertificateAuthority;
+        use hudsucker::rustls::{server::Acceptor, ClientConfig, ClientConnection, RootCertStore};
+
+        let (cert_pem, key_pem) = generate_ca("Edgee test CA", &[]).unwrap();
+        let ca = build_ca(&cert_pem, &key_pem).unwrap();
+        let host = "api.githubcopilot.com";
+        let config = ca.gen_server_config(&host.parse().unwrap()).await;
+
+        // Obtain the same certificate the relay selects for a real ClientHello.
+        let client_config = ClientConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(RootCertStore::empty())
+            .with_no_client_auth();
+        let mut client = ClientConnection::new(Arc::new(client_config), host.try_into().unwrap()).unwrap();
+        let mut hello = Vec::new();
+        client.write_tls(&mut hello).unwrap();
+        let mut acceptor = Acceptor::default();
+        acceptor.read_tls(&mut Cursor::new(hello)).unwrap();
+        let accepted = acceptor.accept().unwrap().unwrap();
+        let leaf = config.cert_resolver.resolve(accepted.client_hello()).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let leaf_path = dir.path().join("leaf.der");
+        let root_path = dir.path().join("ca.pem");
+        std::fs::write(&leaf_path, leaf.cert[0].as_ref()).unwrap();
+        std::fs::write(&root_path, cert_pem).unwrap();
+        let output = Command::new("/usr/bin/security")
+            .args(["verify-cert", "-c"])
+            .arg(&leaf_path)
+            .arg("-r")
+            .arg(&root_path)
+            .args(["-p", "ssl", "-s", host])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "macOS rejected relay leaf: {}{}",
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
+
     #[test]
     fn phpstorm_uses_copilot_subscription_and_editor_lifecycle() {
         assert_eq!(canonicalize_target("phpstorm"), Some("phpstorm"));

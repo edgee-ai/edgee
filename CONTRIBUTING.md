@@ -21,7 +21,7 @@ conventions. It's worth a read before your first PR.
 
 ## Prerequisites
 
-- **Rust** stable toolchain (1.85 or later). Install via [rustup](https://rustup.rs).
+- **Rust** stable toolchain (1.86 or later). Install via [rustup](https://rustup.rs).
 - **cargo** is bundled with Rust.
 - On Linux you may need `pkg-config` and `libssl-dev` (or equivalent) for the TLS backend.
 - Optional: a [Nix](https://nixos.org) + [direnv](https://direnv.net) setup works out of the box —

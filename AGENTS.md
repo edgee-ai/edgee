@@ -173,7 +173,7 @@ repo — don't add `cargo deb` / `cargo generate-rpm` steps without asking.
 ## Code conventions
 
 - **Edition**: pinned to Rust edition 2021 in `Cargo.toml` — don't rely on edition-2024-only syntax.
-- **MSRV**: Rust stable 1.85 or later (see CONTRIBUTING.md).
+- **MSRV**: Rust stable 1.86 or later (see CONTRIBUTING.md).
 - **`use` statement grouping**: blank-line-separated blocks, in this order:
   1. `std::...`
   2. external crates (crates.io dependencies)

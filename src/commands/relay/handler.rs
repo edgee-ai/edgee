@@ -60,7 +60,7 @@ fn gateway_path_for(path: &str) -> Option<&'static str> {
 
 /// Hosts always MITM-decrypted: each carries LLM inference traffic for some relay
 /// target that ALL relays may legitimately produce. Only CONNECT tunnels to these
-/// are TLS-terminated (see [`should_intercept`]); every other host is blind-
+/// are TLS-terminated (see [`should_intercept_connect`]); every other host is blind-
 /// tunneled. Matched by exact host or dot-suffix.
 ///
 /// - `api.anthropic.com` — Claude (incl. Claude Code inside VS Code)
@@ -286,7 +286,7 @@ impl HttpHandler for RelayHandler {
     /// Called by hudsucker on each CONNECT with the tunnel's target authority.
     /// Intercept (terminate TLS to log/reroute) only known inference hosts; blind-
     /// tunnel everything else so unrelated HTTPS traffic is never decrypted.
-    async fn should_intercept(&mut self, _ctx: &HttpContext, req: &Request<Body>) -> bool {
+    async fn should_intercept_connect(&mut self, _ctx: &HttpContext, req: &Request<Body>) -> bool {
         request_host(req)
             .map(|h| should_intercept_host(&h, self.intercept_copilot_hosts))
             .unwrap_or(false)
@@ -1000,7 +1000,7 @@ mod tests {
 
     #[test]
     fn connect_request_host_is_extracted() {
-        // hudsucker calls should_intercept on the CONNECT request, whose URI is in
+        // hudsucker calls should_intercept_connect on the CONNECT request, whose URI is in
         // authority-form (host:port). Confirm request_host recovers the host so the
         // allowlist actually sees it.
         let req = Request::builder()
