@@ -1,6 +1,7 @@
 pub mod binary;
 pub mod catalog;
 pub mod debug_log;
+pub mod extension;
 pub mod install;
 
 pub use binary::*;
