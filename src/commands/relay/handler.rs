@@ -60,7 +60,7 @@ fn gateway_path_for(path: &str) -> Option<&'static str> {
 
 /// Hosts always MITM-decrypted: each carries LLM inference traffic for some relay
 /// target that ALL relays may legitimately produce. Only CONNECT tunnels to these
-/// are TLS-terminated (see [`should_intercept`]); every other host is blind-
+/// are TLS-terminated (see [`HttpHandler::should_intercept_connect`]); every other host is blind-
 /// tunneled. Matched by exact host or dot-suffix.
 ///
 /// - `api.anthropic.com` — Claude (incl. Claude Code inside VS Code)
@@ -131,6 +131,14 @@ fn is_anthropic_host(host: &str) -> bool {
     host == "anthropic.com" || host.ends_with(".anthropic.com")
 }
 
+/// Codex subscription routing is specific to the ChatGPT backend endpoint.
+fn is_codex_subscription_request(host: Option<&str>, path: &str) -> bool {
+    path == "/backend-api/codex/responses"
+        && host.is_some_and(|host| {
+            host.split(':').next().unwrap_or(host).eq_ignore_ascii_case("chatgpt.com")
+        })
+}
+
 /// Where rerouted inference requests are sent, plus the Edgee auth to inject.
 /// The key is the active relay's provider key (claude when the agent is claude /
 /// proxy-only, codex when the agent is codex).
@@ -152,6 +160,9 @@ pub struct GatewayTarget {
     /// alongside Copilot. When present, `/v1/messages` traffic uses this key and the
     /// gateway's claude pipeline instead of the default (Copilot) key + passthrough.
     pub claude_api_key: Option<String>,
+    /// Codex key for provider CLIs using the ChatGPT subscription endpoint.
+    /// Those requests use the Codex pipeline instead of upstream passthrough.
+    pub codex_api_key: Option<String>,
     /// Base64-encoded X25519 public key + Argon2id salt for this session's E2EE
     /// debug-log encryption, derived from the user's debug-log passphrase.
     /// `None` when no passphrase was resolved — debug logs then upload as
@@ -169,6 +180,11 @@ impl GatewayTarget {
     fn auth_for(&self, orig_host: Option<&str>, orig_path: &str) -> (&str, bool) {
         if orig_path == CLAUDE_PATH && orig_host.is_some_and(is_anthropic_host) {
             if let Some(key) = &self.claude_api_key {
+                return (key, false);
+            }
+        }
+        if is_codex_subscription_request(orig_host, orig_path) {
+            if let Some(key) = &self.codex_api_key {
                 return (key, false);
             }
         }
@@ -237,6 +253,11 @@ pub struct RelayHandler {
     matched: bool,
     /// Whether the in-flight request was rerouted to the gateway.
     rerouted: bool,
+    /// Whether this request fetches Copilot's model catalog. Copilot prefers the
+    /// WebSocket Responses transport when the catalog advertises it, but the relay
+    /// only supports HTTP request/response forwarding. Strip that capability from
+    /// the response so Copilot selects the equivalent HTTP `/responses` endpoint.
+    filter_copilot_websocket_endpoints: bool,
 }
 
 impl RelayHandler {
@@ -256,6 +277,7 @@ impl RelayHandler {
             desc: String::new(),
             matched: false,
             rerouted: false,
+            filter_copilot_websocket_endpoints: false,
         }
     }
 }
@@ -264,7 +286,7 @@ impl HttpHandler for RelayHandler {
     /// Called by hudsucker on each CONNECT with the tunnel's target authority.
     /// Intercept (terminate TLS to log/reroute) only known inference hosts; blind-
     /// tunnel everything else so unrelated HTTPS traffic is never decrypted.
-    async fn should_intercept(&mut self, _ctx: &HttpContext, req: &Request<Body>) -> bool {
+    async fn should_intercept_connect(&mut self, _ctx: &HttpContext, req: &Request<Body>) -> bool {
         request_host(req)
             .map(|h| should_intercept_host(&h, self.intercept_copilot_hosts))
             .unwrap_or(false)
@@ -273,7 +295,7 @@ impl HttpHandler for RelayHandler {
     async fn handle_request(
         &mut self,
         _ctx: &HttpContext,
-        req: Request<Body>,
+        mut req: Request<Body>,
     ) -> RequestOrResponse {
         // CONNECT is the tunnel-establishment request; the real request follows
         // after TLS termination. We don't log/reroute it — just pass it through so
@@ -283,6 +305,17 @@ impl HttpHandler for RelayHandler {
             return RequestOrResponse::Request(req);
         }
         self.matched = true;
+
+        self.filter_copilot_websocket_endpoints = self.intercept_copilot_hosts
+            && req.method() == http::Method::GET
+            && req.uri().path() == "/models"
+            && host.as_deref().is_some_and(is_copilot_only_host);
+        if self.filter_copilot_websocket_endpoints {
+            // Keep the response body directly editable. Copilot normally honors
+            // this and returns identity encoding; the response filter still
+            // handles an encoded response defensively.
+            req.headers_mut().remove(http::header::ACCEPT_ENCODING);
+        }
 
         let reroute = gateway_path_for(req.uri().path());
         self.rerouted = reroute.is_some();
@@ -355,6 +388,12 @@ impl HttpHandler for RelayHandler {
             return res;
         }
 
+        let res = if self.filter_copilot_websocket_endpoints {
+            filter_copilot_models_response(res).await
+        } else {
+            res
+        };
+
         let status = res.status();
 
         if !self.log_enabled {
@@ -405,6 +444,84 @@ impl HttpHandler for RelayHandler {
         self.sink.emit(&buf);
 
         Response::from_parts(parts, Body::from(raw))
+    }
+}
+
+/// Remove Copilot's WebSocket Responses capability from its model catalog so
+/// clients use the simultaneously advertised HTTP `/responses` transport. The
+/// gateway's relay path is HTTP-only and cannot bridge upgraded WebSocket frames.
+async fn filter_copilot_models_response(res: Response<Body>) -> Response<Body> {
+    if !res.status().is_success() || !is_json(res.headers()) {
+        return res;
+    }
+
+    let (mut parts, body) = res.into_parts();
+    let raw = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(_) => return Response::from_parts(parts, Body::from(bytes::Bytes::new())),
+    };
+    let decoded = decode_for_log(&parts.headers, &raw).await;
+    let Ok(mut catalog) = serde_json::from_slice::<serde_json::Value>(&decoded) else {
+        return Response::from_parts(parts, Body::from(raw));
+    };
+
+    let mut affected_models = Vec::new();
+    let removed = remove_websocket_responses_endpoints(&mut catalog, &mut affected_models);
+    if removed == 0 {
+        return Response::from_parts(parts, Body::from(raw));
+    }
+
+    let Ok(filtered) = serde_json::to_vec(&catalog) else {
+        return Response::from_parts(parts, Body::from(raw));
+    };
+    parts.headers.remove(http::header::CONTENT_ENCODING);
+    parts.headers.remove(http::header::TRANSFER_ENCODING);
+    parts.headers.remove(http::header::ETAG);
+    if let Ok(length) = http::HeaderValue::from_str(&filtered.len().to_string()) {
+        parts.headers.insert(http::header::CONTENT_LENGTH, length);
+    } else {
+        parts.headers.remove(http::header::CONTENT_LENGTH);
+    }
+    Response::from_parts(parts, Body::from(filtered))
+}
+
+fn remove_websocket_responses_endpoints(
+    value: &mut serde_json::Value,
+    affected_models: &mut Vec<String>,
+) -> usize {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut removed = 0;
+            let model_name = object
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| object.get("name").and_then(serde_json::Value::as_str))
+                .unwrap_or("<unknown>")
+                .to_owned();
+            if let Some(serde_json::Value::Array(endpoints)) =
+                object.get_mut("supported_endpoints")
+            {
+                let before = endpoints.len();
+                endpoints.retain(|endpoint| endpoint.as_str() != Some("ws:/responses"));
+                let removed_here = before - endpoints.len();
+                if removed_here > 0 {
+                    affected_models.push(model_name);
+                    removed += removed_here;
+                }
+            }
+            removed
+                + object
+                    .values_mut()
+                    .map(|value| {
+                        remove_websocket_responses_endpoints(value, affected_models)
+                    })
+                    .sum::<usize>()
+        }
+        serde_json::Value::Array(values) => values
+            .iter_mut()
+            .map(|value| remove_websocket_responses_endpoints(value, affected_models))
+            .sum(),
+        _ => 0,
     }
 }
 
@@ -503,6 +620,21 @@ fn apply_reroute(parts: &mut http::request::Parts, gw: &GatewayTarget, gw_path: 
     // githubcopilot.com backend) uses the relay's default key + passthrough setting.
     let (api_key, passthrough_to_upstream) =
         gw.auth_for(upstream_host.as_deref(), parts.uri.path());
+
+    // The gateway selects Codex's subscription handling by a codex-prefixed
+    // User-Agent. Provider CLIs otherwise identify as omp/pi/opencode, causing
+    // their OAuth token to be treated as a keyed-provider API key. Preserve their
+    // identity as a suffix and change only the known Codex subscription endpoint.
+    if gw.codex_api_key.is_some()
+        && is_codex_subscription_request(upstream_host.as_deref(), parts.uri.path())
+    {
+        let original = parts.headers.get(http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok()).unwrap_or_default();
+        let user_agent = format!("codex/edgee-relay {original}");
+        if let Ok(value) = http::HeaderValue::from_str(user_agent.trim_end()) {
+            parts.headers.insert(http::header::USER_AGENT, value);
+        }
+    }
 
     let new_path = format!("{}{gw_path}{query}", gw.base_path);
 
@@ -614,8 +746,64 @@ mod tests {
             repo: Some("git@github.com:edgee-ai/edgee.git".into()),
             passthrough_to_upstream: true,
             claude_api_key: None,
+            codex_api_key: None,
             debug_log_headers: None,
         }
+    }
+
+    #[tokio::test]
+    async fn copilot_models_filter_removes_only_websocket_responses_endpoint() {
+        let body = serde_json::json!({
+            "data": [
+                {
+                    "id": "gpt-6-sol",
+                    "supported_endpoints": ["/responses", "ws:/responses"]
+                },
+                {
+                    "id": "claude-sonnet-5",
+                    "supported_endpoints": ["/v1/messages"]
+                }
+            ]
+        });
+        let mut catalog = body.clone();
+        let mut affected_models = Vec::new();
+        assert_eq!(
+            remove_websocket_responses_endpoints(&mut catalog, &mut affected_models),
+            1
+        );
+        assert_eq!(affected_models, ["gpt-6-sol"]);
+
+        let raw = serde_json::to_vec(&body).unwrap();
+        let response = Response::builder()
+            .status(200)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .header(http::header::CONTENT_LENGTH, raw.len())
+            .header(http::header::ETAG, "catalog-v1")
+            .body(Body::from(raw))
+            .unwrap();
+
+        let filtered = filter_copilot_models_response(response).await;
+        assert!(!filtered.headers().contains_key(http::header::ETAG));
+        assert!(!filtered
+            .headers()
+            .contains_key(http::header::CONTENT_ENCODING));
+        let declared_length = filtered.headers()[http::header::CONTENT_LENGTH]
+            .to_str()
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let bytes = filtered.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(declared_length, bytes.len());
+
+        let catalog: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            catalog["data"][0]["supported_endpoints"],
+            serde_json::json!(["/responses"])
+        );
+        assert_eq!(
+            catalog["data"][1]["supported_endpoints"],
+            serde_json::json!(["/v1/messages"])
+        );
     }
 
     #[test]
@@ -664,6 +852,40 @@ mod tests {
         let (mut parts, _b) = req.into_parts();
         apply_reroute(&mut parts, &t, gateway_path_for("/v1/messages").unwrap());
         assert!(parts.headers.get("x-edgee-upstream-url").is_none());
+    }
+
+    #[test]
+    fn provider_cli_codex_subscription_uses_codex_pipeline() {
+        let mut t = target();
+        t.api_key = "sk-pi".into();
+        t.codex_api_key = Some("sk-codex".into());
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://chatgpt.com/backend-api/codex/responses?foo=1")
+            .header("authorization", "Bearer subscription-token")
+            .header("user-agent", "omp")
+            .body(Body::from(bytes::Bytes::new()))
+            .unwrap();
+        let (mut parts, _) = req.into_parts();
+        apply_reroute(&mut parts, &t, "/v1/responses");
+        assert_eq!(parts.uri.path_and_query().unwrap().as_str(), "/v1/responses?foo=1");
+        assert_eq!(parts.headers["x-edgee-api-key"], "sk-codex");
+        assert_eq!(parts.headers["authorization"], "Bearer subscription-token");
+        assert_eq!(parts.headers["user-agent"], "codex/edgee-relay omp");
+        assert!(!parts.headers.contains_key("x-edgee-upstream-url"));
+
+        // Copilot's Responses endpoint retains the CLI key and passthrough.
+        assert_eq!(t.auth_for(Some("api.githubcopilot.com"), "/responses"), ("sk-pi", true));
+        assert_eq!(t.auth_for(Some("api.githubcopilot.com"), "/backend-api/codex/responses"), ("sk-pi", true));
+        let req = Request::builder()
+            .uri("https://api.githubcopilot.com/responses")
+            .header("user-agent", "omp")
+            .body(Body::from(bytes::Bytes::new())).unwrap();
+        let (mut parts, _) = req.into_parts();
+        apply_reroute(&mut parts, &t, "/v1/responses");
+        assert_eq!(parts.headers["user-agent"], "omp");
+        assert_eq!(parts.headers["x-edgee-api-key"], "sk-pi");
+        assert!(parts.headers.contains_key("x-edgee-upstream-url"));
     }
 
     #[test]
@@ -778,7 +1000,7 @@ mod tests {
 
     #[test]
     fn connect_request_host_is_extracted() {
-        // hudsucker calls should_intercept on the CONNECT request, whose URI is in
+        // hudsucker calls should_intercept_connect on the CONNECT request, whose URI is in
         // authority-form (host:port). Confirm request_host recovers the host so the
         // allowlist actually sees it.
         let req = Request::builder()

@@ -1,49 +1,165 @@
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 pub struct ApiClient {
     http: reqwest::Client,
     base_url: String,
 }
 
-/// Org-wide usage aggregate from `GET /v1/organizations/{org}/usage` (ClickHouse
-/// backed, windowed by `period`). Only the fields the CLI/front-ends surface are
-/// decoded; everything else in the summary is ignored. `#[serde(default)]` keeps
-/// it decoding if the console omits a field.
-#[derive(Debug, Default, Deserialize)]
-pub struct OrgUsageSummary {
-    #[serde(default)]
-    pub total_requests: u64,
-    #[serde(default)]
-    pub distinct_sessions: u64,
-    #[serde(default)]
-    pub error_requests: u64,
-    #[serde(default)]
-    pub input_tokens: u64,
-    #[serde(default)]
-    pub cached_input_tokens: u64,
-    #[serde(default)]
-    pub cache_creation_input_tokens: u64,
-    #[serde(default)]
-    pub reasoning_output_tokens: u64,
-    #[serde(default)]
-    pub output_tokens: u64,
-    /// Nano-USD (divide by 1e9 for dollars), matching the console's cost fields.
-    #[serde(default)]
-    pub total_cost: u64,
-    #[serde(default)]
-    pub token_cost_savings: u64,
-    #[serde(default)]
-    pub uncompressed_tools_tokens: u64,
-    #[serde(default)]
-    pub compressed_tools_tokens: u64,
+/// Latest recorded request. Missing routing flags mean unknown, never false.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LastRequest {
+    pub timestamp: String,
+    pub model: String,
+    pub original_model: Option<String>,
+    pub is_reroute: Option<bool>,
+    pub is_fallback: Option<bool>,
+    pub is_plan_fallback: Option<bool>,
 }
 
 #[derive(Deserialize)]
-struct UsageResponse {
-    summary: OrgUsageSummary,
+struct RequestLogsResponse {
+    data: Vec<LastRequest>,
+}
+
+#[derive(Deserialize)]
+struct OwnedRequestKey {
+    id: String,
+    user_id: Option<String>,
+}
+
+fn owned_request_key_ids(keys: Vec<OwnedRequestKey>, user_id: &str) -> Vec<String> {
+    keys.into_iter()
+        .filter(|key| key.user_id.as_deref() == Some(user_id))
+        .map(|key| key.id)
+        .collect()
+}
+
+/// Go encodes nil slices as `null`, which `#[serde(default)]` alone rejects.
+fn null_as_default<'de, D, T>(d: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// Usage aggregate from `GET /v1/organizations/{org}/usage` (ClickHouse backed,
+/// windowed by `period`) — the same payload the console dashboard renders. Only
+/// the fields the CLI/front-ends surface are decoded. Everything defaults so a
+/// field the API omits never fails the whole fetch.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct OrgUsageSummary {
+    pub total_requests: u64,
+    pub distinct_sessions: u64,
+    pub error_requests: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    /// Nano-USD (divide by 1e9 for dollars), matching the console's cost fields.
+    pub total_cost: u64,
+    pub input_cost: u64,
+    pub cached_input_cost: u64,
+    pub cache_creation_input_cost: u64,
+    pub output_cost: u64,
+    pub reasoning_output_cost: u64,
+    pub avg_duration_ms: Option<f64>,
+    /// Legacy input-side savings rollup. Kept for existing JSON readers; the
+    /// dashboard's figure is the three per-strategy fields below.
+    pub token_cost_savings: u64,
+    pub tool_compression_cost_savings: u64,
+    pub mcp_surface_cost_savings: u64,
+    pub output_cost_savings: u64,
+    pub uncompressed_tools_tokens: u64,
+    pub compressed_tools_tokens: u64,
+}
+
+/// Change vs the previous window of the same length, in percent.
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[serde(default)]
+pub struct UsageDelta {
+    pub total_cost_percent: Option<f64>,
+    pub total_requests_percent: Option<f64>,
+    pub total_tokens_percent: Option<f64>,
+}
+
+/// Routing outcome for the window. `estimated_routing_savings` is signed (a
+/// reroute can cost more) and `None` when no request carried a priced estimate.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct FallbackSummary {
+    pub routed_requests: u64,
+    pub fallback_requests: u64,
+    pub reroute_requests: u64,
+    pub estimated_routing_savings: Option<i64>,
+    pub routing_savings_estimate_count: u64,
+}
+
+/// One `stats_by_model` row: usage for one (key, provider, model).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct UsageByModel {
+    pub key_uuid: String,
+    pub provider: String,
+    pub model: String,
+    pub total_requests: u64,
+    pub total_tokens: u64,
+    pub total_cost: u64,
+}
+
+/// The API-key metadata the usage payload carries (`stats_by_api_key`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct UsageApiKey {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub key_type: Option<String>,
+    pub coding_assistant: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct OrgUsage {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub summary: OrgUsageSummary,
+    #[serde(default)]
+    pub delta: Option<UsageDelta>,
+    #[serde(default)]
+    pub fallback: Option<FallbackSummary>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub stats_by_model: Vec<UsageByModel>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub stats_by_api_key: Vec<UsageApiKey>,
+}
+
+/// One row of `GET /v1/organizations/{org}/sessions`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ApiSession {
+    pub session_id: String,
+    pub key_uuid: String,
+    pub total_requests: u64,
+    pub total_cost: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_errors: u64,
+    pub last_request: String,
+    pub total_tool_compression_cost_savings: u64,
+    pub total_mcp_surface_cost_savings: u64,
+    pub total_output_cost_savings: u64,
+    pub estimated_routing_savings: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct SessionsResponse {
+    #[serde(default, deserialize_with = "null_as_default")]
+    data: Vec<ApiSession>,
 }
 
 #[derive(Deserialize)]
@@ -163,37 +279,6 @@ pub struct ModelRoute {
     pub model: String,
 }
 
-/// A BYOK provider key (`GET /v1/organizations/{org}/provider-keys`). Only the
-/// fields needed to mark catalog models available via the user's own keys are read.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ProviderKey {
-    pub provider: String,
-    #[serde(default)]
-    pub active: bool,
-}
-
-/// Subset of `GET /v1/organizations/{org}/billing` used to decide whether the org
-/// has paid access to AI Gateway routing (fallback/reroute).
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct OrgBilling {
-    #[serde(default)]
-    pub ai_gateway_plan: Option<String>,
-    #[serde(default)]
-    pub ai_gateway_subscription_status: Option<String>,
-}
-
-impl OrgBilling {
-    /// A non-free plan, or an active trial, grants routing access.
-    pub fn is_paying(&self) -> bool {
-        let paid_plan = matches!(
-            self.ai_gateway_plan.as_deref(),
-            Some("team") | Some("enterprise") | Some("custom")
-        );
-        let trialing = self.ai_gateway_subscription_status.as_deref() == Some("trial");
-        paid_plan || trialing
-    }
-}
-
 /// One upstream provider's configuration for a catalog model.
 ///
 /// The rate fields are US dollars per million tokens. The server omits a rate
@@ -264,7 +349,6 @@ pub struct GatewayModel {
     #[serde(default)]
     pub active: bool,
     /// Whether the model is covered by the user's plan for fallback/reroute.
-    /// Plan-covered models are offered first in the settings pickers.
     #[serde(default)]
     pub plan_fallback: bool,
 }
@@ -289,7 +373,7 @@ impl GatewayModel {
 
     /// True when the model is served *only* through a coding-app subscription
     /// (Cursor, GitHub Copilot) — e.g. `cursor/composer-2`. Such a model is
-    /// unreachable as a fallback/reroute target, so the settings pickers hide it.
+    /// unreachable as a fallback/reroute target, so agent model lists hide it.
     pub fn app_subscription_only(&self) -> bool {
         !self.providers.is_empty() && self.providers.keys().all(|p| is_app_provider(p))
     }
@@ -363,17 +447,11 @@ impl GatewayModel {
     }
 }
 
-/// Full mutable settings sent to the key-update endpoint. Serializes to
-/// `{ "compression": {...}, "fallback": bool, "fallbacks": [...] | null,
-/// "reroutes": [...] | null }`. A `None` list clears that route (the server
-/// distinguishes a present-null field from an omitted one). `fallback` is the
-/// on/off switch; `fallbacks` are the models to fail over to.
+/// Compression settings sent to the key-update endpoint. Routing fields are
+/// omitted so edits leave the key's server-side routing configuration untouched.
 #[derive(Debug, Clone, Serialize)]
 pub struct KeySettings {
     pub compression: Compression,
-    pub fallback: bool,
-    pub fallbacks: Option<Vec<ModelRoute>>,
-    pub reroutes: Option<Vec<ModelRoute>>,
 }
 
 /// A skill: markdown instructions the assistant loads when the task matches.
@@ -567,6 +645,9 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStats {
+    /// Agent-facing ID returned by the API, including when queried by launch alias.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub session_id: String,
     pub total_requests: u64,
     pub total_cost: u64,
     pub total_input_tokens: u64,
@@ -610,11 +691,65 @@ impl SessionStats {
     }
 }
 
+/// Live totals of a running session (`GET .../sessions/{id}/summary`), as the
+/// statusline shows them. Unlike [`SessionStats`] it does not close the session.
+/// Every field defaults so a gateway-side addition or omission never breaks it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionSummary {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub session_id: String,
+    pub total_requests: u64,
+    /// Nanodollars.
+    pub total_cost: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cached_input_tokens: u64,
+    pub total_tool_compression_cost_savings: u64,
+    pub total_mcp_surface_cost_savings: u64,
+    pub total_output_cost_savings: u64,
+    pub total_fallback_requests: u64,
+    pub last_request_is_fallback: bool,
+    pub last_request_model: String,
+}
+
+impl SessionSummary {
+    /// Cost Edgee saved on this session, in nanodollars.
+    pub fn total_savings(&self) -> u64 {
+        self.total_tool_compression_cost_savings
+            + self.total_mcp_surface_cost_savings
+            + self.total_output_cost_savings
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCompressionStat {
     pub count: u64,
     pub before: u64,
     pub after: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionRerouteRequest<'a> {
+    pub api_key_id: &'a str,
+    pub source_model: &'a str,
+    pub target_model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_provider: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<&'a str>,
+    pub expires_at: &'a str,
+}
+
+/// Session savings in nano-USD. Missing fields mean unavailable, not zero.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SessionSavings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub total_cost: Option<u64>,
+    pub total_token_cost_savings: Option<u64>,
+    pub total_output_cost_savings: Option<u64>,
+    pub estimated_routing_savings: Option<u64>,
 }
 
 impl ApiClient {
@@ -636,6 +771,13 @@ impl ApiClient {
             http,
             base_url: crate::config::console_api_base_url(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_base_url(token: &str, base_url: &str) -> Result<Self> {
+        let mut client = Self::new(token)?;
+        client.base_url = base_url.to_string();
+        Ok(client)
     }
 
     pub async fn list_organizations(&self) -> Result<Vec<Organization>> {
@@ -680,7 +822,7 @@ impl ApiClient {
         org_id: &str,
         period: &str,
         user_id: Option<&str>,
-    ) -> Result<OrgUsageSummary> {
+    ) -> Result<OrgUsage> {
         let url = format!(
             "{}/v1/organizations/{}/usage?period={}{}",
             self.base_url,
@@ -695,8 +837,88 @@ impl ApiClient {
             .await
             .context("Failed to fetch org usage")?;
         check_status(&resp, "fetch org usage")?;
-        let body: UsageResponse = resp.json().await.context("Invalid usage response")?;
-        Ok(body.summary)
+        resp.json().await.context("Invalid usage response")
+    }
+
+    /// IDs of the org's API keys owned by `user_id`. Used to scope requests and
+    /// sessions to one person: those endpoints ignore `user_id` for admins, so
+    /// filtering by owned keys is the only way to keep an admin's view personal.
+    pub async fn get_owned_key_ids(&self, org_id: &str, user_id: &str) -> Result<Vec<String>> {
+        anyhow::ensure!(!user_id.is_empty(), "Missing user ID for key lookup");
+        let response = self
+            .http
+            .get(format!(
+                "{}/v1/organizations/{org_id}/api_keys",
+                self.base_url
+            ))
+            .send()
+            .await
+            .context("Failed to fetch request keys")?;
+        check_status(&response, "fetch request keys")?;
+        let keys: Vec<OwnedRequestKey> = response.json().await.context("Invalid request keys")?;
+        Ok(owned_request_key_ids(keys, user_id))
+    }
+
+    /// Latest request across `key_ids` in the selected usage window.
+    pub async fn get_last_request(
+        &self,
+        org_id: &str,
+        period: &str,
+        key_ids: &[String],
+    ) -> Result<Option<LastRequest>> {
+        // An empty key filter would expose the entire org to admins.
+        if key_ids.is_empty() {
+            return Ok(None);
+        }
+        let mut query = vec![("period", period), ("page", "1"), ("page_size", "1")];
+        query.extend(key_ids.iter().map(|id| ("api_key_id", id.as_str())));
+        let mut url =
+            reqwest::Url::parse(&format!("{}/v1/organizations/{org_id}/logs", self.base_url))?;
+        url.query_pairs_mut().extend_pairs(query);
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Failed to fetch latest request")?;
+        check_status(&response, "fetch latest request")?;
+        let logs: RequestLogsResponse = response.json().await.context("Invalid request logs")?;
+        Ok(logs.data.into_iter().next())
+    }
+
+    /// Most recent sessions across `key_ids` in the window, newest first.
+    pub async fn get_sessions(
+        &self,
+        org_id: &str,
+        period: &str,
+        key_ids: &[String],
+        page_size: usize,
+    ) -> Result<Vec<ApiSession>> {
+        // Same guard as `get_last_request`: no keys means no personal scope.
+        if key_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let size = page_size.to_string();
+        let mut query = vec![
+            ("period", period),
+            ("page", "1"),
+            ("page_size", size.as_str()),
+        ];
+        query.extend(key_ids.iter().map(|id| ("api_key_id", id.as_str())));
+        let mut url = crate::config::url_with_path(
+            &self.base_url,
+            &["v1", "organizations", org_id, "sessions"],
+        )?;
+        url.query_pairs_mut().extend_pairs(query);
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Failed to fetch sessions")?;
+        check_status(&response, "fetch sessions")?;
+        let body: SessionsResponse = response.json().await.context("Invalid sessions response")?;
+        Ok(body.data)
     }
 
     /// Number of sessions currently online (live "active" count), narrowed to one
@@ -706,15 +928,16 @@ impl ApiClient {
         org_id: &str,
         user_id: Option<&str>,
     ) -> Result<u64> {
-        let url = format!(
-            "{}/v1/organizations/{}/sessions/online-count{}",
-            self.base_url,
-            org_id,
-            user_id.map_or(String::new(), |id| format!("?user_id={id}"))
-        );
+        let mut url = crate::config::url_with_path(
+            &self.base_url,
+            &["v1", "organizations", org_id, "sessions", "online-count"],
+        )?;
+        if let Some(user_id) = user_id {
+            url.query_pairs_mut().append_pair("user_id", user_id);
+        }
         let resp = self
             .http
-            .get(&url)
+            .get(url)
             .send()
             .await
             .context("Failed to fetch online session count")?;
@@ -724,8 +947,7 @@ impl ApiClient {
         Ok(body.online_sessions)
     }
 
-    /// Lists the gateway model catalog (with `plan_fallback`, `aliases`, etc.) used
-    /// to offer fallback/reroute targets. Served by the console API
+    /// Lists the gateway model catalog used to configure agents. Served by the console API
     /// (`console_api_base_url`, e.g. `api.edgee.app`) — not the gateway, whose
     /// `/v1/models` is the stripped OpenAI listing.
     pub async fn list_models(&self) -> Result<Vec<GatewayModel>> {
@@ -740,27 +962,27 @@ impl ApiClient {
         resp.json().await.context("Invalid models response")
     }
 
-    /// Lists the org's BYOK provider keys. Used to flag catalog models reachable
-    /// through the user's own keys. Returns a raw array (no `{ data: [...] }` wrapper).
-    pub async fn list_provider_keys(&self, org_id: &str) -> Result<Vec<ProviderKey>> {
+    /// Catalog filtered by the organization's enabled models and providers.
+    pub async fn list_available_models(&self, org_id: &str) -> Result<Vec<GatewayModel>> {
         let url = format!(
-            "{}/v1/organizations/{}/provider-keys",
-            self.base_url, org_id
+            "{}/v1/organizations/{org_id}/available-models",
+            self.base_url
         );
         let resp = self
             .http
-            .get(&url)
+            .get(url)
             .send()
             .await
-            .context("Failed to list provider keys")?;
-        check_status(&resp, "list provider keys")?;
-        resp.json().await.context("Invalid provider keys response")
+            .context("Failed to load available models")?;
+        check_status(&resp, "load available models")?;
+        resp.json()
+            .await
+            .context("Invalid available models response")
     }
 
     /// Lists the org plugins that target the signed-in user, without the
     /// component bodies — names, flags, `revision` and `component_counts` only.
-    /// Returns a raw array (no `{ data: [...] }` wrapper), like
-    /// `list_provider_keys`.
+    /// Returns a raw array (no `{ data: [...] }` wrapper).
     ///
     /// Admins receive the whole org catalogue, including plugins that do not
     /// target them — read `targeted`/`active` rather than assuming membership.
@@ -797,22 +1019,6 @@ impl ApiClient {
             .context("Failed to fetch plugin")?;
         check_status(&resp, "fetch plugin")?;
         resp.json().await.context("Invalid plugin response")
-    }
-
-    /// Whether the org has a paid AI Gateway plan (or active trial), which is what
-    /// unlocks fallback/reroute. Mirrors the console's `useAIGatewayPaying`: a
-    /// non-free `ai_gateway_plan` or a `trial` subscription status counts as paying.
-    pub async fn org_is_paying(&self, org_id: &str) -> Result<bool> {
-        let url = format!("{}/v1/organizations/{}/billing", self.base_url, org_id);
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to fetch billing")?;
-        check_status(&resp, "fetch billing")?;
-        let billing: OrgBilling = resp.json().await.context("Invalid billing response")?;
-        Ok(billing.is_paying())
     }
 
     pub async fn get_or_create_key(
@@ -852,9 +1058,8 @@ impl ApiClient {
         }
     }
 
-    /// Applies the full settings bundle (compression + fallback + reroutes) to an
-    /// existing coding-agent key. Surfaces the server's error message directly
-    /// (e.g. the paid-seat requirement for fallback/reroute).
+    /// Updates compression for an existing coding-agent key without changing routing.
+    /// Surfaces the server's error message directly.
     pub async fn update_key_settings(
         &self,
         org_id: &str,
@@ -919,20 +1124,60 @@ impl ApiClient {
             .context("Invalid API key response")
     }
 
+    fn session_url(&self, org: &str, session_id: &str, action: &str) -> Result<reqwest::Url> {
+        crate::config::url_with_path(
+            &self.base_url,
+            &["v1", "organizations", org, "sessions", session_id, action],
+        )
+    }
+
+    fn launch_session_url(&self, org: &str, launch_id: &str, action: &str) -> Result<reqwest::Url> {
+        crate::config::url_with_path(
+            &self.base_url,
+            &[
+                "v1",
+                "organizations",
+                org,
+                "launch-sessions",
+                launch_id,
+                action,
+            ],
+        )
+    }
+
+    pub async fn put_session_reroute(
+        &self,
+        org_id: &str,
+        session_id: &str,
+        request: &SessionRerouteRequest<'_>,
+    ) -> Result<()> {
+        let url = self.launch_session_url(org_id, session_id, "reroute")?;
+        let resp = self
+            .http
+            .put(url)
+            .json(request)
+            .send()
+            .await
+            .context("Failed to create session reroute")?;
+        check_status(&resp, "create session reroute")?;
+        Ok(())
+    }
+
     pub async fn set_session_cli_version(
         &self,
         org_id: &str,
         session_id: &str,
         version: &str,
+        api_key_id: Option<&str>,
     ) -> Result<()> {
-        let url = format!(
-            "{}/v1/organizations/{}/sessions/{}/cli-version",
-            self.base_url, org_id, session_id
-        );
-        let body = serde_json::json!({ "version": version });
+        let url = self.launch_session_url(org_id, session_id, "cli-version")?;
+        let mut body = serde_json::json!({ "version": version });
+        if let Some(key_id) = api_key_id {
+            body["api_key_id"] = serde_json::json!(key_id);
+        }
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .json(&body)
             .send()
             .await
@@ -941,7 +1186,42 @@ impl ApiClient {
         Ok(())
     }
 
-    /// Closes the session and returns its stats.
+    /// Reads live native-session savings without closing the session. Uses the
+    /// summary endpoint rather than the full session detail's raw usage queries.
+    pub async fn get_session_savings(
+        &self,
+        org_id: &str,
+        session_id: &str,
+    ) -> Result<SessionSavings> {
+        let url = self.session_url(org_id, session_id, "summary")?;
+        self.session_savings_at(url).await
+    }
+
+    pub async fn get_launch_session_savings(
+        &self,
+        org_id: &str,
+        launch_id: &str,
+    ) -> Result<SessionSavings> {
+        self.session_savings_at(self.launch_session_url(org_id, launch_id, "summary")?)
+            .await
+    }
+
+    async fn session_savings_at(&self, url: reqwest::Url) -> Result<SessionSavings> {
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Failed to read session savings; check your connection and try again")?;
+        check_status(&resp, "read session savings")?;
+        resp.json()
+            .await
+            .context("Invalid session savings response")
+    }
+
+    /// Closes the launch and returns only its usage, across any native session resets.
+    /// Resuming a native session in another launch does not repeat its earlier usage.
+    /// The returned session ID still identifies the latest native session for links.
     ///
     /// `None` means the gateway never saw this session (404) — the agent ran but
     /// no request went through Edgee — as opposed to an error, which means we
@@ -951,13 +1231,10 @@ impl ApiClient {
         org_id: &str,
         session_id: &str,
     ) -> Result<Option<SessionStats>> {
-        let url = format!(
-            "{}/v1/organizations/{}/sessions/{}/end",
-            self.base_url, org_id, session_id
-        );
+        let url = self.launch_session_url(org_id, session_id, "end")?;
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .send()
             .await
             .context("Failed to get session stats")?;
@@ -969,6 +1246,39 @@ impl ApiClient {
             .await
             .map(Some)
             .context("Invalid session stats response")
+    }
+
+    /// Running totals of a session, without ending it. `org` is an org ID or slug.
+    pub async fn get_session_summary(&self, org: &str, session_id: &str) -> Result<SessionSummary> {
+        let url = self.session_url(org, session_id, "summary")?;
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Failed to get session summary")?;
+        check_status(&resp, "get session summary")?;
+        resp.json()
+            .await
+            .context("Invalid session summary response")
+    }
+
+    /// Summary for a launcher-known raw ID, without native/launch ambiguity.
+    pub async fn get_launch_session_summary(
+        &self,
+        org: &str,
+        launch_id: &str,
+    ) -> Result<SessionSummary> {
+        let resp = self
+            .http
+            .get(self.launch_session_url(org, launch_id, "summary")?)
+            .send()
+            .await
+            .context("Failed to get launch session summary")?;
+        check_status(&resp, "get launch session summary")?;
+        resp.json()
+            .await
+            .context("Invalid launch session summary response")
     }
 }
 
@@ -991,6 +1301,264 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn session_summary_and_end_preserve_opaque_ids() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = ApiClient::with_base_url(
+            "token",
+            &format!("http://{}/api/", listener.local_addr().unwrap()),
+        )
+        .unwrap();
+        let server = tokio::spawn(async move {
+            for (method, action, status) in [
+                ("GET", "summary", "200 OK"),
+                ("POST", "end", "404 Not Found"),
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buf = [0; 1024];
+                    let count = stream.read(&mut buf).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buf[..count]);
+                    if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8(request).unwrap();
+                let collection = if action == "end" {
+                    "launch-sessions"
+                } else {
+                    "sessions"
+                };
+                assert!(request.starts_with(&format!(
+                    "{method} /api/v1/organizations/org%2Fteam/{collection}/agent:run%2F%E4%BC%9A%E8%A9%B1%3Fq%23fragment%25/{action} HTTP/1.1"
+                )));
+                let body = r#"{"session_id":"agent:run/会話?q#fragment%","total_requests":2}"#;
+                stream.write_all(format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+                ).as_bytes()).await.unwrap();
+            }
+        });
+        let id = "agent:run/会話?q#fragment%";
+        let summary = client.get_session_summary("org/team", id).await.unwrap();
+        assert_eq!(summary.session_id, id);
+        assert_eq!(summary.total_requests, 2);
+        assert!(client
+            .get_session_stats("org/team", id)
+            .await
+            .unwrap()
+            .is_none());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn session_savings_reads_without_ending_session_and_preserves_unknowns() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for (status, body) in [
+            (
+                "200 OK",
+                r#"{"total_cost":100,"total_token_cost_savings":0,"total_output_cost_savings":42,"estimated_routing_savings":null}"#,
+            ),
+            ("200 OK", "{}"),
+            ("404 Not Found", "{}"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buf = [0; 1024];
+                    let count = stream.read(&mut buf).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buf[..count]);
+                    if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                String::from_utf8(request).unwrap()
+            });
+            let mut client = super::ApiClient::new("test-token").unwrap();
+            client.base_url = format!("http://{address}");
+            let result = client
+                .get_session_savings("org", "agent:run/会話?q#fragment%")
+                .await;
+            let request = server.await.unwrap();
+            assert!(
+                request.starts_with("GET /v1/organizations/org/sessions/agent:run%2F%E4%BC%9A%E8%A9%B1%3Fq%23fragment%25/summary HTTP/1.1")
+            );
+            assert!(request
+                .to_lowercase()
+                .contains("authorization: bearer test-token"));
+            if status == "200 OK" {
+                let value = serde_json::to_value(result.unwrap()).unwrap();
+                assert!(value["estimated_routing_savings"].is_null());
+                if body == "{}" {
+                    assert!(value["total_token_cost_savings"].is_null());
+                    assert!(value["total_cost"].is_null());
+                } else {
+                    assert_eq!(value["total_cost"], 100);
+                    assert_eq!(value["total_token_cost_savings"], 0);
+                    assert_eq!(value["total_output_cost_savings"], 42);
+                }
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn session_reroute_sends_authenticated_put_and_propagates_rejection() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for status in ["200 OK", "403 Forbidden", "404 Not Found"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut data = Vec::new();
+                let (headers, body) = loop {
+                    let mut buf = [0; 4096];
+                    let count = stream.read(&mut buf).await.unwrap();
+                    assert!(count > 0);
+                    data.extend_from_slice(&buf[..count]);
+                    if let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8(data[..end].to_vec()).unwrap();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (key, value) = line.split_once(':')?;
+                                key.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse().unwrap())
+                            })
+                            .unwrap();
+                        if data.len() >= end + 4 + length {
+                            let body: serde_json::Value =
+                                serde_json::from_slice(&data[end + 4..end + 4 + length]).unwrap();
+                            break (headers, body);
+                        }
+                    }
+                };
+                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").as_bytes()).await.unwrap();
+                (headers, body)
+            });
+            let mut client = super::ApiClient::new("test-token").unwrap();
+            client.base_url = format!("http://{address}");
+            let request = super::SessionRerouteRequest {
+                api_key_id: "key",
+                source_model: "*",
+                target_model: "openai/gpt-5",
+                target_provider: None,
+                effort: None,
+                expires_at: "2026-10-02T12:00:00Z",
+            };
+            let result = client
+                .put_session_reroute("org", "agent:run/会話?q#fragment%", &request)
+                .await;
+            assert_eq!(result.is_ok(), status == "200 OK");
+            let (headers, body) = server.await.unwrap();
+            assert!(
+                headers.starts_with("PUT /v1/organizations/org/launch-sessions/agent:run%2F%E4%BC%9A%E8%A9%B1%3Fq%23fragment%25/reroute HTTP/1.1")
+            );
+            assert!(headers
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-token"));
+            assert_eq!(
+                body,
+                serde_json::json!({
+                    "api_key_id": "key", "source_model": "*", "target_model": "openai/gpt-5",
+                    "expires_at": "2026-10-02T12:00:00Z"
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn session_registration_sends_key_and_supports_version_only_clients() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for key_id in [Some("claude-key"), None] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let client = ApiClient::with_base_url(
+                "token",
+                &format!("http://{}", listener.local_addr().unwrap()),
+            )
+            .unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut data = Vec::new();
+                let body = loop {
+                    let mut buf = [0; 4096];
+                    let count = stream.read(&mut buf).await.unwrap();
+                    assert!(count > 0, "request closed before body arrived");
+                    data.extend_from_slice(&buf[..count]);
+                    let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&data[..end]);
+                    assert!(head.starts_with(
+                        "POST /v1/organizations/org/launch-sessions/agent:run%2F%E4%BC%9A%E8%A9%B1%3Fq%23fragment%25/cli-version HTTP/1.1"
+                    ));
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    if data.len() >= end + 4 + length {
+                        break serde_json::from_slice::<serde_json::Value>(
+                            &data[end + 4..end + 4 + length],
+                        )
+                        .unwrap();
+                    }
+                };
+                assert_eq!(body["version"], "0.15.3");
+                match key_id {
+                    Some(id) => assert_eq!(body["api_key_id"], id),
+                    None => assert!(body.get("api_key_id").is_none()),
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await
+                    .unwrap();
+            });
+            client
+                .set_session_cli_version("org", "agent:run/会話?q#fragment%", "0.15.3", key_id)
+                .await
+                .unwrap();
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn latest_request_preserves_unknown_routing_and_filters_keys() {
+        let row: super::LastRequest =
+            serde_json::from_str(r#"{"timestamp":"2026-09-23T12:00:00.123456Z","model":"kimi"}"#)
+                .unwrap();
+        assert_eq!(row.is_reroute, None);
+        let keys = serde_json::from_str(
+            r#"[{"id":"mine","user_id":"me"},{"id":"other","user_id":"them"},{"id":"unknown"}]"#,
+        )
+        .unwrap();
+        assert_eq!(super::owned_request_key_ids(keys, "me"), vec!["mine"]);
+        let logs: super::RequestLogsResponse = serde_json::from_str(r#"{"data":[]}"#).unwrap();
+        assert!(logs.data.is_empty());
+        let row: super::LastRequest = serde_json::from_str(
+            r#"{"timestamp":"2026-09-23T12:00:00Z","model":"kimi","original_model":"opus","is_reroute":true,"is_fallback":false}"#,
+        ).unwrap();
+        assert_eq!(row.is_reroute, Some(true));
+        assert_eq!(row.original_model.as_deref(), Some("opus"));
+    }
+
     use super::*;
 
     fn catalog_model(json: &str) -> GatewayModel {
@@ -1172,28 +1740,26 @@ mod tests {
         assert_eq!(catalog_model(r#"{"model_id":"m1"}"#).context_limit(), None);
     }
 
-    fn billing(plan: Option<&str>, status: Option<&str>) -> OrgBilling {
-        OrgBilling {
-            ai_gateway_plan: plan.map(str::to_string),
-            ai_gateway_subscription_status: status.map(str::to_string),
-        }
-    }
-
     #[test]
-    fn is_paying_for_non_free_plans_and_trial() {
-        assert!(billing(Some("team"), None).is_paying());
-        assert!(billing(Some("enterprise"), None).is_paying());
-        assert!(billing(Some("custom"), None).is_paying());
-        // Trial counts even with a free/absent plan.
-        assert!(billing(Some("free"), Some("trial")).is_paying());
-        assert!(billing(None, Some("trial")).is_paying());
-    }
-
-    #[test]
-    fn not_paying_for_free_or_absent_plan() {
-        assert!(!billing(Some("free"), Some("active")).is_paying());
-        assert!(!billing(None, None).is_paying());
-        assert!(!billing(None, Some("cancelled")).is_paying());
+    fn compression_settings_omit_routing_fields() {
+        let settings = KeySettings {
+            compression: Compression {
+                tool_result_trimming: true,
+                tool_surface_reduction: false,
+                output_brevity: true,
+            },
+        };
+        // Sending null or false for routing fields would overwrite saved routes.
+        assert_eq!(
+            serde_json::to_value(settings).unwrap(),
+            serde_json::json!({
+                "compression": {
+                    "tool_result_trimming": true,
+                    "tool_surface_reduction": false,
+                    "output_brevity": true
+                }
+            })
+        );
     }
 
     #[test]

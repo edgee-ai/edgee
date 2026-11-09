@@ -75,13 +75,15 @@ Avoid ambiguous host-only names like bare `vscode` as a **canonical** target —
 VS Code can host Copilot, Claude Code, etc. Prefer `copilot-vscode`, and later
 `claude-vscode`, not a single `vscode` catch-all.
 
-Exception: `intellij` is the chosen public target for IntelliJ IDEA. It currently
+Exception: `intellij`, `phpstorm` and `android-studio` are the chosen public targets
+for IntelliJ IDEA, PHPStorm and Android Studio. Each currently
 routes the GitHub Copilot plugin, shares the `copilot` provider key, and does not
 imply support for other AI plugins in the IDE.
 
 ### 4. Aliases are optional discoverability only
 
-Aliases may exist for muscle memory (`vscode-copilot` → `copilot-vscode`) but the
+Aliases may exist for muscle memory (`vscode-copilot` → `copilot-vscode`,
+`chatgpt-desktop` / `chatgpt` → `codex-desktop`, since users know that app as ChatGPT) but the
 canonical name in docs, README tables, and new code is the one above.
 
 Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
@@ -97,8 +99,9 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `opencode` | OpenCode CLI | `opencode` |
 | `codebuddy` | CodeBuddy CLI | `codebuddy` |
 | `crush` | Crush CLI | `crush` |
-| `pi` | Pi CLI | `pi` |
+| `pi` | Pi CLI (loads the `pi-edgee` extension) | `pi` |
 | `omp` | Oh My Pi CLI | `pi` |
+| `deepseek` | DeepSeek Harness (`dsh`) | `deepseek` |
 | `kimi` | Kimi Code CLI | `kimi` |
 | `kilo` | Kilo Code CLI | `kilo` |
 
@@ -106,8 +109,10 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 
 | Target | Product | Provider key | Notes |
 |---|---|---|---|
-| `cursor` | Cursor IDE | `cursor` | Writes Edgee as Cursor's OpenAI-compatible BYOK provider; `edgee relay cursor` restores prior settings and retains the Plan relay |
+| `cursor` | Cursor IDE | `cursor` | Writes Edgee as Cursor's OpenAI-compatible BYOK provider and adds each model's catalog reasoning efforts to Cursor's picker metadata; `edgee relay cursor` restores prior settings and retains the Plan relay |
 | `intellij` | GitHub Copilot in IntelliJ IDEA | `copilot` | Direct IDE launch with proxy env + Node CA; live-session validation pending |
+| `phpstorm` | GitHub Copilot in PHPStorm | `copilot` | Same relay and lifecycle as IntelliJ; live-session validation pending |
+| `android-studio` | GitHub Copilot in Android Studio | `copilot` | Same relay and lifecycle as IntelliJ; live-session validation pending |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + dedicated system-trusted Copilot CA |
 | `copilot-cli` | GitHub Copilot CLI | `copilot` | Relays the `copilot` binary directly (TUI, no `--wait`) — deliberately not env-injected; see below |
@@ -186,6 +191,14 @@ product decision rather than a port of `claude-desktop`:
   re-originating those requests is what that machinery exists to detect, and the
   exposure lands on the user's ChatGPT account.
 
+A **Codex conversation without a project** is not the ChatGPT tab, even though it
+reads like a chat: the app runs it on `codex app-server` with
+`"workspace_kind":"projectless"` in `x-codex-turn-metadata` and a working directory
+under `~/Documents/Codex/<date>/`, so it **is** routed. Seen on 2026-10-12 (app
+26.1007), where such a "bonjour" was first mistaken for a routed ChatGPT-tab chat.
+Tell the two apart by `originator`/`x-codex-turn-metadata` in a debug log, never by
+how the conversation looks.
+
 `print_launch_hint` states the limitation at launch. Keep it there: without it, "launching
 the ChatGPT desktop app through Edgee" reads as covering the whole app, which is exactly
 how this got reported as a bug.
@@ -252,6 +265,15 @@ every desktop request down the keyed pipeline, which authenticates from
 `edgee launch opencode` adds Edgee as a provider in a temporary merged config.
 OpenCode sends those requests directly to the gateway using the Edgee key.
 
+OpenCode 2.x reshaped its config (`providers`/`package`/`settings`,
+`mcp.servers` with `disabled`, `agents` with `system`, top-level `skills`,
+`cost.cache.{read,write}`), so the launcher reads `opencode --version` and
+emits the matching shape. v2 clients also attach to a shared background
+service that keeps the config it started with, so the launcher passes
+`--standalone` to the TUI, `run` and `mini`. v2 ignores `instructions`, so the
+MCP session-tracking prompt goes in the `description` of a `references.edgee`
+entry instead, which v2 copies verbatim into the system prompt.
+
 The hidden `edgee relay opencode` path serves a different use case: it launches
 OpenCode with the user's config unchanged and proxies supported inference traffic
 through Edgee in passthrough mode. Existing provider credentials remain attached
@@ -259,66 +281,109 @@ to the request, including a GitHub Copilot token selected through OpenCode. The
 relay uses the `opencode` Edgee key for agent attribution and also intercepts the
 Copilot inference and token-discovery hosts.
 
-## `pi` and `omp` — additive provider in each agent's own config
+## `pi` - the `pi-edgee` extension, loaded per launch
 
-`opencode` and `crush` build a merged config in `$TMPDIR` and point the agent at
-it (`OPENCODE_CONFIG`, `CRUSH_GLOBAL_CONFIG`), so the user's files are never
-touched. Pi has no such lever, and the one that looks like it is a trap:
-`PI_CODING_AGENT_DIR` relocates the **entire** agent directory — `models.json`
-but also `auth.json`, `settings.json`, `keybindings.json`, `sessions/`,
-`themes/`, `tools/`, `prompts/`, `bin/`, plus extension, skill and plugin
-discovery. Pointing it at a temp dir launches pi with no history, no logins, no
-settings and none of the user's plugins. `--models` is not an alternative: it
-takes model *patterns* for Ctrl+P cycling, not a config path.
+`pi` no longer writes provider blocks. `pi.rs` passes `-e npm:pi-edgee@<pinned>` (Pi's
+temporary extension scope: cached under `<agent dir>/tmp/extensions`, nothing written to
+`settings.json`) and hands the extension its identity in the child-only `EDGEE_PI_CONTEXT` JSON
+variable. The extension owns the `edgee` provider, model discovery, footer and session metadata.
 
-So `pi` writes into `~/.pi/agent/models.json`, while `omp` writes into
-`~/.omp/agent/models.yml`. Both use two managed keys: `providers.edgee` for
-Chat Completions and `providers.edgee-anthropic` for Anthropic Messages. Custom
-providers merge into pi's built-in catalog by `provider + id`, so the block is
-purely **additive** — nothing the user already had is overridden. That is what
-makes it safe to leave in place, and why there is no patch-and-revert dance like
-`codex-desktop`: this adds a provider rather than hijacking one the user depends
-on.
+- **Pi's `-e` takes its value as a separate argument and is repeatable.** It has no
+  `--extension=value` form (that spelling is parsed as an unknown flag), so it is passed as
+  `-e <spec>`, ahead of the user's own args.
+- **Credentials never touch argv, Pi settings or `auth.json`.** The context carries the gateway
+  key, console token, org, endpoints, session id and debug-log headers. The extension scrubs it
+  from its environment after reading, so the agent's own shell commands cannot see it.
+  `EDGEE_API_KEY` / `EDGEE_SESSION_ID` / `EDGEE_ORG_SLUG` are still exported for a `pi-edgee`
+  that predates the contract.
+- **A user-level install is reused, not duplicated.** Pi dedupes extensions by canonical path
+  only, so a second copy would register `edgee` twice. `extension_plan` looks at the agent dir's
+  `settings.json` `packages` and `extensions/`, and at the user's own `-e`. It skips `-e` for those
+  (warning when the install's `package.json` lacks `edgee.cliContract`) and injects anyway under
+  `-ne`. Project `.pi/settings.json` is deliberately ignored: Pi only reads it for trusted
+  projects, and skipping injection because of an unread file would leave a run with no Edgee
+  provider at all.
+- **Old `models.json` blocks are cleaned up.** Pi layers `models.json` over extension providers.
+  `edgee` / `edgee-anthropic` entries matching the generated shape are removed after a one-time
+  `models.json.edgee-bak`; anything customised, commented or unparseable is left with a warning.
+- **`EDGEE_PI_EXTENSION`** overrides the pinned spec (a local checkout or another npm spec). The
+  pinned version must already be published when a CLI release is cut.
 
-OMP is Pi-compatible and reuses the `pi` coding-agent key. Sessions therefore
-share Pi's backend attribution and settings rather than provisioning another
-key.
+The rest of this section describes the provider-file launcher that `omp` still uses.
 
-Three details are load-bearing:
+## `omp` - additive provider in OMP's own config
 
-- **Env references are `$NAME`, and this requires pi ≥ 0.79.4.** That release
-  deliberately reversed the syntax (upstream #5661): before it, the *whole value*
-  was the variable name (bare `EDGEE_API_KEY`) and an unset variable fell through
-  to the literal string; from it, bare uppercase values are literals and `$NAME`
-  is the only env reference. The two spellings are mutually exclusive — each is
-  an inert literal on the other side of that boundary — and both fail
-  identically, with the gateway answering 401 because it was handed
-  `EDGEE_API_KEY` or `$EDGEE_API_KEY` as a credential. Check the pi version first
-  when debugging a 401 here.
-- **The Edgee key is therefore never written to disk** — the config stores the
-  references `$EDGEE_API_KEY` / `$EDGEE_SESSION_ID` and launch supplies the
-  values. This is strictly better than the OpenCode and Crush temp configs, which
-  embed the key. The trade-off: a bare `pi` run sees the Edgee models but cannot
-  authenticate them.
-- **An empty gateway model list is fatal here, unlike for OpenCode.** A pi custom
-  provider is defined by its models, so registering one with none opens the
-  session on "No models available". `fetch_gateway_models` is best-effort and
-  returns empty on any failure (an unreachable gateway, e.g. a dev profile
-  pointing at a `localhost` port with nothing on it), so launch bails before
+OMP still uses the provider-file approach that `pi` moved away from. `opencode` and `crush` build
+a merged config in `$TMPDIR` and point the agent at it (`OPENCODE_CONFIG`, `CRUSH_GLOBAL_CONFIG`),
+so the user's files are never touched. OMP has no such lever and no override for its agent
+directory, so `omp` writes into `~/.omp/agent/models.yml`. It uses two managed keys:
+`providers.edgee` for Chat Completions and `providers.edgee-anthropic` for Anthropic Messages.
+Custom providers merge into OMP's built-in catalog by `provider + id`, so the block is purely
+**additive**: nothing the user already had is overridden. That is what makes it safe to leave in
+place, and why there is no patch-and-revert dance like `codex-desktop`: this adds a provider
+rather than hijacking one the user depends on.
+
+OMP is Pi-compatible and reuses the `pi` coding-agent key. Sessions therefore share Pi's backend
+attribution and settings rather than provisioning another key.
+
+Four details are load-bearing:
+
+- **Env references are bare names.** OMP looks up the complete value as an environment variable
+  name, so the blocks store `EDGEE_API_KEY` / `EDGEE_SESSION_ID` (Pi itself needs `$NAME` since
+  0.79.4, which is irrelevant here now that `pi` no longer writes provider blocks).
+- **The Edgee key is therefore never written to disk.** The config stores the names and launch
+  supplies the values. This is strictly better than the OpenCode and Crush temp configs, which
+  embed the key. The trade-off: a bare `omp` run sees the Edgee models but cannot authenticate them.
+- **An empty gateway model list is fatal here, unlike for OpenCode.** A custom provider is defined
+  by its models, so registering one with none opens the session on "No models available".
+  `fetch_gateway_models` is best-effort and returns empty on any failure (an unreachable gateway,
+  e.g. a dev profile pointing at a `localhost` port with nothing on it), so launch bails before
   writing rather than leaving a dead provider in the user's config.
-- **The catalog is split by ingress protocol.** Models whose IDs start with
-  `anthropic/` use `api = "anthropic-messages"` with the gateway root as their
-  base URL, so Pi appends `/v1/messages` and applies its native prompt caching.
-  Every other model uses `api = "openai-completions"` with a `/v1` base URL, so
-  Pi appends `/chat/completions`. Gateway reroutes still work from either
-  ingress.
+- **The catalog is split by ingress protocol.** Models whose IDs start with `anthropic/` use
+  `api = "anthropic-messages"` with the gateway root as their base URL, so OMP appends
+  `/v1/messages` and applies its native prompt caching. Every other model uses
+  `api = "openai-completions"` with a `/v1` base URL, so OMP appends `/chat/completions`. Gateway
+  reroutes still work from either ingress.
 
-Reasoning-capable models are declared with `reasoning: true` and a model-level
-`thinkingLevelMap` generated from the catalog. Unsupported Pi levels are set to
-`null`, so the picker hides and skips them; catalog `none` maps to Pi's `off`
-slot. On the Anthropic provider, `compat.forceAdaptiveThinking` is enabled: Pi
-sends `thinking.type=adaptive` plus the exact effort, and the gateway translates
-that canonical control for whichever provider ultimately serves the request.
+Reasoning-capable models are declared with `reasoning: true` and a model-level `thinkingLevelMap`
+generated from the catalog. Unsupported levels are set to `null`, so the picker hides and skips
+them; catalog `none` maps to the `off` slot. On the Anthropic provider,
+`compat.forceAdaptiveThinking` is enabled: OMP sends `thinking.type=adaptive` plus the exact
+effort, and the gateway translates that canonical control for whichever provider ultimately serves
+the request. OMP's Anthropic transport also keeps its own identity (`User-Agent: omp` and the
+`compat` overrides) so the gateway uses the normal Messages path.
+
+## `deepseek` — DeepSeek Harness (`dsh`)
+
+Install with `npm install -g @deepseek-ai/dsh`. `edgee launch deepseek` boots
+`web`; pass `headless "task"`, a profile name, or `--profile <name>` to select
+another harness surface. Arguments otherwise pass through unchanged, including
+`plugin --profile web add <package>`.
+
+A private temporary `--patch` YAML overlay configures `llm-pi-ai` with an
+`edgee` OpenAI Chat Completions provider and selects it through
+`agent-default-model`. Requests use the gateway's `/v1` root, Edgee API key,
+session/repo attribution, and optional encrypted debug headers. The API key is
+also supplied through child-only `EDGEE_API_KEY`; the overlay is removed when
+`dsh` exits. Harness profiles and credentials are not edited by Edgee.
+
+Default model: `deepseek/deepseek-v4-pro`. Override with
+`EDGEE_DEEPSEEK_MODEL`. At launch, Edgee fetches the gateway's `/v1/models` and
+console catalog concurrently. The picker lists gateway models except known
+app-subscription-only models, with context windows, text/image capabilities,
+and supported reasoning efforts from the catalog. The selected default is
+always included, including when discovery fails. DeepSeek thinking wire format
+is scoped to DeepSeek models, not applied to other providers' models. Restart
+the harness to refresh the list. Existing
+sessions retain their saved provider/model, and selecting another configured
+provider bypasses Edgee. Start a new session with the Edgee provider to route
+through the gateway. Plugin management runs unchanged without an overlay.
+
+Launch provisions and validates a dedicated `deepseek` key using the standard
+Edgee authentication and onboarding flow. Configure it with
+`edgee settings deepseek`. The console backend must support the `deepseek`
+coding-assistant identifier. `edgee alias deepseek` wraps `dsh`, not a binary
+named `deepseek`.
 
 ## `kimi` — the env-only channel Kimi Code leaves open
 
@@ -425,8 +490,8 @@ replaces it with a bare BYOK shell pointed at Edgee — architecturally identica
 to `kimi`/`pi`, not to `claude`/`codex`.
 
 So this target relays instead, following `copilot-vscode` (they share the
-`copilot` provider key and both MITM [`COPILOT_ONLY_HOSTS`](handler.rs) —
-`githubcopilot.com` + `api.github.com`). That's also why it's named
+`copilot` provider key and both MITM [`COPILOT_ONLY_HOSTS`](../relay/handler.rs),
+i.e. `githubcopilot.com`; `api.github.com` stays blind-tunnelled). That's also why it's named
 `copilot-cli` rather than bare `copilot`, breaking rule 1's "reserve the bare
 name for the primary CLI": its transport and passthrough semantics pair it with
 `copilot-vscode` as another surface of the same product, not with the
@@ -453,9 +518,29 @@ full authenticated request/response cycle):
 
 Net effect: `edgee launch copilot-cli` spawns `copilot` directly (TUI-style, no
 `--wait`, same as `claude`/`codex`) with the relay's proxy env and CA, and its
-real Copilot-billed traffic to `githubcopilot.com`/`api.github.com` reroutes
-through the gateway — preserving the user's actual GitHub Copilot subscription,
-which the BYOK lever cannot do.
+real Copilot-billed traffic to `githubcopilot.com` reroutes through the
+gateway, preserving the user's actual GitHub Copilot subscription, which the
+BYOK lever cannot do.
+
+### What the launch injects
+
+Prepared in `copilot_cli::prepare`, after the relay has created the session,
+and placed before the user's args. Verified against Copilot CLI 1.0.90:
+
+- **Edgee MCP**, gated like `claude`: `--additional-mcp-config=@<file>` (a temp
+  file, so the token stays out of argv) plus `--allow-tool=edgee-session`. The
+  server is named `edgee-session`, not `edgee`: Copilot's MCP namespace is flat,
+  and an injected server silently shadows an org plugin's server of the same
+  name.
+  Edgee MCP transports share `mcp::edgee_http_headers`: user bearer token plus
+  `X-Edgee-Launch-Id` set to the actual launcher ID. Claude, Codex, Copilot CLI
+  and OpenCode all require this context; native session tool arguments stay native.
+- **Session instructions** via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`. Copilot only
+  reads `.github/instructions/*.instructions.md` from those directories.
+- **Org plugins**: the Claude bundle, one `--plugin-dir=` per plugin. Copilot
+  reads `.claude-plugin/plugin.json` and Claude-format hooks.
+- **Statusline**: checked on every launch in `~/.copilot/settings.json`, and
+  pointed at this binary through `EDGEE_BIN`. See `statusline/copilot.rs`.
 
 ## Planned targets (same rules)
 
@@ -540,3 +625,53 @@ Edgee. A launcher can hand off to an existing IDE and exit, so Edgee keeps servi
 until Ctrl-C. Live Copilot traffic still needs validation with an installed IDE;
 this target is experimental until then. Other AI plugins and remote/cloud agent
 sessions are outside this target's supported scope.
+
+## `phpstorm` — GitHub Copilot in PHPStorm
+
+Quit PHPStorm completely, then run `edgee launch phpstorm /path/to/project`.
+It uses the same Copilot relay, proxy environment, Node CA and editor lifecycle
+as IntelliJ. Install and sign in to the GitHub Copilot plugin, and use **No proxy**
+in the IDE's HTTP Proxy settings so the launch environment applies.
+
+The launcher detects `PhpStorm.app` or `PHPStorm.app` in system/user Applications
+on macOS, or `phpstorm` / `phpstorm.sh` (`phpstorm64.exe` / `phpstorm.exe` on
+Windows) on PATH. Set `EDGEE_PHPSTORM_BINARY` for another executable location.
+`edgee alias phpstorm` installs a desktop wrapper when the IDE is detected.
+Keep the terminal running until the IDE quits. Live Copilot validation is pending.
+
+## `android-studio` — GitHub Copilot in Android Studio
+
+Quit Android Studio completely, then run `edgee launch android-studio /path/to/project`.
+Android Studio is built on the IntelliJ Platform, so it uses the same Copilot relay,
+proxy environment, Node CA and editor lifecycle as IntelliJ, on local port 42100.
+Install and sign in to the GitHub Copilot plugin, and use **No proxy** in the IDE's
+HTTP Proxy settings so the launch environment applies. Only the GitHub Copilot
+plugin is routed; Gemini in Android Studio is out of scope.
+
+The launcher detects `Android Studio.app` or `Android Studio Preview.app` in
+system/user Applications on macOS, or `studio` / `studio.sh` (`studio64.exe` /
+`studio.exe` on Windows) on PATH. Set `EDGEE_ANDROID_STUDIO_BINARY` for another
+executable location (on macOS, `Contents/MacOS/studio` inside the bundle).
+`edgee alias android-studio` installs a desktop wrapper when the IDE is detected.
+Keep the terminal running until the IDE quits. Live Copilot validation is pending.
+
+## Pi and OMP with existing provider logins
+
+`edgee relay pi` and `edgee relay omp` run the original CLI behind the relay,
+using its existing configuration and provider credentials, including GitHub
+Copilot. Both use the `pi` Edgee key for passthrough and intercept the Copilot hosts in addition
+to the standard inference hosts. They do not inject Pi's Edgee extension or
+write OMP provider blocks. Select and sign in to GitHub Copilot in the agent.
+
+Pi defaults to port 41900 and OMP to 42000; `--port` overrides either.
+`--no-launch` runs just the proxy for an externally started client.
+Pi enables `NODE_USE_ENV_PROXY`; use a Node runtime that supports this flag for
+native fetch traffic. OMP receives `PI_PROXY` and `PI_PROXY_GITHUB_COPILOT`
+([upstream proxy documentation](https://github.com/can1357/oh-my-pi/blob/main/docs/environment-variables.md)).
+These relay paths still need live Copilot validation.
+
+Provider relays (`pi`, `omp`, `opencode`) route ChatGPT Codex subscription calls
+through the Codex pipeline using the `codex` Edgee key. The subscription bearer
+token is preserved. These requests receive a `codex/edgee-relay` User-Agent
+prefix so the gateway selects subscription handling, with the original agent
+identity retained as a suffix. Copilot calls continue to use upstream passthrough.

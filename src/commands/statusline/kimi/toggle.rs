@@ -98,7 +98,7 @@ fn remove_edgee_status_line(value: &mut Value) -> bool {
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
-    use crate::commands::claude_settings::env_test_lock as env_lock;
+    use crate::commands::statusline::kimi::env_test_lock as env_lock;
     use std::fs;
     use std::path::PathBuf;
 
@@ -160,7 +160,7 @@ mod tests {
         let installed = read_tui_toml(&home);
         assert_eq!(
             installed["status_line"]["command"].as_str(),
-            Some("edgee statusline render")
+            Some("edgee statusline")
         );
 
         disable().await.unwrap();
@@ -173,7 +173,7 @@ mod tests {
         let after_enable = read_tui_toml(&home);
         assert_eq!(
             after_enable["status_line"]["command"].as_str(),
-            Some("edgee statusline render")
+            Some("edgee statusline")
         );
     }
 

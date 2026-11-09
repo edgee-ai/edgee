@@ -20,6 +20,7 @@ pub enum Target {
     Codebuddy,
     Pi,
     Omp,
+    CopilotCli,
     CopilotDesktop,
 }
 
@@ -33,6 +34,7 @@ impl Target {
             Target::Codebuddy => "codebuddy",
             Target::Pi => "pi",
             Target::Omp => "omp",
+            Target::CopilotCli => "copilot-cli",
             Target::CopilotDesktop => "copilot-desktop",
         }
     }
@@ -47,7 +49,7 @@ impl Target {
     /// share a bundle byte for byte; everything else reads a flat skills root.
     pub fn layout(self) -> Layout {
         match self {
-            Target::Claude | Target::Codebuddy | Target::Omp => Layout::Bundle,
+            Target::Claude | Target::Codebuddy | Target::Omp | Target::CopilotCli => Layout::Bundle,
             Target::Codex
             | Target::Opencode
             | Target::Crush
@@ -56,7 +58,7 @@ impl Target {
         }
     }
 
-    pub const ALL: [Target; 8] = [
+    pub const ALL: [Target; 9] = [
         Target::Claude,
         Target::Codex,
         Target::Opencode,
@@ -64,6 +66,7 @@ impl Target {
         Target::Codebuddy,
         Target::Pi,
         Target::Omp,
+        Target::CopilotCli,
         Target::CopilotDesktop,
     ];
 }
@@ -138,6 +141,10 @@ const OMP_PLUGIN_DIR: Delivery = Delivery::Delivered {
     mechanism: "omp --plugin-dir",
 };
 
+const COPILOT_PLUGIN_DIR: Delivery = Delivery::Delivered {
+    mechanism: "copilot --plugin-dir",
+};
+
 const fn config_key(mechanism: &'static str) -> Delivery {
     Delivery::Delivered { mechanism }
 }
@@ -157,8 +164,8 @@ const UNVERIFIED: Delivery = Delivery::Unsupported {
 /// nothing is written to `~/.claude`).
 ///
 /// CodeBuddy takes the same bundle via `CODEBUDDY_PLUGIN_DIRS`, documented as
-/// the env-var form of `--plugin-dir`. OMP also consumes that bundle through its
-/// repeatable `--plugin-dir` flag. Crush and OpenCode are configured by a
+/// the env-var form of `--plugin-dir`. OMP and Copilot CLI also consume that
+/// bundle through their repeatable `--plugin-dir` flags. Crush and OpenCode are configured by a
 /// document instead, and the CLI already clones-and-redirects that document, so
 /// the fragments in `config.rs` ride the same mechanism. Pi accepts skills by
 /// path but has no declarative configuration for the other component kinds.
@@ -240,6 +247,13 @@ pub fn delivery(target: Target, kind: Kind) -> Delivery {
         // leaves the user's plugin installation untouched.
         Target::Omp => OMP_PLUGIN_DIR,
 
+        // Copilot CLI's session-only `--plugin-dir` accepts the legacy
+        // `.claude-plugin/plugin.json` manifest and Claude-format hooks, so it
+        // reads Claude's bundle. Verified against Copilot CLI 1.0.90: the skill
+        // and subagent (as `<plugin>:<name>`) were listed, SessionStart and
+        // UserPromptSubmit hooks fired, and `.mcp.json` servers were started.
+        Target::CopilotCli => COPILOT_PLUGIN_DIR,
+
         // Crush's own schema (charm.land/crush.json) carries `options.skills_paths`,
         // a top-level `hooks` map and an `mcp` map — all injected into the config
         // the CLI already generates for it. Subagents are the one real absence:
@@ -301,6 +315,18 @@ mod tests {
             assert!(
                 delivery(Target::Omp, kind).is_delivered(),
                 "omp should deliver {}",
+                kind.label()
+            );
+        }
+    }
+
+    #[test]
+    fn copilot_cli_delivers_every_kind() {
+        assert_eq!(Target::CopilotCli.layout(), Layout::Bundle);
+        for kind in Kind::ALL {
+            assert!(
+                delivery(Target::CopilotCli, kind).is_delivered(),
+                "copilot-cli should deliver {}",
                 kind.label()
             );
         }

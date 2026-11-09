@@ -42,3 +42,15 @@ pub async fn run(opts: Options) -> Result<()> {
 pub(crate) fn tui_toml_path() -> Option<std::path::PathBuf> {
     crate::commands::launch::kimi::kimi_code_home().map(|h| h.join("tui.toml"))
 }
+
+/// Serializes tests that mutate process-global env (`HOME`, `KIMI_CODE_HOME`),
+/// since `cargo test` runs tests in parallel.
+#[cfg(test)]
+pub(crate) fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}

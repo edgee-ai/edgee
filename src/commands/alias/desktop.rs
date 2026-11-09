@@ -1,5 +1,6 @@
 //! Desktop app wrappers installed by `edgee alias` for GUI launch targets
-//! (`cursor`, `copilot-vscode`). Platform-native launchers:
+//! (`cursor`, `copilot-vscode`, `claude-desktop`, `codex-desktop`…). Platform-native
+//! launchers:
 //!   macOS  → `~/Applications/<Name> (Edgee).app`
 //!   Linux  → `~/.local/share/applications/edgee-*.desktop`
 //!   Windows → Start Menu `.lnk`
@@ -10,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use console::style;
+
+use super::output::{self, ShortcutStatus};
 
 /// A GUI launch target that gets a desktop wrapper (not a CLI PATH shim).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23,6 +25,9 @@ pub struct AppSpec {
     pub host_label: &'static str,
     /// Argument after `edgee launch`.
     pub launch_target: &'static str,
+    /// Earlier `display_name`s. Their wrappers are replaced on install and removed
+    /// along with this one.
+    pub legacy_display_names: &'static [&'static str],
 }
 
 pub const CURSOR_APP: AppSpec = AppSpec {
@@ -30,6 +35,7 @@ pub const CURSOR_APP: AppSpec = AppSpec {
     display_name: "Cursor (Edgee)",
     host_label: "Cursor",
     launch_target: "cursor",
+    legacy_display_names: &[],
 };
 
 pub const COPILOT_VSCODE_APP: AppSpec = AppSpec {
@@ -37,13 +43,23 @@ pub const COPILOT_VSCODE_APP: AppSpec = AppSpec {
     display_name: "VS Code Copilot (Edgee)",
     host_label: "VS Code",
     launch_target: "copilot-vscode",
+    legacy_display_names: &[],
 };
 
 pub const CLAUDE_DESKTOP_APP: AppSpec = AppSpec {
     id: "claude-desktop",
-    display_name: "Claude Desktop (Edgee)",
+    display_name: "Claude (Edgee)",
     host_label: "Claude Desktop",
     launch_target: "claude-desktop",
+    legacy_display_names: &["Claude Desktop (Edgee)"],
+};
+
+pub const CODEX_DESKTOP_APP: AppSpec = AppSpec {
+    id: "codex-desktop",
+    display_name: "ChatGPT (Edgee)",
+    host_label: "ChatGPT desktop app",
+    launch_target: "codex-desktop",
+    legacy_display_names: &[],
 };
 
 pub const COPILOT_DESKTOP_APP: AppSpec = AppSpec {
@@ -51,6 +67,7 @@ pub const COPILOT_DESKTOP_APP: AppSpec = AppSpec {
     display_name: "GitHub Copilot (Edgee)",
     host_label: "GitHub Copilot",
     launch_target: "copilot-desktop",
+    legacy_display_names: &[],
 };
 
 pub const INTELLIJ_APP: AppSpec = AppSpec {
@@ -58,9 +75,35 @@ pub const INTELLIJ_APP: AppSpec = AppSpec {
     display_name: "IntelliJ IDEA Copilot (Edgee)",
     host_label: "IntelliJ IDEA",
     launch_target: "intellij",
+    legacy_display_names: &[],
 };
 
-pub const ALL_APPS: &[AppSpec] = &[CURSOR_APP, INTELLIJ_APP, COPILOT_VSCODE_APP, CLAUDE_DESKTOP_APP, COPILOT_DESKTOP_APP];
+pub const PHPSTORM_APP: AppSpec = AppSpec {
+    id: "phpstorm",
+    display_name: "PHPStorm Copilot (Edgee)",
+    host_label: "PHPStorm",
+    launch_target: "phpstorm",
+    legacy_display_names: &[],
+};
+
+pub const ANDROID_STUDIO_APP: AppSpec = AppSpec {
+    id: "android-studio",
+    display_name: "Android Studio Copilot (Edgee)",
+    host_label: "Android Studio",
+    launch_target: "android-studio",
+    legacy_display_names: &[],
+};
+
+pub const ALL_APPS: &[AppSpec] = &[
+    CURSOR_APP,
+    INTELLIJ_APP,
+    PHPSTORM_APP,
+    ANDROID_STUDIO_APP,
+    COPILOT_VSCODE_APP,
+    CLAUDE_DESKTOP_APP,
+    CODEX_DESKTOP_APP,
+    COPILOT_DESKTOP_APP,
+];
 
 #[derive(Clone, Copy)]
 pub enum Action {
@@ -68,55 +111,53 @@ pub enum Action {
     Remove,
 }
 
-/// Install or remove desktop wrappers for `apps`. Skips install when the
-/// underlying editor is not detected (prints a dim note).
-pub fn apply_apps(apps: &[AppSpec], action: Action) -> Result<()> {
+/// Install or remove desktop wrappers, reporting only apps in this request.
+pub fn apply_apps(apps: &[AppSpec], action: Action) -> Result<usize> {
     if apps.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     let edgee = edgee_executable()?;
+    let mut apps = apps.to_vec();
+    apps.sort_by_key(|app| app.display_name.to_lowercase());
+    let width = apps
+        .iter()
+        .map(|app| app.display_name.len())
+        .max()
+        .unwrap_or(0);
+    let mut applied = 0;
 
-    for app in apps {
-        match action {
+    for app in &apps {
+        let status = match action {
             Action::Install => {
                 if !target_app_installed(app) {
-                    println!(
-                        "  {} {} ({})",
-                        style("skipped").yellow(),
-                        app.id,
-                        style(format!("{} not found — install the app first", app.host_label)).dim()
-                    );
                     continue;
                 }
-                let path = install_wrapper(app, &edgee)?;
-                println!(
-                    "  {} {} ({})",
-                    style("installed").green(),
-                    path.display(),
-                    style("app wrapper").dim()
-                );
-            }
-            Action::Remove => {
-                if let Some(path) = remove_wrapper(app)? {
-                    println!(
-                        "  {} {} ({})",
-                        style("removed").green(),
-                        path.display(),
-                        style("app wrapper").dim()
-                    );
+                let existed = wrapper_path_named(app, app.display_name)?.exists()
+                    || !legacy_wrappers(app).is_empty();
+                install_wrapper(app, &edgee)?;
+                applied += 1;
+                if existed {
+                    ShortcutStatus::Updated
                 } else {
-                    println!(
-                        "  {} {} ({})",
-                        style("unchanged").dim(),
-                        app.id,
-                        style("no app wrapper").dim()
-                    );
+                    ShortcutStatus::Installed
                 }
             }
+            Action::Remove => {
+                if remove_wrapper(app)?.is_some() {
+                    applied += 1;
+                    ShortcutStatus::Removed
+                } else {
+                    continue;
+                }
+            }
+        };
+        if applied == 1 {
+            output::shortcuts_heading();
         }
+        output::shortcut(app.display_name, width, status);
     }
-    Ok(())
+    Ok(applied)
 }
 
 pub(crate) fn edgee_executable() -> Result<PathBuf> {
@@ -159,23 +200,52 @@ fn homebrew_stable_bin(canonical: &Path) -> Option<PathBuf> {
 /// Absolute path of the installed desktop wrapper for `app` on this platform.
 #[cfg(feature = "self-update")]
 fn wrapper_path(app: &AppSpec) -> Result<PathBuf> {
+    wrapper_path_named(app, app.display_name)
+}
+
+/// The wrapper path `app` would have under `display_name` (Linux names files by id,
+/// so a renamed app keeps its path there).
+fn wrapper_path_named(app: &AppSpec, display_name: &str) -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        macos_wrapper_path(app)
+        let _ = app;
+        macos_wrapper_path(display_name)
     }
     #[cfg(target_os = "linux")]
     {
+        let _ = display_name;
         linux_desktop_path(app)
     }
     #[cfg(target_os = "windows")]
     {
-        windows_shortcut_path(app)
+        let _ = app;
+        windows_shortcut_path(display_name)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        let _ = app;
+        let _ = (app, display_name);
         anyhow::bail!("desktop wrappers are not supported on this platform")
     }
+}
+
+/// Wrappers left under one of `app`'s earlier names.
+fn legacy_wrappers(app: &AppSpec) -> Vec<PathBuf> {
+    let current = wrapper_path_named(app, app.display_name).ok();
+    app.legacy_display_names
+        .iter()
+        .filter_map(|name| wrapper_path_named(app, name).ok())
+        .filter(|path| Some(path) != current.as_ref() && path.exists())
+        .collect()
+}
+
+/// Delete a wrapper: a `.app` bundle directory or a shortcut file.
+fn delete_wrapper(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
+    .with_context(|| format!("removing {}", path.display()))
 }
 
 /// Re-install every wrapper in `apps` that is currently present (and whose
@@ -186,7 +256,8 @@ fn wrapper_path(app: &AppSpec) -> Result<PathBuf> {
 pub fn refresh_wrappers(apps: &[AppSpec], edgee: &Path) -> usize {
     let mut refreshed = 0;
     for app in apps {
-        let installed = wrapper_path(app).map(|p| p.exists()).unwrap_or(false);
+        let installed = wrapper_path(app).map(|p| p.exists()).unwrap_or(false)
+            || !legacy_wrappers(app).is_empty();
         if !installed || !target_app_installed(app) {
             continue;
         }
@@ -207,8 +278,11 @@ pub fn target_app_installed(app: &AppSpec) -> bool {
         "cursor" => cursor_installed(),
         "copilot-vscode" => vscode_installed(),
         "claude-desktop" => claude_desktop_installed(),
+        "phpstorm" => crate::commands::launch::phpstorm::binary().is_ok(),
         "intellij" => crate::commands::launch::intellij::binary().is_ok(),
+        "android-studio" => crate::commands::launch::android_studio::binary().is_ok(),
         "copilot-desktop" => crate::commands::launch::copilot_desktop::binary().is_ok(),
+        "codex-desktop" => crate::commands::launch::codex_desktop::binary().is_ok(),
         _ => false,
     }
 }
@@ -371,6 +445,14 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn install_wrapper(app: &AppSpec, edgee: &Path) -> Result<PathBuf> {
+    let path = install_current_wrapper(app, edgee)?;
+    for legacy in legacy_wrappers(app) {
+        delete_wrapper(&legacy)?;
+    }
+    Ok(path)
+}
+
+fn install_current_wrapper(app: &AppSpec, edgee: &Path) -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         install_macos_app(app, edgee)
@@ -391,6 +473,15 @@ fn install_wrapper(app: &AppSpec, edgee: &Path) -> Result<PathBuf> {
 }
 
 fn remove_wrapper(app: &AppSpec) -> Result<Option<PathBuf>> {
+    let legacy = legacy_wrappers(app);
+    for path in &legacy {
+        delete_wrapper(path)?;
+    }
+    let removed = remove_current_wrapper(app)?;
+    Ok(removed.or_else(|| legacy.into_iter().next()))
+}
+
+fn remove_current_wrapper(app: &AppSpec) -> Result<Option<PathBuf>> {
     #[cfg(target_os = "macos")]
     {
         remove_macos_app(app)
@@ -413,16 +504,16 @@ fn remove_wrapper(app: &AppSpec) -> Result<Option<PathBuf>> {
 // ─── macOS ───────────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
-fn macos_wrapper_path(app: &AppSpec) -> Result<PathBuf> {
+fn macos_wrapper_path(display_name: &str) -> Result<PathBuf> {
     let home = home_dir().ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
     Ok(home
         .join("Applications")
-        .join(format!("{}.app", app.display_name)))
+        .join(format!("{display_name}.app")))
 }
 
 #[cfg(target_os = "macos")]
 fn install_macos_app(app: &AppSpec, edgee: &Path) -> Result<PathBuf> {
-    let app_path = macos_wrapper_path(app)?;
+    let app_path = macos_wrapper_path(app.display_name)?;
     let contents = app_path.join("Contents");
     let macos_dir = contents.join("MacOS");
     let resources = contents.join("Resources");
@@ -455,16 +546,30 @@ fn install_macos_app(app: &AppSpec, edgee: &Path) -> Result<PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn macos_source_icns(app: &AppSpec) -> Option<PathBuf> {
+    // ChatGPT.app's own icon is `electron.icns`; its `app.icns` is another image.
+    let preferred: &[&str] = match app.id {
+        "codex-desktop" => &["electron.icns"],
+        _ => &[],
+    };
     let bundle = match app.id {
         "cursor" => find_macos_app("Cursor.app")?,
         "copilot-vscode" => find_macos_app("Visual Studio Code.app")
             .or_else(|| find_macos_app("Code - Insiders.app"))?,
         "claude-desktop" => find_macos_app("Claude.app")?,
         "copilot-desktop" => find_macos_app("GitHub Copilot.app")?,
+        "codex-desktop" => find_macos_app("ChatGPT.app")?,
         _ => return None,
     };
     let resources = bundle.join("Contents/Resources");
-    for name in ["Cursor.icns", "Code.icns", "Claude.icns", "app.icns", "electron.icns", "icon.icns"] {
+    let fallback = [
+        "Cursor.icns",
+        "Code.icns",
+        "Claude.icns",
+        "app.icns",
+        "electron.icns",
+        "icon.icns",
+    ];
+    for name in preferred.iter().chain(fallback.iter()) {
         let p = resources.join(name);
         if p.is_file() {
             return Some(p);
@@ -475,7 +580,7 @@ fn macos_source_icns(app: &AppSpec) -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn remove_macos_app(app: &AppSpec) -> Result<Option<PathBuf>> {
-    let app_path = macos_wrapper_path(app)?;
+    let app_path = macos_wrapper_path(app.display_name)?;
     if !app_path.exists() {
         return Ok(None);
     }
@@ -564,8 +669,8 @@ fn write_executable(path: &Path, body: &str) -> Result<()> {
 
     let tmp = path.with_extension("tmp");
     {
-        let mut f = std::fs::File::create(&tmp)
-            .with_context(|| format!("creating {}", tmp.display()))?;
+        let mut f =
+            std::fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         f.write_all(body.as_bytes())
             .with_context(|| format!("writing {}", tmp.display()))?;
         f.set_permissions(std::fs::Permissions::from_mode(0o755))
@@ -639,18 +744,18 @@ X-Edgee-Managed=true\n\
 // ─── Windows ─────────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
-fn windows_shortcut_path(app: &AppSpec) -> Result<PathBuf> {
+fn windows_shortcut_path(display_name: &str) -> Result<PathBuf> {
     let appdata = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("APPDATA is not set"))?;
     Ok(appdata
         .join("Microsoft/Windows/Start Menu/Programs/Edgee")
-        .join(format!("{}.lnk", app.display_name)))
+        .join(format!("{display_name}.lnk")))
 }
 
 #[cfg(target_os = "windows")]
 fn install_windows_shortcut(app: &AppSpec, edgee: &Path) -> Result<PathBuf> {
-    let path = windows_shortcut_path(app)?;
+    let path = windows_shortcut_path(app.display_name)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
@@ -694,7 +799,7 @@ fn install_windows_shortcut(app: &AppSpec, edgee: &Path) -> Result<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn remove_windows_shortcut(app: &AppSpec) -> Result<Option<PathBuf>> {
-    let path = windows_shortcut_path(app)?;
+    let path = windows_shortcut_path(app.display_name)?;
     match std::fs::remove_file(&path) {
         Ok(()) => {
             // Best-effort: prune empty Edgee Start Menu folder.
@@ -727,6 +832,26 @@ mod tests {
         assert!(plist.contains("ai.edgee.launch.copilot.vscode"));
         assert!(plist.contains("VS Code Copilot (Edgee)"));
         assert!(plist.contains("<string>edgee-launch</string>"));
+    }
+
+    #[test]
+    fn codex_desktop_wrapper_launches_codex_desktop() {
+        assert!(ALL_APPS.contains(&CODEX_DESKTOP_APP));
+        let plist = macos_info_plist(&CODEX_DESKTOP_APP, "edgee-launch");
+        assert!(plist.contains("ai.edgee.launch.codex.desktop"));
+        assert!(plist.contains("ChatGPT (Edgee)"));
+        let script =
+            macos_launcher_script(Path::new("/opt/edgee"), CODEX_DESKTOP_APP.launch_target);
+        assert!(script.contains("launch codex-desktop"));
+    }
+
+    #[test]
+    fn claude_wrapper_is_named_claude_and_replaces_the_old_name() {
+        assert_eq!(CLAUDE_DESKTOP_APP.display_name, "Claude (Edgee)");
+        assert_eq!(
+            CLAUDE_DESKTOP_APP.legacy_display_names,
+            ["Claude Desktop (Edgee)"]
+        );
     }
 
     #[test]

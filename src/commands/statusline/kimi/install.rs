@@ -2,7 +2,7 @@
 //! integration.
 //!
 //! Sets `status_line.command` in `$KIMI_CODE_HOME/tui.toml` (default
-//! `~/.kimi-code/tui.toml`) to `edgee statusline render` if no `command` is
+//! `~/.kimi-code/tui.toml`) to `edgee statusline` if no `command` is
 //! configured there yet. Never overrides one the user already has, and never
 //! touches `status_line.items` or any other key in the file.
 
@@ -18,7 +18,7 @@ pub struct Options {
     pub implicit: bool,
 }
 
-pub(super) const STATUSLINE_COMMAND: &str = "edgee statusline render";
+pub(super) const STATUSLINE_COMMAND: &str = "edgee statusline";
 
 pub async fn run(opts: Options) -> Result<()> {
     let path = super::tui_toml_path().context("Could not determine your home directory")?;
@@ -115,7 +115,7 @@ fn install_statusline(value: &mut Value) -> bool {
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
-    use crate::commands::claude_settings::env_test_lock as env_lock;
+    use crate::commands::statusline::kimi::env_test_lock as env_lock;
     use std::fs;
     use std::path::PathBuf;
 
@@ -167,7 +167,7 @@ mod tests {
         let v = read_tui_toml(&home);
         assert_eq!(
             v["status_line"]["command"].as_str(),
-            Some("edgee statusline render")
+            Some("edgee statusline")
         );
     }
 
@@ -214,7 +214,7 @@ mod tests {
         );
         assert_eq!(
             v["status_line"]["command"].as_str(),
-            Some("edgee statusline render")
+            Some("edgee statusline")
         );
     }
 
