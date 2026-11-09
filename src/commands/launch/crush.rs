@@ -201,7 +201,7 @@ fn insert_edgee_provider(config: &mut Value, provider: Value) {
     }
 }
 
-pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -263,7 +263,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
         &catalog,
         debug_log_headers,
     );
-    super::pause::insert_headers(&mut edgee_provider["extra_headers"], requirement.as_ref());
+    super::passthrough_mode::insert_headers(&mut edgee_provider["extra_headers"], requirement.as_ref());
     insert_edgee_provider(&mut config, edgee_provider);
 
     // Org plugins. Crush's own schema carries `options.skills_paths`, a top-level

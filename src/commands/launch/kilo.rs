@@ -182,7 +182,7 @@ fn build_config_content(edgee_provider: Value) -> Value {
     })
 }
 
-pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -237,7 +237,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
         &catalog,
         debug_log_headers,
     );
-    super::pause::insert_headers(&mut edgee_provider["options"]["headers"], requirement.as_ref());
+    super::passthrough_mode::insert_headers(&mut edgee_provider["options"]["headers"], requirement.as_ref());
     let config_content = serde_json::to_string(&build_config_content(edgee_provider))?;
 
     // Step 5: launch kilo with the correct env vars

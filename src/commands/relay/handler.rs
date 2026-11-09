@@ -169,7 +169,7 @@ pub struct GatewayTarget {
     /// plaintext.
     pub debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
     /// Validated requirements indexed by the actual Edgee credential selected by auth_for.
-    pub pause_requirements: std::collections::HashMap<String, http::HeaderMap>,
+    pub passthrough_requirements: std::collections::HashMap<String, http::HeaderMap>,
 }
 
 impl GatewayTarget {
@@ -657,7 +657,7 @@ fn apply_reroute(parts: &mut http::request::Parts, gw: &GatewayTarget, gw_path: 
     }
     // Replace the complete set, including duplicate client-supplied values.
     // Conversion happened before serving, so headers cannot silently be omitted.
-    if let Some(requirement) = gw.pause_requirements.get(api_key) {
+    if let Some(requirement) = gw.passthrough_requirements.get(api_key) {
         for (name, value) in requirement {
             h.insert(name.clone(), value.clone());
         }
@@ -757,19 +757,19 @@ mod tests {
             claude_api_key: None,
             codex_api_key: None,
             debug_log_headers: None,
-            pause_requirements: Default::default(),
+            passthrough_requirements: Default::default(),
         }
     }
 
     #[test]
-    fn paused_relay_selects_requirements_by_actual_primary_claude_and_codex_key() {
-        use crate::commands::launch::pause::{Requirement, HEADER_NAMES};
+    fn passthrough_relay_selects_requirements_by_actual_primary_claude_and_codex_key() {
+        use crate::commands::launch::passthrough_mode::{Requirement, HEADER_NAMES};
         let mut gw = target();
         gw.base_path = "/tenant/gateway".into();
         gw.claude_api_key = Some("claude-key".into());
         gw.codex_api_key = Some("codex-key".into());
         for (key, revision) in [("sk-edgee-test", 1), ("claude-key", 2), ("codex-key", 3)] {
-            gw.pause_requirements.insert(key.into(), Requirement {
+            gw.passthrough_requirements.insert(key.into(), Requirement {
                 api_key_id: key.into(),
                 scope_incarnation: "672a7943-3648-46a5-a90f-17b356a13ac4".into(),
                 revision,

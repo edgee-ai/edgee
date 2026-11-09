@@ -11,7 +11,7 @@ use crate::{
 #[group(id = "session_reroute", multiple = true)]
 pub struct Options {
     /// Reroute this session to a model (place before the agent name)
-    #[arg(long = "reroute", value_name = "MODEL", conflicts_with = "pause_optimizations")]
+    #[arg(long = "reroute", value_name = "MODEL", conflicts_with = "enabled")]
     pub target: Option<String>,
     /// Only reroute this source model (default: all models)
     #[arg(long = "reroute-from", requires = "target", value_name = "MODEL")]

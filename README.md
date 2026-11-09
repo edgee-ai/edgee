@@ -232,38 +232,38 @@ edgee launch opencode -c                   # continue the last OpenCode session
 edgee launch codebuddy --resume <id>       # resume a CodeBuddy session
 ```
 
-### Pause optimizations without bypassing Edgee
+### Pass-through mode without bypassing Edgee
 
 ```bash
-edgee launch --pause-optimizations claude
-edgee launch --pause-optimizations --pause-duration 120 codex
-edgee relay --pause-optimizations --pause-duration 60 cursor
+edgee launch --passthrough claude
+edgee launch --passthrough --passthrough-duration 120 codex
+edgee relay --passthrough --passthrough-duration 60 cursor
 ```
 
-Place these options **before the agent name**. A pause lasts 60 minutes by default;
-`--pause-duration` accepts 1–1440 minutes, with no automatic renewal. It cannot be
+Place these options **before the agent name**. Pass-through mode is On for 60 minutes by default;
+`--passthrough-duration` accepts 1–1440 minutes, with no automatic renewal. It cannot be
 combined with `--reroute`.
 
-Traffic stays through Edgee, but compression, brevity injection, tool-surface
-reduction, model reroutes and alternate-provider fallback stop. Authentication,
+With Pass-through mode On, traffic stays through Edgee, but compression, brevity injection,
+tool-surface reduction, model reroutes and alternate-provider fallback stop. Authentication,
 security, budgets and usage accounting remain active. Existing bounded retries
 to the same destination remain possible. Stored settings and reroutes are retained
-and take effect again after expiry or resume.
+and take effect again after expiry or when Pass-through mode is turned off.
 
-The CLI checks gateway support and publishes the pause for every installed key
+The CLI checks gateway support and turns on Pass-through mode for every installed key
 before starting the agent. Requests fail closed until that publication reaches the
 serving gateway. An unsupported gateway or failed publication prevents launch.
 Direct Cursor and Pi launches cannot carry this guarantee: use their relay mode
-or an organization pause. Kimi requires version 0.20.2 or newer. Paused OpenCode
-launches cannot attach to an existing server, and Codex cannot select a local
+or organization Pass-through mode. Kimi requires version 0.20.2 or newer. OpenCode
+launches with Pass-through mode On cannot attach to an existing server, and Codex cannot select a local
 provider or override the configured Edgee transport.
 
-Organization admins can also use **Settings → Gateway → Disable optimizations**.
-Disabling optimizations here persists until an admin enables them again.
-Organization settings override session controls.
+Organization admins can also use **Settings → Gateway → Pass-through mode**.
+Choose **Turn on** to set it to **On**; it persists until an admin chooses **Turn off**
+to set it to **Off**. Organization settings override session controls.
 The session page supports explicit key selection and expiry; its status shows
-saved configuration, not acknowledgement from every gateway. Enabling optimizations
-for a session does not override an organization-wide disable or delete stored reroutes.
+saved configuration, not acknowledgement from every gateway. Turning session
+Pass-through mode Off does not override organization On or delete stored reroutes.
 Local MCP integrations, plugins and mods are not disabled.
 
 ### Reroute a session at launch

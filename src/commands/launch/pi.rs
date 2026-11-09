@@ -412,8 +412,8 @@ fn report_cleanup(outcome: &LegacyCleanup) {
     }
 }
 
-pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
-    anyhow::ensure!(!reroute.pause.pause_optimizations, "Direct Pi's external pi-edgee extension cannot carry required pause headers. Use `edgee relay --pause-optimizations pi` or organization pause.");
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
+    anyhow::ensure!(!reroute.passthrough_mode.enabled, "Direct Pi's external pi-edgee extension cannot carry required Pass-through mode headers. Use `edgee relay --passthrough pi` or organization Pass-through mode.");
     let mut creds = crate::config::read()?;
 
     if creds.user_token.as_deref().unwrap_or("").is_empty() {

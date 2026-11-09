@@ -109,7 +109,7 @@ fn launch_args(args: &[String], patch_path: &Path) -> Vec<String> {
     result
 }
 
-pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
     let mut creds = crate::config::read()?;
     if creds.user_token.as_deref().unwrap_or("").is_empty() {
         crate::commands::auth::login::perform_login().await?;
@@ -138,7 +138,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
         "x-edgee-api-key": api_key,
         "x-edgee-session-id": session_id,
     });
-    super::pause::insert_headers(&mut headers, requirement.as_ref());
+    super::passthrough_mode::insert_headers(&mut headers, requirement.as_ref());
     if let Some(repo) = crate::git::detect_origin() {
         headers["x-edgee-repo"] = json!(repo);
     }

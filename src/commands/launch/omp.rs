@@ -327,7 +327,7 @@ fn build_anthropic_provider(
     )
 }
 
-pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -408,7 +408,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
     }
     if requirement.is_some() {
         for (_, provider) in &mut providers {
-            for (name, env) in super::pause::HEADER_NAMES.into_iter().zip(super::pause::HEADER_ENVS) {
+            for (name, env) in super::passthrough_mode::HEADER_NAMES.into_iter().zip(super::passthrough_mode::HEADER_ENVS) {
                 provider["headers"][name] = Value::String(env.to_string());
             }
         }
@@ -423,7 +423,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
     cmd.env(API_KEY_ENV, api_key);
     cmd.env(SESSION_ID_ENV, &session_id);
     if let Some(requirement) = &requirement {
-        for ((_, value), env) in requirement.headers().into_iter().zip(super::pause::HEADER_ENVS) {
+        for ((_, value), env) in requirement.headers().into_iter().zip(super::passthrough_mode::HEADER_ENVS) {
             cmd.env(env, value);
         }
     }

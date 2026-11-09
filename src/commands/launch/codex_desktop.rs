@@ -60,7 +60,7 @@ const MANAGED_END: &str = "# <<< edgee managed block";
 #[derive(Debug, clap::Parser)]
 pub struct Options {}
 
-pub async fn run(_opts: Options, reroute: &super::pause::Controls) -> Result<()> {
+pub async fn run(_opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Its own key, so the desktop app reports separately from the `codex` CLI.
@@ -227,7 +227,7 @@ fn render_provider_block(
     repo: Option<&str>,
     debug_headers: Option<&crate::crypto::DebugLogHeaderValues>,
     catalog_url: Option<&str>,
-    requirement: Option<&super::pause::Requirement>,
+    requirement: Option<&super::passthrough_mode::Requirement>,
 ) -> ProviderBlock {
     let catalog_line = catalog_url
         .map(|url| format!("model_catalog_url = \"{}\"\n", toml_escape(url)))
@@ -617,8 +617,8 @@ mod tests {
     }
 
     #[test]
-    fn pause_headers_remain_in_the_desktop_provider_not_user_top_level_config() {
-        let requirement = super::super::pause::Requirement {
+    fn passthrough_headers_remain_in_the_desktop_provider_not_user_top_level_config() {
+        let requirement = super::super::passthrough_mode::Requirement {
             api_key_id: "desktop-key".into(),
             scope_incarnation: "672a7943-3648-46a5-a90f-17b356a13ac4".into(),
             revision: 7,

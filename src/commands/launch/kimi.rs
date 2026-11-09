@@ -81,13 +81,13 @@ fn resolve_model() -> String {
     pick_model(raw.as_deref()).to_string()
 }
 
-pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
-    if reroute.pause.pause_optimizations {
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
+    if reroute.passthrough_mode.enabled {
         let output = std::process::Command::new(util::resolve_binary("kimi"))
             .arg("--version").output()
-            .map_err(|error| anyhow::anyhow!("Cannot verify Kimi custom-header support: {error}. Upgrade Kimi Code to 0.20.2 or newer before using --pause-optimizations."))?;
-        anyhow::ensure!(output.status.success() && supports_pause_headers(&String::from_utf8_lossy(&output.stdout)),
-            "Paused launches require Kimi Code 0.20.2 or newer, which supports KIMI_CODE_CUSTOM_HEADERS. Upgrade Kimi Code or use organization pause.");
+            .map_err(|error| anyhow::anyhow!("Cannot verify Kimi custom-header support: {error}. Upgrade Kimi Code to 0.20.2 or newer before using --passthrough."))?;
+        anyhow::ensure!(output.status.success() && supports_passthrough_headers(&String::from_utf8_lossy(&output.stdout)),
+            "Pass-through mode launches require Kimi Code 0.20.2 or newer, which supports KIMI_CODE_CUSTOM_HEADERS. Upgrade Kimi Code or use organization Pass-through mode.");
     }
     let mut creds = crate::config::read()?;
 
@@ -125,7 +125,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
     let api_key = &kimi.api_key;
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
     let (session_id, requirement) = reroute.create_session(&creds, "kimi", &gateway_url).await?;
-    let pause_headers = super::pause::line_headers(requirement.as_ref());
+    let passthrough_headers = super::passthrough_mode::line_headers(requirement.as_ref());
 
 
 
@@ -160,7 +160,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
     cmd.env(
         "KIMI_CODE_CUSTOM_HEADERS",
         format!(
-            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}{pause_headers}"
+            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}{passthrough_headers}"
         ),
     );
 
@@ -194,7 +194,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
     Ok(())
 }
 
-fn supports_pause_headers(version: &str) -> bool {
+fn supports_passthrough_headers(version: &str) -> bool {
     version.split_whitespace().filter_map(|part| {
         let mut parts = part.trim_matches(|c: char| !c.is_ascii_digit() && c != '.').split('.');
         let version = (parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?);
@@ -203,13 +203,13 @@ fn supports_pause_headers(version: &str) -> bool {
 }
 
 #[cfg(test)]
-mod pause_tests {
+mod passthrough_mode_tests {
     #[test]
-    fn older_kimi_without_custom_headers_is_not_pause_capable() {
-        assert!(!super::supports_pause_headers("kimi, version 0.20.1"));
-        assert!(!super::supports_pause_headers("unknown"));
-        assert!(super::supports_pause_headers("kimi, version 0.20.2"));
-        assert!(super::supports_pause_headers("kimi 1.0.0"));
+    fn older_kimi_without_custom_headers_is_not_passthrough_capable() {
+        assert!(!super::supports_passthrough_headers("kimi, version 0.20.1"));
+        assert!(!super::supports_passthrough_headers("unknown"));
+        assert!(super::supports_passthrough_headers("kimi, version 0.20.2"));
+        assert!(super::supports_passthrough_headers("kimi 1.0.0"));
     }
 }
 

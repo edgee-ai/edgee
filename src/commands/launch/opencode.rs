@@ -460,7 +460,7 @@ fn standalone_args(args: &[String]) -> Vec<String> {
     out
 }
 
-fn reject_pause_server_attachment(args: &[String]) -> Result<()> {
+fn reject_passthrough_server_attachment(args: &[String]) -> Result<()> {
     anyhow::ensure!(
         args.first().is_none_or(|arg| arg != "attach")
             && !args.iter().take_while(|arg| arg.as_str() != "--").any(|arg| {
@@ -468,14 +468,14 @@ fn reject_pause_server_attachment(args: &[String]) -> Result<()> {
                     || arg.starts_with("--server=")
                     || arg.starts_with("--attach=")
             }),
-        "OpenCode server attachment cannot install this launch's pause requirements. Start a standalone session without --server/--attach, or use organization pause."
+        "OpenCode server attachment cannot install this launch's Pass-through mode requirements. Start a standalone session without --server/--attach, or use organization Pass-through mode."
     );
     Ok(())
 }
 
-pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
-    if reroute.pause.pause_optimizations {
-        reject_pause_server_attachment(&opts.args)?;
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
+    if reroute.passthrough_mode.enabled {
+        reject_passthrough_server_attachment(&opts.args)?;
     }
     let mut creds = crate::config::read()?;
 
@@ -568,7 +568,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
         ConfigVersion::V1 => &mut edgee_provider["options"]["headers"],
         ConfigVersion::V2 => &mut edgee_provider["headers"],
     };
-    super::pause::insert_headers(headers, requirement.as_ref());
+    super::passthrough_mode::insert_headers(headers, requirement.as_ref());
     let mut edgee_entry = serde_json::Map::new();
     edgee_entry.insert("edgee".to_string(), edgee_provider);
     plugins::config::merge_object(&mut config, provider_key, Value::Object(edgee_entry));
@@ -669,16 +669,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn paused_opencode_rejects_existing_server_attachment() {
+    fn passthrough_opencode_rejects_existing_server_attachment() {
         for args in [
             vec!["--server", "http://existing"],
             vec!["run", "--server=http://existing"],
             vec!["attach", "http://existing"],
             vec!["run", "--attach", "http://existing"],
         ] {
-            assert!(reject_pause_server_attachment(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
+            assert!(reject_passthrough_server_attachment(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
         }
-        assert!(reject_pause_server_attachment(&["run".into(), "--".into(), "--server".into()]).is_ok());
+        assert!(reject_passthrough_server_attachment(&["run".into(), "--".into(), "--server".into()]).is_ok());
     }
 
     fn provider_with(models: &[&str], limits: &[(&str, u64)]) -> Value {

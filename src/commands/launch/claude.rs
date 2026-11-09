@@ -20,7 +20,7 @@ pub struct Options {
 
 const EDGEE_ALLOWED_TOOLS: &str = "mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitRepo";
 
-pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
     crate::commands::claude_settings::remove_legacy_statusline();
     if opts.relay {
         return crate::commands::relay::run_for_agent("claude", reroute).await;
@@ -71,7 +71,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
     let api_key = &claude.api_key;
     let gateway_url = super::gateway_base_url_with_org(org.as_ref());
     let (session_id, requirement) = reroute.create_session(&creds, "claude", &gateway_url).await?;
-    let pause_headers = super::pause::line_headers(requirement.as_ref());
+    let passthrough_headers = super::passthrough_mode::line_headers(requirement.as_ref());
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
         .as_ref()
@@ -97,7 +97,7 @@ pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> 
         .env(
             "ANTHROPIC_CUSTOM_HEADERS",
             format!(
-                "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}{pause_headers}"
+                "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}{passthrough_headers}"
             ),
         );
 

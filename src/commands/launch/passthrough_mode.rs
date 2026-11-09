@@ -18,20 +18,20 @@ pub const HEADER_ENVS: [&str; 3] = [
 ];
 
 #[derive(Debug, Default, clap::Args)]
-#[group(id = "optimization_pause", multiple = true)]
+#[group(id = "passthrough_mode", multiple = true)]
 pub struct Options {
-    /// Pause session optimizations; traffic and security remain through Edgee
-    #[arg(long)]
-    pub pause_optimizations: bool,
-    /// Pause lifetime in minutes (default: 60; maximum: 1440)
-    #[arg(long, requires = "pause_optimizations", value_name = "MINUTES", value_parser = clap::value_parser!(u16).range(1..=1440))]
-    pub pause_duration: Option<u16>,
+    /// Turn on Pass-through mode for this session; traffic and security remain through Edgee
+    #[arg(long = "passthrough")]
+    pub enabled: bool,
+    /// Pass-through mode lifetime in minutes (default: 60; maximum: 1440)
+    #[arg(long, requires = "enabled", value_name = "MINUTES", value_parser = clap::value_parser!(u16).range(1..=1440))]
+    pub passthrough_duration: Option<u16>,
 }
 
 #[derive(Debug, Default)]
 pub struct Controls {
     pub reroute: super::reroute::Reroute,
-    pub pause: Options,
+    pub passthrough_mode: Options,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -106,13 +106,13 @@ struct Capabilities {
 }
 
 async fn probe(client: &reqwest::Client, gateway_url: &str, api_key: &str) -> Result<()> {
-    let url = crate::config::url_with_path(gateway_url, &["v1", "optimization-pause", "capabilities"])?;
+    let url = crate::config::url_with_path(gateway_url, &["v1", "passthrough-mode", "capabilities"])?;
     let response = client.get(url).bearer_auth(api_key).send().await?
-        .error_for_status().context("Gateway does not support paused launches, or rejected the installed key")?;
-    anyhow::ensure!(response.status().is_success(), "Gateway pause capability endpoint did not return success");
-    let capabilities: Capabilities = response.json().await.context("Unsupported gateway pause capability response; upgrade every serving instance")?;
+        .error_for_status().context("Gateway does not support Pass-through mode launches, or rejected the installed key")?;
+    anyhow::ensure!(response.status().is_success(), "Gateway Pass-through mode capability endpoint did not return success");
+    let capabilities: Capabilities = response.json().await.context("Unsupported gateway Pass-through mode capability response; upgrade every serving instance")?;
     anyhow::ensure!(capabilities.protocol_version == 1 && capabilities.session_revision_requirement,
-        "Gateway does not enforce session revision requirements; upgrade every serving instance before using paused launches");
+        "Gateway does not enforce session revision requirements; upgrade every serving instance before using Pass-through mode launches");
     Ok(())
 }
 
@@ -121,21 +121,21 @@ impl Controls {
         let (session_id, mut requirements) = self.create_session_for_keys(creds, provider, &[provider], gateway_url).await?;
         let key = creds.provider_api_key(provider).context("Missing launch API key")?;
         let requirement = requirements.remove(key);
-        anyhow::ensure!(!self.pause.pause_optimizations || requirement.is_some(), "Agent was not launched. Missing pause requirement for its installed key");
+        anyhow::ensure!(!self.passthrough_mode.enabled || requirement.is_some(), "Agent was not launched. Missing Pass-through mode requirement for its installed key");
         Ok((session_id, requirement))
     }
 
     pub async fn create_session_for_keys(&self, creds: &Credentials, primary: &str, providers: &[&str], gateway_url: &str) -> Result<(String, HashMap<String, Requirement>)> {
-        if !self.pause.pause_optimizations {
+        if !self.passthrough_mode.enabled {
             let session_id = self.reroute.create_session(creds, primary).await?;
             if !self.reroute.is_active() {
                 super::util::report_cli_session(creds, &session_id, primary).await;
             }
             return Ok((session_id, HashMap::new()));
         }
-        anyhow::ensure!(!self.reroute.is_active(), "--pause-optimizations cannot be combined with --reroute");
-        let token = creds.user_token.as_deref().filter(|s| !s.is_empty()).context("Sign in with `edgee auth login` before pausing optimizations")?;
-        let org = creds.org_id.as_deref().filter(|s| !s.is_empty()).context("Select an organization before pausing optimizations")?;
+        anyhow::ensure!(!self.reroute.is_active(), "--passthrough cannot be combined with --reroute");
+        let token = creds.user_token.as_deref().filter(|s| !s.is_empty()).context("Sign in with `edgee auth login` before turning on Pass-through mode")?;
+        let org = creds.org_id.as_deref().filter(|s| !s.is_empty()).context("Select an organization before turning on Pass-through mode")?;
         let mut keys = Vec::new();
         let mut ids = Vec::new();
         for provider in providers {
@@ -149,15 +149,15 @@ impl Controls {
                 keys.push(key.api_key.as_str());
             }
         }
-        anyhow::ensure!(!ids.is_empty() && ids.len() <= 16, "A pause requires between 1 and 16 installed keys");
+        anyhow::ensure!(!ids.is_empty() && ids.len() <= 16, "Pass-through mode requires between 1 and 16 installed keys");
         let primary_id = creds.provider(primary).and_then(|key| key.api_key_id.as_deref()).context("Missing primary launch key ID")?;
-        anyhow::ensure!(ids.iter().any(|id| id == primary_id), "Pause scope omitted the primary launch key");
+        anyhow::ensure!(ids.iter().any(|id| id == primary_id), "Pass-through mode scope omitted the primary launch key");
         let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none()).build()?;
         for key in &keys {
-            probe(&http, gateway_url, key).await.context("Agent was not launched. Gateway pause capability preflight failed")?;
+            probe(&http, gateway_url, key).await.context("Agent was not launched. Gateway Pass-through mode capability preflight failed")?;
         }
         let client = ApiClient::new(token)?;
-        let (session_id, requirements) = reserve(&client, org, primary_id, &ids, self.pause.pause_duration.unwrap_or(60)).await?;
+        let (session_id, requirements) = reserve(&client, org, primary_id, &ids, self.passthrough_mode.passthrough_duration.unwrap_or(60)).await?;
         let requirements = ids.into_iter().zip(keys).map(|(id, key)| (key.to_string(), requirements[&id].clone())).collect();
         Ok((session_id, requirements))
     }
@@ -171,27 +171,27 @@ async fn reserve(client: &ApiClient, org: &str, primary_id: &str, ids: &[String]
 }
 
 async fn publish(client: &ApiClient, org: &str, session_id: &str, ids: &[String], minutes: u16) -> Result<HashMap<String, Requirement>> {
-    let state = client.get_optimization_pause(org, session_id, ids).await.context("Agent was not launched. Could not read the explicit pause scope")?;
-    anyhow::ensure!(state.routing_session_id == session_id && state.launch_id.as_deref() == Some(session_id), "Pause API returned a different launch identity; agent was not launched");
+    let state = client.get_passthrough_mode(org, session_id, ids).await.context("Agent was not launched. Could not read the explicit Pass-through mode scope")?;
+    anyhow::ensure!(state.routing_session_id == session_id && state.launch_id.as_deref() == Some(session_id), "Pass-through mode API returned a different launch identity; agent was not launched");
     let deadline = OffsetDateTime::now_utc() + time::Duration::minutes(i64::from(minutes));
     let expires_at = deadline.format(&Rfc3339)?;
-    eprintln!("Pausing optimizations until {expires_at}. Existing policy resumes then; traffic, security and usage remain through Edgee.");
+    eprintln!("Turning on Pass-through mode until {expires_at}. Existing policy resumes then; traffic, security and usage remain through Edgee.");
     let request = Request {
         api_key_ids: ids, expires_at: &expires_at,
         expected_scope_incarnation: state.scope_incarnation.as_deref(),
         expected_scope_revision: state.scope_revision,
         operation_id: uuid::Uuid::new_v4().to_string(),
     };
-    let status = match client.put_optimization_pause(org, session_id, &request).await {
+    let status = match client.put_passthrough_mode(org, session_id, &request).await {
         Ok(status) => status,
         Err(error) => {
             // A failed response may still have committed. Never infer success or retry the mutation.
-            let refreshed = client.get_optimization_pause(org, session_id, ids).await;
+            let refreshed = client.get_passthrough_mode(org, session_id, ids).await;
             let detail = match refreshed {
                 Ok(state) => format!("authoritative scope revision is {}", state.scope_revision),
                 Err(_) => "authoritative status could not be read".to_string(),
             };
-            anyhow::bail!("Agent was not launched. Pause publication failed ({detail}); inspect the session in the console before retrying: {error:#}");
+            anyhow::bail!("Agent was not launched. Pass-through mode publication failed ({detail}); inspect the session in the console before retrying: {error:#}");
         }
     };
     validate_requirements(status, session_id, ids, deadline.unix_timestamp())
@@ -205,19 +205,19 @@ fn validate_requirements(status: Status, session_id: &str, ids: &[String], deadl
         && status.selected_api_key_ids.len() == expected.len()
         && status.registered_api_key_ids.iter().map(String::as_str).collect::<HashSet<_>>() == expected
         && status.selected_api_key_ids.iter().map(String::as_str).collect::<HashSet<_>>() == expected,
-        "Agent was not launched. Pause API returned an incomplete or mismatched scope");
-    let incarnation = status.scope_incarnation.context("Pause API omitted the scope incarnation")?;
-    uuid::Uuid::parse_str(&incarnation).context("Pause API returned an invalid scope incarnation")?;
+        "Agent was not launched. Pass-through mode API returned an incomplete or mismatched scope");
+    let incarnation = status.scope_incarnation.context("Pass-through mode API omitted the scope incarnation")?;
+    uuid::Uuid::parse_str(&incarnation).context("Pass-through mode API returned an invalid scope incarnation")?;
     let mut requirements = HashMap::new();
     for requirement in status.requirements {
         anyhow::ensure!(expected.contains(requirement.api_key_id.as_str()) && requirement.scope_incarnation == incarnation
             && requirement.revision > 0 && requirement.revision == status.scope_revision
             && requirement.valid_until == deadline,
-            "Agent was not launched. Pause API returned an invalid per-key requirement");
-        anyhow::ensure!(!requirements.contains_key(&requirement.api_key_id), "Pause API returned duplicate key requirements");
+            "Agent was not launched. Pass-through mode API returned an invalid per-key requirement");
+        anyhow::ensure!(!requirements.contains_key(&requirement.api_key_id), "Pass-through mode API returned duplicate key requirements");
         requirements.insert(requirement.api_key_id.clone(), requirement);
     }
-    anyhow::ensure!(requirements.len() == ids.len(), "Agent was not launched. Pause API omitted installed key requirements");
+    anyhow::ensure!(requirements.len() == ids.len(), "Agent was not launched. Pass-through mode API omitted installed key requirements");
     Ok(requirements)
 }
 
@@ -280,7 +280,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pause_registers_primary_once_and_publishes_every_key_for_returned_identity() {
+    async fn passthrough_registers_primary_once_and_publishes_every_key_for_returned_identity() {
         let keys = vec!["copilot-id".to_string(), "claude-id".to_string()];
         let expected = keys.clone();
         let (base, task) = server(3, move |head, body| {
@@ -306,8 +306,8 @@ mod tests {
         let (session, requirements) = reserve(&client, "org", "copilot-id", &keys, 60).await.unwrap();
         let seen = task.await.unwrap();
         assert!(seen[0].0.starts_with(&format!("POST /v1/organizations/org/launch-sessions/{session}/cli-version ")));
-        assert!(seen[1].0.starts_with(&format!("GET /v1/organizations/org/launch-sessions/{session}/optimization-pause?")));
-        assert!(seen[2].0.starts_with(&format!("PUT /v1/organizations/org/launch-sessions/{session}/optimization-pause ")));
+        assert!(seen[1].0.starts_with(&format!("GET /v1/organizations/org/launch-sessions/{session}/passthrough-mode?")));
+        assert!(seen[2].0.starts_with(&format!("PUT /v1/organizations/org/launch-sessions/{session}/passthrough-mode ")));
         assert_eq!(requirements.keys().collect::<HashSet<_>>(), keys.iter().collect::<HashSet<_>>());
         assert_eq!(requirements["claude-id"].valid_until, requirements["copilot-id"].valid_until);
     }
@@ -331,7 +331,7 @@ mod tests {
     #[tokio::test]
     async fn capability_checks_each_key_at_resolved_prefix_and_rejects_mixed_support() {
         let (base, task) = server(2, |head, _| {
-            assert!(head.starts_with("GET /tenant/gateway/v1/optimization-pause/capabilities "));
+            assert!(head.starts_with("GET /tenant/gateway/v1/passthrough-mode/capabilities "));
             let supported = head.to_ascii_lowercase().contains("authorization: bearer primary-key");
             (200, json!({"protocol_version": 1, "session_revision_requirement": supported}))
         }).await;
