@@ -361,17 +361,11 @@ fn merge_nested_object(config: &mut Value, parent: &str, key: &str, value: Value
 /// The `mcp.edgee` entry registering Edgee's own session-tracking MCP
 /// server, same `opencode_mcp` shape `plugins/config.rs` already uses for
 /// third-party plugin servers (`"remote"` discriminant, `enabled: true`).
-fn build_edgee_mcp(token: &str) -> Value {
-    serde_json::json!({
-        "edgee": {
-            "type": "remote",
-            "url": crate::config::mcp_base_url(),
-            "enabled": true,
-            "headers": {
-                "Authorization": format!("Bearer {token}")
-            }
-        }
-    })
+fn build_edgee_mcp(token: &str, launch_id: &str) -> Value {
+    let mut server = super::mcp::edgee_http_server(token, launch_id);
+    server["type"] = "remote".into();
+    server["enabled"] = true.into();
+    serde_json::json!({ "edgee": server })
 }
 
 /// v2 accepts `instructions` but never loads them. A reference's `description`
@@ -466,7 +460,7 @@ fn standalone_args(args: &[String]) -> Vec<String> {
     out
 }
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -513,12 +507,9 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 4: build merged config from user's existing opencode.json + edgee provider
     let opencode = creds.opencode.as_ref().unwrap();
     let api_key = &opencode.api_key;
-    let session_id = uuid::Uuid::new_v4().to_string();
-    util::spawn_cli_version_report(&creds, &session_id);
+    let session_id = reroute.create_session(&creds, "opencode").await?;
+    util::report_cli_session(&creds, &session_id, "opencode").await;
 
-    // First-run: install the persistent user-level statusline integration
-    // exactly once (Claude Code-targeted; honors the disable marker).
-    util::ensure_first_run_installed().await;
 
     let mut config = find_user_config().unwrap_or_else(|| {
         serde_json::json!({
@@ -585,21 +576,10 @@ pub async fn run(opts: Options) -> Result<()> {
     let mut instructions_path: Option<std::path::PathBuf> = None;
     if use_mcp {
         let token = creds.user_token.as_deref().unwrap_or("");
-        merge_mcp(&mut config, version, build_edgee_mcp(token));
+        merge_mcp(&mut config, version, build_edgee_mcp(token, &session_id));
 
         let repo_origin = crate::git::detect_origin();
-        let session_url = match creds.org_slug.as_deref() {
-            Some(slug) if !slug.is_empty() => {
-                format!(
-                    "{}/sessions/{slug}/{session_id}",
-                    crate::config::console_base_url()
-                )
-            }
-            _ => format!(
-                "{}/sessions/{session_id}",
-                crate::config::console_base_url()
-            ),
-        };
+        let session_url = super::mcp::session_url(&creds, &session_id)?;
         let text =
             super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
         match version {
@@ -869,13 +849,14 @@ mod tests {
 
     #[test]
     fn edgee_mcp_uses_the_remote_discriminant() {
-        let mcp = build_edgee_mcp("tok");
+        let mcp = build_edgee_mcp("tok", "launch-current");
         assert_eq!(mcp["edgee"]["type"], serde_json::json!("remote"));
         assert_eq!(mcp["edgee"]["enabled"], serde_json::json!(true));
         assert_eq!(
             mcp["edgee"]["headers"]["Authorization"],
             serde_json::json!("Bearer tok")
         );
+        assert_eq!(mcp["edgee"]["headers"]["X-Edgee-Launch-Id"], "launch-current");
     }
 
     #[test]
@@ -883,7 +864,7 @@ mod tests {
         let mut config = serde_json::json!({
             "mcp": { "house__remote": { "type": "remote", "url": "https://example.com/mcp" } }
         });
-        plugins::config::merge_object(&mut config, "mcp", build_edgee_mcp("tok"));
+        plugins::config::merge_object(&mut config, "mcp", build_edgee_mcp("tok", "launch-current"));
 
         assert_eq!(
             config["mcp"]["house__remote"]["url"],
@@ -1023,7 +1004,7 @@ mod tests {
         let mut config = serde_json::json!({
             "mcp": { "servers": { "house__remote": { "type": "remote" } } }
         });
-        merge_mcp(&mut config, ConfigVersion::V2, build_edgee_mcp("tok"));
+        merge_mcp(&mut config, ConfigVersion::V2, build_edgee_mcp("tok", "launch-current"));
 
         assert_eq!(
             config["mcp"]["servers"]["house__remote"]["type"],
@@ -1079,7 +1060,7 @@ mod tests {
     #[test]
     fn v1_mcp_merges_at_top_level() {
         let mut config = serde_json::json!({});
-        merge_mcp(&mut config, ConfigVersion::V1, build_edgee_mcp("tok"));
+        merge_mcp(&mut config, ConfigVersion::V1, build_edgee_mcp("tok", "launch-current"));
         assert_eq!(config["mcp"]["edgee"]["type"], serde_json::json!("remote"));
     }
 }

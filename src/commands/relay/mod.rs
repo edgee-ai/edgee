@@ -10,6 +10,7 @@
 
 mod handler;
 
+use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,7 +28,7 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 /// Canonical relay targets (same public names as `edgee launch`). See
 /// `src/commands/launch/README.md` for naming rules.
 const TARGETS: &[&str] =
-    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
+    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "phpstorm", "android-studio", "pi", "omp", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
@@ -46,6 +47,10 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
         "copilot-cli" => Some("copilot-cli"),
         "copilot-desktop" => Some("copilot-desktop"),
         "intellij" => Some("intellij"),
+        "phpstorm" => Some("phpstorm"),
+        "android-studio" => Some("android-studio"),
+        "pi" => Some("pi"),
+        "omp" => Some("omp"),
         // GitHub Copilot in VS Code — canonical name is `copilot-vscode`.
         "copilot-vscode" | "vscode-copilot" | "vscode" | "code" => Some("copilot-vscode"),
         _ => None,
@@ -57,9 +62,9 @@ fn is_copilot_vscode(agent: &str) -> bool {
     agent == "copilot-vscode"
 }
 
-/// True for IntelliJ IDEA hosting the GitHub Copilot plugin.
-fn is_intellij(agent: &str) -> bool {
-    agent == "intellij"
+/// True for JetBrains IDEs hosting the GitHub Copilot plugin.
+fn is_jetbrains(agent: &str) -> bool {
+    matches!(agent, "intellij" | "phpstorm" | "android-studio")
 }
 
 /// True for the standalone GitHub Copilot app.
@@ -79,17 +84,17 @@ fn uses_trusted_copilot_ca(agent: &str) -> bool {
     is_copilot_vscode(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent)
 }
 
-/// True for OpenCode running with its existing provider configuration. It is a
-/// generic passthrough target and may use GitHub Copilot, so its relay must also
+/// True for provider CLIs running with their existing provider configuration in
+/// generic passthrough mode and may use GitHub Copilot, so the relay must also
 /// intercept the Copilot-only hosts.
-fn is_opencode(agent: &str) -> bool {
-    agent == "opencode"
+fn is_provider_cli(agent: &str) -> bool {
+    matches!(agent, "opencode" | "pi" | "omp")
 }
 
-/// Whether this relay target can produce GitHub Copilot traffic. OpenCode is
+/// Whether this relay target can produce GitHub Copilot traffic. Provider CLIs are
 /// included because Copilot may be selected in the user's existing config.
 fn intercepts_copilot_hosts(agent: &str) -> bool {
-    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_intellij(agent) || is_copilot_vscode(agent) || is_opencode(agent)
+    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_jetbrains(agent) || is_copilot_vscode(agent) || is_provider_cli(agent)
 }
 
 /// True for the Cursor relay target (launches the `cursor` binary).
@@ -107,13 +112,13 @@ fn is_claude_desktop(agent: &str) -> bool {
 /// announce per-request), and the gateway forwards to the editor's own backend
 /// rather than routing through an Edgee provider pipeline.
 fn is_gui_editor(agent: &str) -> bool {
-    is_copilot_vscode(agent) || is_intellij(agent) || is_cursor(agent)
+    is_copilot_vscode(agent) || is_jetbrains(agent) || is_cursor(agent)
 }
 
 /// Whether requests retain the agent's existing provider credentials and must
 /// be forwarded to their original upstream by the gateway.
 fn uses_upstream_credentials(agent: &str) -> bool {
-    is_gui_editor(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent) || is_opencode(agent)
+    is_gui_editor(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent) || is_provider_cli(agent)
 }
 
 /// Display name of the GUI editor behind a relay target, for user-facing messages.
@@ -121,8 +126,12 @@ fn uses_upstream_credentials(agent: &str) -> bool {
 fn editor_app_name(agent: &str) -> &'static str {
     if is_cursor(agent) {
         "Cursor"
-    } else if is_intellij(agent) {
+    } else if agent == "intellij" {
         "IntelliJ IDEA"
+    } else if agent == "phpstorm" {
+        "PHPStorm"
+    } else if agent == "android-studio" {
+        "Android Studio"
     } else {
         "VS Code"
     }
@@ -174,7 +183,8 @@ fn macos_cli_path_hint(agent: &str) -> Option<&'static [&'static str]> {
 fn key_provider(target: &str) -> &str {
     match target {
         // Copilot surfaces share one provider key and retain GitHub credentials.
-        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" => "copilot",
+        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" | "phpstorm" | "android-studio" => "copilot",
+        "omp" => "pi",
         // Claude Desktop is a dedicated backend agent with its own key/compression
         // (coding_assistant `claude_desktop`), so it maps to its own provider slot
         // rather than sharing the `claude` (Claude Code) key.
@@ -186,7 +196,7 @@ fn key_provider(target: &str) -> &str {
 }
 
 setup_command! {
-    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|copilot-vscode|cursor|opencode).
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|phpstorm|android-studio|copilot-vscode|cursor|opencode|pi|omp).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
@@ -194,7 +204,7 @@ setup_command! {
     #[arg(long)]
     pub no_launch: bool,
     /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200,
-    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700) so multiple relays can
+    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700, phpstorm 41800, pi 41900, omp 42000, android-studio 42100) so multiple relays can
     /// run side by side.
     #[arg(long)]
     pub port: Option<u16>,
@@ -217,6 +227,13 @@ setup_command! {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
+    run_with_reroute(opts, &crate::commands::launch::reroute::Reroute::default()).await
+}
+
+async fn run_with_reroute(
+    opts: Options,
+    reroute: &crate::commands::launch::reroute::Reroute,
+) -> Result<()> {
     let raw = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
     if opts.untrust {
         let agent = canonicalize_target(&raw)
@@ -267,6 +284,16 @@ pub async fn run(opts: Options) -> Result<()> {
             crate::commands::auth::login::ensure_onboarded("claude").await?;
         }
     }
+    // Provider CLIs can use Codex's ChatGPT subscription endpoint as well as
+    // Copilot. That endpoint requires the Codex pipeline, not passthrough.
+    if is_provider_cli(&agent) {
+        let reprov = crate::commands::auth::login::ensure_valid_provider_key("codex")
+            .await?
+            .created;
+        if reprov && interactive {
+            crate::commands::auth::login::ensure_onboarded("codex").await?;
+        }
+    }
     creds = crate::config::read()?;
 
     let api_key = creds
@@ -280,7 +307,12 @@ pub async fn run(opts: Options) -> Result<()> {
     } else {
         None
     };
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, &provider).await?;
+    // Same report every direct launch sends. Besides the version, it stores the
+    // session's org, which is how the Edgee MCP server resolves a session that
+    // has no gateway records yet. Without it, `setSessionName` on the first turn
+    // answers "Session not found" for members of more than one org.
+    crate::commands::launch::util::report_cli_session(&creds, &session_id, &provider).await;
     let org_slug = creds.org_slug.clone().unwrap_or_default();
     let repo = crate::git::detect_origin();
 
@@ -290,7 +322,7 @@ pub async fn run(opts: Options) -> Result<()> {
     // backend, so record the original upstream.
     let passthrough_to_upstream = uses_upstream_credentials(&agent);
     let debug_log_headers = crate::commands::launch::util::resolve_debug_log_keypair()?.map(|k| k.header_values());
-    let gateway = build_gateway_target(
+    let mut gateway = build_gateway_target(
         &gateway_url,
         api_key,
         session_id.clone(),
@@ -299,6 +331,10 @@ pub async fn run(opts: Options) -> Result<()> {
         claude_api_key,
         debug_log_headers,
     )?;
+
+    if is_provider_cli(&agent) {
+        gateway.codex_api_key = creds.provider_api_key("codex").map(str::to_string);
+    }
 
     // Native Copilot clients and GUI front-ends use dedicated, name-constrained
     // CAs because their TLS stacks do not consistently trust NODE_EXTRA_CA_CERTS.
@@ -316,7 +352,7 @@ pub async fn run(opts: Options) -> Result<()> {
     };
     let ca = build_ca(&cert_pem, &key_pem)?;
     let port = opts.port.unwrap_or_else(|| {
-        if is_copilot_desktop(&agent) { 41600 } else if is_intellij(&agent) { 41700 } else { default_port(&provider) }
+        if is_copilot_desktop(&agent) { 41600 } else if agent == "intellij" { 41700 } else if agent == "phpstorm" { 41800 } else if agent == "omp" { 42000 } else if agent == "android-studio" { 42100 } else { default_port(&provider) }
     });
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
@@ -361,7 +397,8 @@ pub async fn run(opts: Options) -> Result<()> {
         opts.log_output.as_deref(),
         &gateway,
         &session_id,
-    );
+        &org_slug,
+    )?;
 
     // Run proxy-only when no agent is named, or when `--no-launch` is set (e.g.
     // driving an external client like Claude Desktop against a named provider's
@@ -387,6 +424,7 @@ pub async fn run(opts: Options) -> Result<()> {
         // already delivered is missed and we'd wait for a second press. GUI editors
         // leave the terminal free, so their Ctrl-C really does reach us as SIGINT
         // (TUI agents keep the terminal in raw mode and swallow it themselves).
+        let extras = AgentExtras::passthrough(&opts.extra_args);
         let mut interrupt = std::pin::pin!(shutdown_signal());
         let mut editor = std::pin::pin!(run_agent(
             &agent,
@@ -395,7 +433,7 @@ pub async fn run(opts: Options) -> Result<()> {
             &key_pem,
             &session_id,
             &org_slug,
-            &opts.extra_args,
+            &extras,
         ));
         let exited = tokio::select! {
             res = &mut editor => Some(res?),
@@ -438,7 +476,7 @@ pub async fn run(opts: Options) -> Result<()> {
             &key_pem,
             &session_id,
             &org_slug,
-            &opts.extra_args,
+            &AgentExtras::passthrough(&opts.extra_args),
         )?;
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
@@ -493,6 +531,18 @@ pub async fn run(opts: Options) -> Result<()> {
         // TUI agents (Claude Code, Codex) run in this terminal and handle their own
         // Ctrl-C in raw mode, so we just wait for them to exit — no signal race and
         // no child kill, which would fight the agent's own SIGINT handling.
+        //
+        // Copilot CLI gets Edgee's MCP server, session instructions and org
+        // plugins. Prepared here, not in its launch target, because it needs
+        // the session this relay just created.
+        let (mut extras, copilot) = if is_copilot_cli(&agent) {
+            let (extras, session) =
+                crate::commands::launch::copilot_cli::prepare(&session_id, interactive).await?;
+            (extras, Some(session))
+        } else {
+            (AgentExtras::default(), None)
+        };
+        extras.args.extend(opts.extra_args.iter().map(OsString::from));
         let task = tokio::spawn(async move {
             let _ = proxy.start().await;
         });
@@ -503,10 +553,14 @@ pub async fn run(opts: Options) -> Result<()> {
             &key_pem,
             &session_id,
             &org_slug,
-            &opts.extra_args,
+            &extras,
         )
         .await?;
         task.abort();
+        // Before `exit`, which would skip the destructors cleaning up after it.
+        if let Some(copilot) = copilot {
+            copilot.finish(&session_id).await;
+        }
         if let Some(code) = status.code() {
             std::process::exit(code);
         }
@@ -517,24 +571,52 @@ pub async fn run(opts: Options) -> Result<()> {
 
 /// Run the relay for `agent` with default options. Entry point for
 /// `edgee launch <agent> --relay`.
-pub async fn run_for_agent(agent: &str) -> Result<()> {
-    run_for_agent_with_args(agent, &[]).await
+pub async fn run_for_agent(
+    agent: &str,
+    reroute: &crate::commands::launch::reroute::Reroute,
+) -> Result<()> {
+    run_for_agent_with_args(agent, &[], reroute).await
 }
 
 /// Run the relay for `agent`, forwarding `extra_args` to the spawned agent's
 /// binary. Used by CLI launch targets that relay (currently `copilot-cli`), so
 /// flags the user passes after the target reach the agent unchanged.
-pub async fn run_for_agent_with_args(agent: &str, extra_args: &[String]) -> Result<()> {
-    run(Options {
-        agent: Some(agent.to_string()),
-        no_launch: false,
-        port: None,
-        log_output: None,
-        untrust: false,
-        non_interactive: false,
-        extra_args: extra_args.to_vec(),
-    })
+pub async fn run_for_agent_with_args(
+    agent: &str,
+    extra_args: &[String],
+    reroute: &crate::commands::launch::reroute::Reroute,
+) -> Result<()> {
+    run_with_reroute(
+        Options {
+            agent: Some(agent.to_string()),
+            no_launch: false,
+            port: None,
+            log_output: None,
+            untrust: false,
+            non_interactive: false,
+            extra_args: extra_args.to_vec(),
+        },
+        reroute,
+    )
     .await
+}
+
+/// Argv and env for the spawned agent on top of the relay's own proxy and CA
+/// wiring. A launch target's injected flags go first, the user's passthrough
+/// args last.
+#[derive(Debug, Default)]
+pub(crate) struct AgentExtras {
+    pub args: Vec<OsString>,
+    pub env: Vec<(&'static str, OsString)>,
+}
+
+impl AgentExtras {
+    fn passthrough(user_args: &[String]) -> Self {
+        Self {
+            args: user_args.iter().map(OsString::from).collect(),
+            env: Vec::new(),
+        }
+    }
 }
 
 /// Default listen port per agent, picked from an uncommon range so two relays
@@ -545,6 +627,7 @@ fn default_port(provider: &str) -> u16 {
         "cursor" => 41300,
         "claude_desktop" => 41400,
         "opencode" => 41500,
+        "pi" => 41900,
         _ => 41100, // claude / copilot / proxy-only
     }
 }
@@ -575,6 +658,7 @@ fn build_gateway_target(
         repo,
         passthrough_to_upstream,
         claude_api_key,
+        codex_api_key: None,
         debug_log_headers,
     })
 }
@@ -1102,6 +1186,19 @@ fn spawn_bin_name_and_args(agent: &str) -> (&str, &'static [&'static str]) {
     }
 }
 
+/// Pi uses Node fetch, while OMP has a provider-aware Bun fetch wrapper.
+fn configure_pi_proxy(cmd: &mut tokio::process::Command, agent: &str, proxy_url: &str) {
+    if agent == "pi" {
+        // Enable env proxy support for Node's native fetch on supported runtimes.
+        cmd.env("NODE_USE_ENV_PROXY", "1");
+    } else if agent == "omp" {
+        // OMP's own proxy variables take precedence over HTTPS_PROXY. Set both
+        // scopes so an inherited Copilot override cannot bypass this relay.
+        cmd.env("PI_PROXY", proxy_url);
+        cmd.env("PI_PROXY_GITHUB_COPILOT", proxy_url);
+    }
+}
+
 /// Spawn the named agent wired through the proxy and return the live child handle
 /// (the caller awaits it, and kills it on Ctrl-C). The proxy injects Edgee auth on
 /// reroute, so no base-URL / custom-header env is needed here.
@@ -1112,7 +1209,7 @@ fn spawn_agent(
     ca_key_pem: &str,
     session_id: &str,
     org_slug: &str,
-    extra_args: &[String],
+    extras: &AgentExtras,
 ) -> Result<tokio::process::Child> {
     let proxy_url = format!("http://127.0.0.1:{port}");
 
@@ -1125,13 +1222,20 @@ fn spawn_agent(
     // NODE_EXTRA_CA_CERTS *and* the --ignore-certificate-errors* switches when
     // passed via argv), so the relay CA must be trusted in the keychain — handled
     // in the System keychain by `ensure_ca_trusted` in `run`.
-    let mut cmd = if is_intellij(agent) {
-        let mut c = tokio::process::Command::new(crate::commands::launch::intellij::binary()?);
-        c.args(extra_args).stdin(std::process::Stdio::null());
+    let mut cmd = if is_jetbrains(agent) {
+        let bin = if agent == "phpstorm" {
+            crate::commands::launch::phpstorm::binary()?
+        } else if agent == "android-studio" {
+            crate::commands::launch::android_studio::binary()?
+        } else {
+            crate::commands::launch::intellij::binary()?
+        };
+        let mut c = tokio::process::Command::new(bin);
+        c.args(&extras.args).stdin(std::process::Stdio::null());
         c
     } else if is_copilot_desktop(agent) {
         let mut c = tokio::process::Command::new(crate::commands::launch::copilot_desktop::binary()?);
-        c.args(extra_args)
+        c.args(&extras.args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -1167,7 +1271,7 @@ fn spawn_agent(
         // forward the user's flags to the spawned binary. GUI editors never have
         // extra args — their launch targets parse none — so they stay untouched.
         if !is_gui_editor(agent) {
-            c.args(extra_args);
+            c.args(&extras.args);
         }
         // Cursor's Electron net module ignores HTTPS_PROXY; --proxy-server routes
         // all HTTPS traffic through the relay so BidiAppend / RunSSE are intercepted.
@@ -1187,6 +1291,7 @@ fn spawn_agent(
     cmd.env("HTTP_PROXY", &proxy_url);
     cmd.env("https_proxy", &proxy_url);
     cmd.env("http_proxy", &proxy_url);
+    configure_pi_proxy(&mut cmd, agent, &proxy_url);
     // Exempt loopback from the proxy. The proxy env is inherited by every child
     // process the agent spawns — notably MCP servers, which commonly talk to a
     // local endpoint (`http://127.0.0.1:PORT`). Without a bypass, Node-based MCP
@@ -1213,6 +1318,7 @@ fn spawn_agent(
     );
     cmd.env("EDGEE_ORG_SLUG", org_slug);
     cmd.env("EDGEE_PROFILE", crate::config::active_profile_name());
+    cmd.envs(extras.env.iter().map(|(k, v)| (k, v)));
 
     cmd.spawn().with_context(|| {
         // A GUI editor most often fails here because its CLI isn't on PATH.
@@ -1234,7 +1340,7 @@ async fn run_agent(
     ca_key_pem: &str,
     session_id: &str,
     org_slug: &str,
-    extra_args: &[String],
+    extras: &AgentExtras,
 ) -> Result<std::process::ExitStatus> {
     Ok(spawn_agent(
         agent,
@@ -1243,7 +1349,7 @@ async fn run_agent(
         ca_key_pem,
         session_id,
         org_slug,
-        extra_args,
+        extras,
     )?
         .wait()
         .await?)
@@ -1277,7 +1383,7 @@ fn spki_sha256(key_pem: &str) -> Result<String> {
 /// Resolve the Claude Desktop executable to launch behind the relay. Claude
 /// Desktop ships on macOS and Windows; we spawn the app's own binary (not
 /// `open`/a shim) so the relay's proxy env and CA trust propagate to it.
-fn claude_desktop_binary() -> Result<PathBuf> {
+pub(crate) fn claude_desktop_binary() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let mut candidates = vec![PathBuf::from("/Applications/Claude.app/Contents/MacOS/Claude")];
@@ -1383,7 +1489,8 @@ fn print_banner(
     log_output: Option<&Path>,
     gateway: &GatewayTarget,
     session_id: &str,
-) {
+    org_slug: &str,
+) -> Result<()> {
     println!("{}", style("edgee relay").bold().green());
     println!("  proxy:    http://{addr}");
     println!("  CA cert:  {}", cert_path.display());
@@ -1393,14 +1500,15 @@ fn print_banner(
     );
     println!("  session:  {session_id}");
     println!(
-        "  console:  {}/sessions/{session_id}",
-        crate::config::console_base_url()
+        "  console:  {}",
+        crate::config::console_launch_session_url(Some(org_slug), session_id)?
     );
     match log_output {
         Some(p) => println!("  logs:     {}", p.display()),
         None => println!("  logs:     disabled"),
     }
     println!();
+    Ok(())
 }
 
 /// Hint printed before launching Claude Desktop behind the relay. Unlike the
@@ -1448,12 +1556,12 @@ fn print_claude_desktop_hint() {
 
 fn print_gui_editor_hint(agent: &str) {
     let app = editor_app_name(agent);
-    if is_intellij(agent) {
-        println!("Launching IntelliJ IDEA with Copilot through Edgee.");
-        println!("Quit all IntelliJ IDEA windows first so Copilot receives the connection settings.");
+    if is_jetbrains(agent) {
+        println!("Launching {app} with Copilot through Edgee.");
+        println!("Quit all {app} windows first so Copilot receives the connection settings.");
         println!("Install and sign in to the GitHub Copilot plugin. Usage is grouped under Copilot.");
         println!("IDE HTTP Proxy settings override the launch environment; use No proxy there to use Edgee.");
-        println!("Keep this command running, and quit IntelliJ IDEA before stopping it with Ctrl-C.");
+        println!("Keep this command running, and quit {app} before stopping it with Ctrl-C.");
         return;
     }
     let (cli, launch, feature) = if is_cursor(agent) {
@@ -1538,6 +1646,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn phpstorm_uses_copilot_subscription_and_editor_lifecycle() {
+        assert_eq!(canonicalize_target("phpstorm"), Some("phpstorm"));
+        assert_eq!(key_provider("phpstorm"), "copilot");
+        assert!(uses_upstream_credentials("phpstorm"));
+        assert!(intercepts_copilot_hosts("phpstorm"));
+        assert!(is_gui_editor("phpstorm"));
+        assert_eq!(editor_app_name("phpstorm"), "PHPStorm");
+        assert!(!uses_trusted_copilot_ca("phpstorm"));
+    }
+
+    #[test]
+    fn android_studio_uses_copilot_subscription_and_editor_lifecycle() {
+        assert_eq!(canonicalize_target("android-studio"), Some("android-studio"));
+        assert!(TARGETS.contains(&"android-studio"));
+        assert_eq!(key_provider("android-studio"), "copilot");
+        assert!(uses_upstream_credentials("android-studio"));
+        assert!(intercepts_copilot_hosts("android-studio"));
+        assert!(is_gui_editor("android-studio"));
+        assert!(is_jetbrains("android-studio"));
+        assert_eq!(editor_app_name("android-studio"), "Android Studio");
+        assert!(!uses_trusted_copilot_ca("android-studio"));
+    }
+
+    #[test]
+    fn pi_and_omp_receive_runtime_proxy_settings() {
+        let proxy = "http://127.0.0.1:41900";
+        for (target, vars) in [
+            ("pi", vec![("NODE_USE_ENV_PROXY", "1")]),
+            ("omp", vec![("PI_PROXY", proxy), ("PI_PROXY_GITHUB_COPILOT", proxy)]),
+        ] {
+            let mut cmd = tokio::process::Command::new(target);
+            configure_pi_proxy(&mut cmd, target, proxy);
+            for (name, value) in vars {
+                assert!(cmd.as_std().get_envs().any(|(key, val)| key == name && val == Some(std::ffi::OsStr::new(value))));
+            }
+        }
+    }
+
+    #[test]
+    fn pi_and_omp_relay_preserve_provider_credentials() {
+        for target in ["pi", "omp"] {
+            assert_eq!(canonicalize_target(target), Some(target));
+            assert_eq!(key_provider(target), "pi");
+            assert!(uses_upstream_credentials(target));
+            assert!(intercepts_copilot_hosts(target));
+            assert!(!is_gui_editor(target));
+            assert!(!uses_trusted_copilot_ca(target));
+            assert_eq!(spawn_bin_name_and_args(target), (target, &[][..]));
+        }
+    }
+
+    #[test]
     fn intellij_uses_copilot_subscription_and_editor_lifecycle() {
         assert_eq!(canonicalize_target("intellij"), Some("intellij"));
         assert_eq!(key_provider("intellij"), "copilot");
@@ -1615,7 +1775,7 @@ mod tests {
 
     #[test]
     fn opencode_relay_uses_its_own_key_and_binary() {
-        assert!(is_opencode("opencode"));
+        assert!(is_provider_cli("opencode"));
         assert!(uses_upstream_credentials("opencode"));
         assert_eq!(key_provider("opencode"), "opencode");
         assert_eq!(spawn_bin_name_and_args("opencode"), ("opencode", &[][..]));
