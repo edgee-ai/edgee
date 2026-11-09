@@ -52,7 +52,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     util::report_cli_session(&creds, &session_id, "codebuddy").await;
 
     let repo_entry = crate::git::detect_origin()
-        .map(|url| format!(",\"x-edgee-repo\"=\"{url}\""))
+        .map(|url| format!("\nx-edgee-repo: {url}"))
         .unwrap_or_default();
     let debug_log_header = util::resolve_debug_log_keypair()?
         .map(|keypair| {
