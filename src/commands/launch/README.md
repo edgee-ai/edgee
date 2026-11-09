@@ -75,8 +75,8 @@ Avoid ambiguous host-only names like bare `vscode` as a **canonical** target —
 VS Code can host Copilot, Claude Code, etc. Prefer `copilot-vscode`, and later
 `claude-vscode`, not a single `vscode` catch-all.
 
-Exception: `intellij` and `phpstorm` are the chosen public targets for IntelliJ IDEA
-and PHPStorm. Each currently
+Exception: `intellij`, `phpstorm` and `android-studio` are the chosen public targets
+for IntelliJ IDEA, PHPStorm and Android Studio. Each currently
 routes the GitHub Copilot plugin, shares the `copilot` provider key, and does not
 imply support for other AI plugins in the IDE.
 
@@ -112,6 +112,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `cursor` | Cursor IDE | `cursor` | Writes Edgee as Cursor's OpenAI-compatible BYOK provider and adds each model's catalog reasoning efforts to Cursor's picker metadata; `edgee relay cursor` restores prior settings and retains the Plan relay |
 | `intellij` | GitHub Copilot in IntelliJ IDEA | `copilot` | Direct IDE launch with proxy env + Node CA; live-session validation pending |
 | `phpstorm` | GitHub Copilot in PHPStorm | `copilot` | Same relay and lifecycle as IntelliJ; live-session validation pending |
+| `android-studio` | GitHub Copilot in Android Studio | `copilot` | Same relay and lifecycle as IntelliJ; live-session validation pending |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + dedicated system-trusted Copilot CA |
 | `copilot-cli` | GitHub Copilot CLI | `copilot` | Relays the `copilot` binary directly (TUI, no `--wait`) — deliberately not env-injected; see below |
@@ -636,6 +637,22 @@ The launcher detects `PhpStorm.app` or `PHPStorm.app` in system/user Application
 on macOS, or `phpstorm` / `phpstorm.sh` (`phpstorm64.exe` / `phpstorm.exe` on
 Windows) on PATH. Set `EDGEE_PHPSTORM_BINARY` for another executable location.
 `edgee alias phpstorm` installs a desktop wrapper when the IDE is detected.
+Keep the terminal running until the IDE quits. Live Copilot validation is pending.
+
+## `android-studio` — GitHub Copilot in Android Studio
+
+Quit Android Studio completely, then run `edgee launch android-studio /path/to/project`.
+Android Studio is built on the IntelliJ Platform, so it uses the same Copilot relay,
+proxy environment, Node CA and editor lifecycle as IntelliJ, on local port 42100.
+Install and sign in to the GitHub Copilot plugin, and use **No proxy** in the IDE's
+HTTP Proxy settings so the launch environment applies. Only the GitHub Copilot
+plugin is routed; Gemini in Android Studio is out of scope.
+
+The launcher detects `Android Studio.app` or `Android Studio Preview.app` in
+system/user Applications on macOS, or `studio` / `studio.sh` (`studio64.exe` /
+`studio.exe` on Windows) on PATH. Set `EDGEE_ANDROID_STUDIO_BINARY` for another
+executable location (on macOS, `Contents/MacOS/studio` inside the bundle).
+`edgee alias android-studio` installs a desktop wrapper when the IDE is detected.
 Keep the terminal running until the IDE quits. Live Copilot validation is pending.
 
 ## Pi and OMP with existing provider logins

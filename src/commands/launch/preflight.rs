@@ -64,6 +64,7 @@ pub(super) fn check(command: &Command) -> Result<()> {
         Command::CopilotDesktop(_) => return super::copilot_desktop::binary().map(|_| ()),
         Command::Intellij(_) => return super::intellij::binary().map(|_| ()),
         Command::Phpstorm(_) => return super::phpstorm::binary().map(|_| ()),
+        Command::AndroidStudio(_) => return super::android_studio::binary().map(|_| ()),
     };
     anyhow::ensure!(util::find_binary(binary).is_some(), "{message}");
     Ok(())

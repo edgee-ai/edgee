@@ -86,10 +86,19 @@ pub const PHPSTORM_APP: AppSpec = AppSpec {
     legacy_display_names: &[],
 };
 
+pub const ANDROID_STUDIO_APP: AppSpec = AppSpec {
+    id: "android-studio",
+    display_name: "Android Studio Copilot (Edgee)",
+    host_label: "Android Studio",
+    launch_target: "android-studio",
+    legacy_display_names: &[],
+};
+
 pub const ALL_APPS: &[AppSpec] = &[
     CURSOR_APP,
     INTELLIJ_APP,
     PHPSTORM_APP,
+    ANDROID_STUDIO_APP,
     COPILOT_VSCODE_APP,
     CLAUDE_DESKTOP_APP,
     CODEX_DESKTOP_APP,
@@ -271,6 +280,7 @@ pub fn target_app_installed(app: &AppSpec) -> bool {
         "claude-desktop" => claude_desktop_installed(),
         "phpstorm" => crate::commands::launch::phpstorm::binary().is_ok(),
         "intellij" => crate::commands::launch::intellij::binary().is_ok(),
+        "android-studio" => crate::commands::launch::android_studio::binary().is_ok(),
         "copilot-desktop" => crate::commands::launch::copilot_desktop::binary().is_ok(),
         "codex-desktop" => crate::commands::launch::codex_desktop::binary().is_ok(),
         _ => false,
