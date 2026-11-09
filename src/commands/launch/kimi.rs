@@ -81,7 +81,14 @@ fn resolve_model() -> String {
     pick_model(raw.as_deref()).to_string()
 }
 
-pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
+    if reroute.pause.pause_optimizations {
+        let output = std::process::Command::new(util::resolve_binary("kimi"))
+            .arg("--version").output()
+            .map_err(|error| anyhow::anyhow!("Cannot verify Kimi custom-header support: {error}. Upgrade Kimi Code to 0.20.2 or newer before using --pause-optimizations."))?;
+        anyhow::ensure!(output.status.success() && supports_pause_headers(&String::from_utf8_lossy(&output.stdout)),
+            "Paused launches require Kimi Code 0.20.2 or newer, which supports KIMI_CODE_CUSTOM_HEADERS. Upgrade Kimi Code or use organization pause.");
+    }
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -116,11 +123,11 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
 
     let kimi = creds.kimi.as_ref().unwrap();
     let api_key = &kimi.api_key;
-    let session_id = reroute.create_session(&creds, "kimi").await?;
-
-    util::report_cli_session(&creds, &session_id, "kimi").await;
-
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let (session_id, requirement) = reroute.create_session(&creds, "kimi", &gateway_url).await?;
+    let pause_headers = super::pause::line_headers(requirement.as_ref());
+
+
 
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
@@ -153,7 +160,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     cmd.env(
         "KIMI_CODE_CUSTOM_HEADERS",
         format!(
-            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}"
+            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}{pause_headers}"
         ),
     );
 
@@ -185,6 +192,25 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     }
 
     Ok(())
+}
+
+fn supports_pause_headers(version: &str) -> bool {
+    version.split_whitespace().filter_map(|part| {
+        let mut parts = part.trim_matches(|c: char| !c.is_ascii_digit() && c != '.').split('.');
+        let version = (parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?);
+        parts.next().is_none().then_some(version)
+    }).any(|version| version >= (0, 20, 2))
+}
+
+#[cfg(test)]
+mod pause_tests {
+    #[test]
+    fn older_kimi_without_custom_headers_is_not_pause_capable() {
+        assert!(!super::supports_pause_headers("kimi, version 0.20.1"));
+        assert!(!super::supports_pause_headers("unknown"));
+        assert!(super::supports_pause_headers("kimi, version 0.20.2"));
+        assert!(super::supports_pause_headers("kimi 1.0.0"));
+    }
 }
 
 #[cfg(test)]

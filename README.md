@@ -232,6 +232,40 @@ edgee launch opencode -c                   # continue the last OpenCode session
 edgee launch codebuddy --resume <id>       # resume a CodeBuddy session
 ```
 
+### Pause optimizations without bypassing Edgee
+
+```bash
+edgee launch --pause-optimizations claude
+edgee launch --pause-optimizations --pause-duration 120 codex
+edgee relay --pause-optimizations --pause-duration 60 cursor
+```
+
+Place these options **before the agent name**. A pause lasts 60 minutes by default;
+`--pause-duration` accepts 1–1440 minutes, with no automatic renewal. It cannot be
+combined with `--reroute`.
+
+Traffic stays through Edgee, but compression, brevity injection, tool-surface
+reduction, model reroutes and alternate-provider fallback stop. Authentication,
+security, budgets and usage accounting remain active. Existing bounded retries
+to the same destination remain possible. Stored settings and reroutes are retained
+and take effect again after expiry or resume.
+
+The CLI checks gateway support and publishes the pause for every installed key
+before starting the agent. Requests fail closed until that publication reaches the
+serving gateway. An unsupported gateway or failed publication prevents launch.
+Direct Cursor and Pi launches cannot carry this guarantee: use their relay mode
+or an organization pause. Kimi requires version 0.20.2 or newer. Paused OpenCode
+launches cannot attach to an existing server, and Codex cannot select a local
+provider or override the configured Edgee transport.
+
+Organization admins can also use **Settings → Gateway → Disable optimizations**.
+Disabling optimizations here persists until an admin enables them again.
+Organization settings override session controls.
+The session page supports explicit key selection and expiry; its status shows
+saved configuration, not acknowledgement from every gateway. Enabling optimizations
+for a session does not override an organization-wide disable or delete stored reroutes.
+Local MCP integrations, plugins and mods are not disabled.
+
 ### Reroute a session at launch
 
 Put Edgee reroute options **before the agent name**:

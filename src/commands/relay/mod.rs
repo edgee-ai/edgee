@@ -196,6 +196,8 @@ fn key_provider(target: &str) -> &str {
 }
 
 setup_command! {
+    #[command(flatten)]
+    pub pause: crate::commands::launch::pause::Options,
     /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|phpstorm|android-studio|copilot-vscode|cursor|opencode|pi|omp).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
@@ -227,12 +229,19 @@ setup_command! {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    run_with_reroute(opts, &crate::commands::launch::reroute::Reroute::default()).await
+    let controls = crate::commands::launch::pause::Controls {
+        pause: crate::commands::launch::pause::Options {
+            pause_optimizations: opts.pause.pause_optimizations,
+            pause_duration: opts.pause.pause_duration,
+        },
+        ..Default::default()
+    };
+    run_with_reroute(opts, &controls).await
 }
 
 async fn run_with_reroute(
     opts: Options,
-    reroute: &crate::commands::launch::reroute::Reroute,
+    reroute: &crate::commands::launch::pause::Controls,
 ) -> Result<()> {
     let raw = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
     if opts.untrust {
@@ -307,16 +316,19 @@ async fn run_with_reroute(
     } else {
         None
     };
-    let session_id = reroute.create_session(&creds, &provider).await?;
-    // Same report every direct launch sends. Besides the version, it stores the
-    // session's org, which is how the Edgee MCP server resolves a session that
-    // has no gateway records yet. Without it, `setSessionName` on the first turn
-    // answers "Session not found" for members of more than one org.
-    crate::commands::launch::util::report_cli_session(&creds, &session_id, &provider).await;
+    let gateway_url = crate::commands::launch::resolve_gateway_base_url(&creds).await;
+    let mut providers = vec![provider.as_str()];
+    if is_copilot_vscode(&agent) {
+        providers.push("claude");
+    }
+    if is_provider_cli(&agent) {
+        providers.push("codex");
+    }
+    let (session_id, pause_requirements) = reroute
+        .create_session_for_keys(&creds, &provider, &providers, &gateway_url).await?;
     let org_slug = creds.org_slug.clone().unwrap_or_default();
     let repo = crate::git::detect_origin();
 
-    let gateway_url = crate::commands::launch::resolve_gateway_base_url(&creds).await;
     // GUI editors, the Copilot CLI, and relayed OpenCode keep using their existing
     // provider credentials. The gateway forwards their rerouted calls to that real
     // backend, so record the original upstream.
@@ -335,6 +347,9 @@ async fn run_with_reroute(
     if is_provider_cli(&agent) {
         gateway.codex_api_key = creds.provider_api_key("codex").map(str::to_string);
     }
+    gateway.pause_requirements = pause_requirements.into_iter()
+        .map(|(key, requirement)| Ok((key, requirement.header_map()?)))
+        .collect::<Result<_>>()?;
 
     // Native Copilot clients and GUI front-ends use dedicated, name-constrained
     // CAs because their TLS stacks do not consistently trust NODE_EXTRA_CA_CERTS.
@@ -573,7 +588,7 @@ async fn run_with_reroute(
 /// `edgee launch <agent> --relay`.
 pub async fn run_for_agent(
     agent: &str,
-    reroute: &crate::commands::launch::reroute::Reroute,
+    reroute: &crate::commands::launch::pause::Controls,
 ) -> Result<()> {
     run_for_agent_with_args(agent, &[], reroute).await
 }
@@ -584,10 +599,11 @@ pub async fn run_for_agent(
 pub async fn run_for_agent_with_args(
     agent: &str,
     extra_args: &[String],
-    reroute: &crate::commands::launch::reroute::Reroute,
+    reroute: &crate::commands::launch::pause::Controls,
 ) -> Result<()> {
     run_with_reroute(
         Options {
+            pause: Default::default(),
             agent: Some(agent.to_string()),
             no_launch: false,
             port: None,
@@ -660,6 +676,7 @@ fn build_gateway_target(
         claude_api_key,
         codex_api_key: None,
         debug_log_headers,
+        pause_requirements: Default::default(),
     })
 }
 

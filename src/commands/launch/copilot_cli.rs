@@ -15,7 +15,7 @@ pub struct Options {
     pub args: Vec<String>,
 }
 
-pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::pause::Controls) -> Result<()> {
     crate::commands::relay::run_for_agent_with_args("copilot-cli", &opts.args, reroute).await
 }
 

@@ -60,7 +60,7 @@ const MANAGED_END: &str = "# <<< edgee managed block";
 #[derive(Debug, clap::Parser)]
 pub struct Options {}
 
-pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+pub async fn run(_opts: Options, reroute: &super::pause::Controls) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Its own key, so the desktop app reports separately from the `codex` CLI.
@@ -83,11 +83,11 @@ pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()
         .ok_or_else(|| {
             anyhow::anyhow!("no Edgee API key for 'codex_desktop'; run `edgee auth login`")
         })?;
-    let session_id = reroute.create_session(&creds, "codex_desktop").await?;
+    let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let (session_id, requirement) = reroute.create_session(&creds, "codex_desktop", &gateway_url).await?;
 
-    util::report_cli_session(&creds, &session_id, "codex_desktop").await;
 
-    let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
+    let base_url = format!("{gateway_url}/v1");
     let debug_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     // The app is always signed in to ChatGPT, so its Codex fetches the catalog itself
     // with no feature flag. Only wired once the gateway is seen serving it: a catalog
@@ -95,14 +95,12 @@ pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()
     let catalog_url = super::codex_catalog::is_served(&base_url, &api_key)
         .await
         .then(|| super::codex_catalog::catalog_url(&base_url));
-    let block = render_provider_block(
-        &base_url,
-        &api_key,
-        &session_id,
-        crate::git::detect_origin().as_deref(),
-        debug_headers.as_ref(),
-        catalog_url.as_deref(),
-    );
+    let block = render_provider_block(&base_url,
+    &api_key,
+    &session_id,
+    crate::git::detect_origin().as_deref(),
+    debug_headers.as_ref(),
+    catalog_url.as_deref(), requirement.as_ref());
 
     let binary = binary()?;
     let config_path = codex_config_path()?;
@@ -229,6 +227,7 @@ fn render_provider_block(
     repo: Option<&str>,
     debug_headers: Option<&crate::crypto::DebugLogHeaderValues>,
     catalog_url: Option<&str>,
+    requirement: Option<&super::pause::Requirement>,
 ) -> ProviderBlock {
     let catalog_line = catalog_url
         .map(|url| format!("model_catalog_url = \"{}\"\n", toml_escape(url)))
@@ -256,6 +255,11 @@ fn render_provider_block(
             toml_escape(&debug.pubkey),
             toml_escape(&debug.salt),
         ));
+    }
+    if let Some(requirement) = requirement {
+        for (name, value) in requirement.headers() {
+            tables.push_str(&format!("\"{name}\" = \"{value}\"\n"));
+        }
     }
 
     ProviderBlock {
@@ -600,18 +604,35 @@ mod tests {
     use super::*;
 
     fn block() -> ProviderBlock {
-        render_provider_block(
-            "https://edgee.io/v1",
-            "sk-edgee-test",
-            "session-123",
-            None,
-            None,
-            None,
-        )
+        render_provider_block("https://edgee.io/v1",
+        "sk-edgee-test",
+        "session-123",
+        None,
+        None,
+        None, None)
     }
 
     fn parse(text: &str) -> toml::Table {
         text.parse::<toml::Table>().expect("patched config parses")
+    }
+
+    #[test]
+    fn pause_headers_remain_in_the_desktop_provider_not_user_top_level_config() {
+        let requirement = super::super::pause::Requirement {
+            api_key_id: "desktop-key".into(),
+            scope_incarnation: "672a7943-3648-46a5-a90f-17b356a13ac4".into(),
+            revision: 7,
+            valid_until: 2_000_000_000,
+        };
+        let block = render_provider_block("https://gateway.example/prefix/v1", "key", "launch",
+            None, None, None, Some(&requirement));
+        let doc = parse(&patch_config_text("model = \"original\"\n", &block).unwrap());
+        assert_eq!(doc["model"].as_str(), Some("original"));
+        let headers = &doc["model_providers"][PROVIDER_ID]["http_headers"];
+        assert_eq!(headers["x-edgee-session-id"].as_str(), Some("launch"));
+        assert_eq!(headers["x-edgee-session-control-incarnation"].as_str(), Some("672a7943-3648-46a5-a90f-17b356a13ac4"));
+        assert_eq!(headers["x-edgee-session-control-revision"].as_str(), Some("7"));
+        assert_eq!(headers["x-edgee-session-control-until"].as_str(), Some("2000000000"));
     }
 
     #[test]
@@ -703,14 +724,12 @@ mod tests {
 
     #[test]
     fn optional_headers_are_included_when_present() {
-        let b = render_provider_block(
-            "https://edgee.io/v1",
-            "k",
-            "s",
-            Some("git@github.com:edgee-ai/edgee.git"),
-            None,
-            None,
-        );
+        let b = render_provider_block("https://edgee.io/v1",
+        "k",
+        "s",
+        Some("git@github.com:edgee-ai/edgee.git"),
+        None,
+        None, None);
         let doc = parse(&patch_config_text("", &b).unwrap());
         assert_eq!(
             doc["model_providers"][PROVIDER_ID]["http_headers"]["x-edgee-repo"].as_str(),
@@ -721,7 +740,7 @@ mod tests {
     // A quote in a repo URL must not break out of the TOML string.
     #[test]
     fn values_are_escaped_into_the_toml_string() {
-        let b = render_provider_block("https://edgee.io/v1", "k", "s", Some("a\"b\\c"), None, None);
+        let b = render_provider_block("https://edgee.io/v1", "k", "s", Some("a\"b\\c"), None, None, None);
         let doc = parse(&patch_config_text("", &b).unwrap());
         assert_eq!(
             doc["model_providers"][PROVIDER_ID]["http_headers"]["x-edgee-repo"].as_str(),
@@ -736,14 +755,12 @@ mod tests {
             .get("model_catalog_url")
             .is_none());
 
-        let b = render_provider_block(
-            "https://edgee.io/v1",
-            "k",
-            "s",
-            None,
-            None,
-            Some("https://edgee.io/v1/models?catalog=edgee"),
-        );
+        let b = render_provider_block("https://edgee.io/v1",
+        "k",
+        "s",
+        None,
+        None,
+        Some("https://edgee.io/v1/models?catalog=edgee"), None);
         let out = patch_config_text("model = \"gpt-5.5\"\n", &b).unwrap();
         let doc = parse(&out);
         assert_eq!(

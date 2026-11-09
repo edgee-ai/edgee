@@ -1145,6 +1145,49 @@ impl ApiClient {
         )
     }
 
+    pub async fn get_optimization_pause(
+        &self,
+        org: &str,
+        session_id: &str,
+        api_key_ids: &[String],
+    ) -> Result<crate::commands::launch::pause::Status> {
+        let mut url = self.launch_session_url(org, session_id, "optimization-pause")?;
+        url.query_pairs_mut()
+            .append_pair("api_key_ids", &api_key_ids.join(","));
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("Failed to read session optimization pause")?;
+        check_status(&response, "read session optimization pause")?;
+        response
+            .json()
+            .await
+            .context("Invalid session optimization pause response")
+    }
+
+    pub async fn put_optimization_pause(
+        &self,
+        org: &str,
+        session_id: &str,
+        request: &crate::commands::launch::pause::Request<'_>,
+    ) -> Result<crate::commands::launch::pause::Status> {
+        let url = self.launch_session_url(org, session_id, "optimization-pause")?;
+        let response = self
+            .http
+            .put(url)
+            .json(request)
+            .send()
+            .await
+            .context("Failed to publish session optimization pause")?;
+        check_status(&response, "publish session optimization pause")?;
+        response
+            .json()
+            .await
+            .context("Invalid session optimization pause response")
+    }
+
     pub async fn put_session_reroute(
         &self,
         org_id: &str,
