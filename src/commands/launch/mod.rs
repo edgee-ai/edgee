@@ -16,6 +16,7 @@ mod preflight;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;
+pub mod android_studio;
 pub mod intellij;
 pub mod phpstorm;
 pub mod crush;
@@ -75,6 +76,9 @@ enum Command {
     /// GitHub Copilot in PHPStorm
     #[command(name = "phpstorm")]
     Phpstorm(phpstorm::Options),
+    /// GitHub Copilot in Android Studio
+    #[command(name = "android-studio")]
+    AndroidStudio(android_studio::Options),
     /// GitHub Copilot desktop app (macOS)
     #[command(name = "copilot-desktop")]
     CopilotDesktop(copilot_desktop::Options),
@@ -116,6 +120,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::CopilotCli(o) => copilot_cli::run(o, reroute).await,
         Command::Intellij(o) => intellij::run(o, reroute).await,
         Command::Phpstorm(o) => phpstorm::run(o, reroute).await,
+        Command::AndroidStudio(o) => android_studio::run(o, reroute).await,
         Command::CopilotDesktop(o) => copilot_desktop::run(o, reroute).await,
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o, reroute).await,
@@ -573,6 +578,24 @@ mod tests {
             match opts.command {
                 crate::commands::Command::Launch(launch) => match launch.command {
                     Command::Phpstorm(c) => assert_eq!(c.args, ["-p", "my project", "--help"]),
+                    other => panic!("wrong target: {other:?}"),
+                },
+                other => panic!("wrong command: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn android_studio_preserves_project_paths_and_flags() {
+        for argv in [
+            vec!["edgee", "launch", "android-studio", "-p", "my project", "--help"],
+            vec!["edgee", "launch", "android-studio", "--", "-p", "my project", "--help"],
+        ] {
+            let opts = crate::Options::try_parse_from(argv).expect("parses");
+            assert!(opts.profile.is_none());
+            match opts.command {
+                crate::commands::Command::Launch(launch) => match launch.command {
+                    Command::AndroidStudio(c) => assert_eq!(c.args, ["-p", "my project", "--help"]),
                     other => panic!("wrong target: {other:?}"),
                 },
                 other => panic!("wrong command: {other:?}"),

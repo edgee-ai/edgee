@@ -95,6 +95,15 @@ mod tests {
     }
 
     #[test]
+    fn finds_android_studio_installation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let executable = tmp.path().join("Android Studio.app/Contents/MacOS/studio");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, "").unwrap();
+        assert_eq!(macos_binary(&[tmp.path().to_path_buf()], &["Android Studio.app", "Android Studio Preview.app"], "studio"), Some(executable));
+    }
+
+    #[test]
     fn does_not_detect_an_empty_app_bundle_as_installed() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("IntelliJ IDEA.app")).unwrap();

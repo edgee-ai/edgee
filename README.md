@@ -150,6 +150,7 @@ edgee launch cursor
 edgee launch copilot-vscode
 edgee launch intellij       # GitHub Copilot in IntelliJ IDEA
 edgee launch phpstorm       # GitHub Copilot in PHPStorm
+edgee launch android-studio # GitHub Copilot in Android Studio
 
 # GitHub Copilot CLI
 edgee launch copilot-cli
@@ -264,6 +265,7 @@ edgee alias cursor          # Cursor.app wrapper (skipped if Cursor is not insta
 edgee alias copilot-vscode  # VS Code wrapper (skipped if VS Code is not installed)
 edgee alias intellij        # IntelliJ IDEA Copilot wrapper (requires the IDE installed)
 edgee alias phpstorm        # PHPStorm Copilot wrapper (requires the IDE installed)
+edgee alias android-studio  # Android Studio Copilot wrapper (requires the IDE installed)
 edgee alias copilot-desktop # GitHub Copilot app wrapper (macOS)
 edgee alias claude-desktop  # Claude Desktop wrapper (skipped if Claude Desktop is not installed)
 edgee alias codex-desktop   # ChatGPT desktop app wrapper (skipped if the app is not installed)
@@ -403,6 +405,7 @@ back your own command if `--wrap` had merged the two.
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
 | GitHub Copilot in IntelliJ IDEA | `edgee launch intellij` | Experimental; live validation pending |
 | GitHub Copilot in PHPStorm | `edgee launch phpstorm` | Experimental; live validation pending |
+| GitHub Copilot in Android Studio | `edgee launch android-studio` | Experimental; live validation pending |
 | GitHub Copilot app (macOS, local sessions) | `edgee launch copilot-desktop` | ✅ Supported |
 | GitHub Copilot CLI | `edgee launch copilot-cli` | ✅ Supported |
 | Claude Desktop (Claude Code) | `edgee launch claude-desktop` | ✅ Supported |
