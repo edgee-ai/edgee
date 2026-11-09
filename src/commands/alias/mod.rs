@@ -3,13 +3,17 @@
 //! `src/commands/launch/README.md`.
 
 mod desktop;
+mod output;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use console::style;
 
-use desktop::{AppSpec, ALL_APPS, CLAUDE_DESKTOP_APP, COPILOT_DESKTOP_APP, INTELLIJ_APP, COPILOT_VSCODE_APP, CURSOR_APP};
+use desktop::{
+    AppSpec, ALL_APPS, CLAUDE_DESKTOP_APP, CODEX_DESKTOP_APP, COPILOT_DESKTOP_APP,
+    COPILOT_VSCODE_APP, CURSOR_APP, INTELLIJ_APP, PHPSTORM_APP, ANDROID_STUDIO_APP,
+};
 
 const MARKER_START: &str = "# >>> edgee launch aliases >>>";
 const MARKER_END: &str = "# <<< edgee launch aliases <<<";
@@ -35,11 +39,12 @@ const OPENCODE_ALIAS: AliasSpec = AliasSpec::new("opencode", "edgee launch openc
 const CRUSH_ALIAS: AliasSpec = AliasSpec::new("crush", "edgee launch crush --");
 const PI_ALIAS: AliasSpec = AliasSpec::new("pi", "edgee launch pi --");
 const OMP_ALIAS: AliasSpec = AliasSpec::new("omp", "edgee launch omp --");
+const DEEPSEEK_ALIAS: AliasSpec = AliasSpec::new("dsh", "edgee launch deepseek --");
 const KIMI_ALIAS: AliasSpec = AliasSpec::new("kimi", "edgee launch kimi --");
 const KILO_ALIAS: AliasSpec = AliasSpec::new("kilo", "edgee launch kilo --");
 const COPILOT_CLI_ALIAS: AliasSpec = AliasSpec::new("copilot", "edgee launch copilot-cli --");
 
-const ALL_ALIASES: [AliasSpec; 10] = [
+const ALL_ALIASES: [AliasSpec; 11] = [
     CLAUDE_ALIAS,
     CODEBUDDY_ALIAS,
     CODEX_ALIAS,
@@ -47,6 +52,7 @@ const ALL_ALIASES: [AliasSpec; 10] = [
     CRUSH_ALIAS,
     PI_ALIAS,
     OMP_ALIAS,
+    DEEPSEEK_ALIAS,
     KIMI_ALIAS,
     KILO_ALIAS,
     COPILOT_CLI_ALIAS,
@@ -68,6 +74,7 @@ pub enum Agent {
     Crush,
     Pi,
     Omp,
+    Deepseek,
     Kimi,
     Kilo,
     /// GitHub Copilot CLI shim (installed as `copilot`)
@@ -81,11 +88,20 @@ pub enum Agent {
     /// Claude Desktop app wrapper (requires Claude Desktop installed)
     #[value(name = "claude-desktop")]
     ClaudeDesktop,
+    /// ChatGPT desktop app wrapper (requires the ChatGPT desktop app installed)
+    #[value(name = "codex-desktop")]
+    CodexDesktop,
     #[value(name = "copilot-desktop")]
     CopilotDesktop,
     /// GitHub Copilot in IntelliJ IDEA desktop wrapper
     #[value(name = "intellij")]
     Intellij,
+    /// GitHub Copilot in PHPStorm desktop wrapper
+    #[value(name = "phpstorm")]
+    Phpstorm,
+    /// GitHub Copilot in Android Studio desktop wrapper
+    #[value(name = "android-studio")]
+    AndroidStudio,
     All,
 }
 
@@ -100,10 +116,18 @@ impl Agent {
             Self::Crush => std::slice::from_ref(&CRUSH_ALIAS),
             Self::Pi => std::slice::from_ref(&PI_ALIAS),
             Self::Omp => std::slice::from_ref(&OMP_ALIAS),
+            Self::Deepseek => std::slice::from_ref(&DEEPSEEK_ALIAS),
             Self::Kimi => std::slice::from_ref(&KIMI_ALIAS),
             Self::Kilo => std::slice::from_ref(&KILO_ALIAS),
             Self::CopilotCli => std::slice::from_ref(&COPILOT_CLI_ALIAS),
-            Self::Cursor | Self::CopilotVscode | Self::ClaudeDesktop | Self::CopilotDesktop | Self::Intellij => &[],
+            Self::Cursor
+            | Self::CopilotVscode
+            | Self::ClaudeDesktop
+            | Self::CodexDesktop
+            | Self::CopilotDesktop
+            | Self::Intellij
+            | Self::Phpstorm
+            | Self::AndroidStudio => &[],
             Self::All => &ALL_ALIASES,
         }
     }
@@ -114,33 +138,13 @@ impl Agent {
             Self::Cursor => std::slice::from_ref(&CURSOR_APP),
             Self::CopilotVscode => std::slice::from_ref(&COPILOT_VSCODE_APP),
             Self::ClaudeDesktop => std::slice::from_ref(&CLAUDE_DESKTOP_APP),
+            Self::CodexDesktop => std::slice::from_ref(&CODEX_DESKTOP_APP),
             Self::Intellij => std::slice::from_ref(&INTELLIJ_APP),
+            Self::Phpstorm => std::slice::from_ref(&PHPSTORM_APP),
+            Self::AndroidStudio => std::slice::from_ref(&ANDROID_STUDIO_APP),
             Self::CopilotDesktop => std::slice::from_ref(&COPILOT_DESKTOP_APP),
             Self::All => ALL_APPS,
             _ => &[],
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codebuddy => "codebuddy",
-            Self::Codex => "codex",
-            Self::Opencode => "opencode",
-            Self::Crush => "crush",
-            Self::Pi => "pi",
-            Self::Omp => "omp",
-            Self::Kimi => "kimi",
-            Self::Kilo => "kilo",
-            Self::CopilotCli => "copilot-cli",
-            Self::Cursor => "cursor",
-            Self::CopilotVscode => "copilot-vscode",
-            Self::ClaudeDesktop => "claude-desktop",
-            Self::CopilotDesktop => "copilot-desktop",
-            Self::Intellij => "intellij",
-            Self::All => {
-                "claude, codebuddy, codex, opencode, crush, pi, omp, kimi, kilo, copilot-cli, cursor, copilot-vscode, intellij, copilot-desktop, and claude-desktop"
-            }
         }
     }
 }
@@ -201,19 +205,20 @@ enum Action {
     Remove,
 }
 
-impl Action {
-    fn verb(self) -> &'static str {
-        match self {
-            Self::Install => "installed",
-            Self::Remove => "removed",
-        }
-    }
-}
-
 fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
     let home = home_dir()?;
     let shim_dir = home.join(SHIM_DIR_REL);
     let cli = agent.aliases();
+
+    if matches!(action, Action::Remove) && cli.iter().any(|spec| spec.name == CODEX_ALIAS.name) {
+        if let Err(error) = crate::commands::launch::codex::ensure_saved_thread_provider() {
+            eprintln!(
+                "Warning: Could not configure Codex saved-thread compatibility: {error:#}. \
+                 Alias removal will continue. Fix the Codex config.toml or its permissions, \
+                 then run `edgee alias remove codex` again."
+            );
+        }
+    }
 
     let targets = [
         ShellConfig::new("bash", home.join(".bashrc"), ShellSyntax::Posix),
@@ -225,7 +230,7 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
         ),
     ];
 
-    println!();
+    output::header(action);
 
     // CLI agents → PATH shims + shell rc block.
     if !cli.is_empty() {
@@ -234,28 +239,20 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
                 Action::Install => write_shims(&shim_dir, cli)?,
                 Action::Remove => remove_shims(&shim_dir, cli)?,
             }
-            println!(
-                "  {} {} ({})",
-                style("updated").green(),
-                shim_dir.display(),
-                style("shims").dim()
-            );
         }
 
+        let mut changed_shells = Vec::new();
         for target in &targets {
-            let changed = sync_target(target, &shim_dir, agent, action)?;
-            let status = if changed {
-                style("updated").green()
-            } else {
-                style("unchanged").dim()
-            };
-            println!(
-                "  {} {} ({})",
-                status,
-                target.path.display(),
-                style(target.shell).dim()
-            );
+            if sync_target(target, &shim_dir, agent, action)? {
+                changed_shells.push(target.shell);
+            }
         }
+        let names: Vec<_> = cli
+            .iter()
+            .filter(|alias| crate::commands::launch::util::find_binary(alias.name).is_some())
+            .map(|alias| alias.name)
+            .collect();
+        output::commands(&names, action, &changed_shells);
     }
 
     // GUI agents → desktop wrappers (only if the host app is installed).
@@ -263,30 +260,8 @@ fn apply_aliases(agent: Agent, action: Action) -> Result<()> {
         Action::Install => desktop::Action::Install,
         Action::Remove => desktop::Action::Remove,
     };
-    desktop::apply_apps(agent.apps(), desktop_action)?;
-
-    println!();
-    println!(
-        "  {} {}",
-        style(format!("Aliases {}.", action.verb())).bold().green(),
-        style(format!("Affected: {}.", agent.label())).dim()
-    );
-
-    if matches!(action, Action::Install) && USES_SHIMS && !cli.is_empty() {
-        println!();
-        println!(
-            "  {} Reopen your terminal (or `exec $SHELL -l`) so `$HOME/.edgee/bin` lands on PATH.",
-            style("Note:").bold()
-        );
-    }
-    if matches!(action, Action::Install) && !agent.apps().is_empty() {
-        println!();
-        println!(
-            "  {} App wrappers appear in ~/Applications (macOS), your app menu (Linux), or the Start Menu (Windows). Desktop wrappers are skipped when the target app is not installed.",
-            style("Note:").bold()
-        );
-    }
-    println!();
+    let shortcuts = desktop::apply_apps(agent.apps(), desktop_action)?;
+    output::finish(action, cli.len(), shortcuts);
 
     Ok(())
 }
@@ -643,6 +618,14 @@ exec {launch_command} \"$@\"\n"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deepseek_alias_wraps_dsh() {
+        let aliases = Agent::Deepseek.aliases();
+        assert_eq!(aliases.len(), 1);
+        let block = render_alias_block(aliases, ShellSyntax::Posix);
+        assert!(block.contains("alias dsh='edgee launch deepseek --'"));
+    }
 
     fn claude_only() -> Vec<AliasSpec> {
         vec![CLAUDE_ALIAS]

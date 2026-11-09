@@ -16,6 +16,16 @@ pub struct SessionLogEntry {
     pub stats: crate::api::SessionStats,
 }
 
+impl SessionLogEntry {
+    pub fn visible_session_id(&self) -> &str {
+        if self.stats.session_id.is_empty() {
+            &self.session_id
+        } else {
+            &self.stats.session_id
+        }
+    }
+}
+
 pub fn session_logs_dir() -> PathBuf {
     crate::config::config_dir().join("session-stats")
 }
@@ -24,20 +34,11 @@ pub fn session_log_path(session_id: &str) -> PathBuf {
     session_logs_dir().join(format!("{session_id}.json"))
 }
 
-pub fn logs_url_for_session(creds: &crate::config::Credentials, session_id: &str) -> String {
-    match creds.org_slug.as_deref() {
-        Some(slug) if !slug.is_empty() => format!(
-            "{}/~/{}/sessions/{}",
-            crate::config::console_base_url(),
-            slug,
-            session_id
-        ),
-        _ => format!(
-            "{}/~/me/sessions/{}",
-            crate::config::console_base_url(),
-            session_id
-        ),
-    }
+pub fn logs_url_for_session(
+    creds: &crate::config::Credentials,
+    session_id: &str,
+) -> Result<String> {
+    crate::config::console_session_url(creds.org_slug.as_deref(), session_id)
 }
 
 pub fn read_session_log(path: &Path) -> Result<SessionLogEntry> {

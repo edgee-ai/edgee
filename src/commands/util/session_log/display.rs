@@ -63,7 +63,7 @@ pub fn render_session_stats(entry: &SessionLogEntry, heading: Option<&str>) {
     println!(
         "  {} {}",
         style("Session").bold().underlined(),
-        style(&entry.session_id).dim()
+        style(entry.visible_session_id()).dim()
     );
 
     let stats = &entry.stats;

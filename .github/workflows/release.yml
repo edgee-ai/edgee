@@ -32,10 +32,14 @@ jobs:
       - name: Parse crate and version from trigger
         id: parse
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_CRATE: ${{ inputs.crate }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            CRATE="${{ inputs.crate }}"
-            VERSION="${{ inputs.version }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            CRATE="$INPUT_CRATE"
+            VERSION="$INPUT_VERSION"
           else
             TAG="${GITHUB_REF_NAME}"
             if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
@@ -85,13 +89,13 @@ jobs:
       TAG: ${{ needs.setup.outputs.tag }}
     steps:
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Resolve manifest path
         id: manifest
@@ -106,8 +110,9 @@ jobs:
           echo "path=${MANIFEST}" >> "$GITHUB_OUTPUT"
 
       - name: Bump version in Cargo.toml and Cargo.lock
+        env:
+          MANIFEST: ${{ steps.manifest.outputs.path }}
         run: |
-          MANIFEST="${{ steps.manifest.outputs.path }}"
           sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" "$MANIFEST"
           grep -q "^version = \"${VERSION}\"" "$MANIFEST" || \
             { echo "ERROR: version patch did not apply to $MANIFEST"; exit 1; }
@@ -116,12 +121,13 @@ jobs:
       - name: Open PR with version bump
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MANIFEST: ${{ steps.manifest.outputs.path }}
         run: |
           BRANCH="chore/bump-${CRATE}-to-${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add "${{ steps.manifest.outputs.path }}" Cargo.lock
+          git add "$MANIFEST" Cargo.lock
           git diff --staged --quiet && echo "Version already up to date, skipping PR." && exit 0
           git commit -m "chore: bump ${CRATE} to ${VERSION}"
           # Force-push so re-running the workflow doesn't trip over the branch
@@ -151,6 +157,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.setup.outputs.tag }}
           REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             echo "Release ${TAG} already exists, reusing it."
@@ -159,7 +166,7 @@ jobs:
           gh release create "$TAG" \
             --repo "$REPO" \
             --title "$TAG" \
-            --target "${{ github.sha }}" \
+            --target "$SHA" \
             --draft \
             --generate-notes
 
@@ -191,26 +198,27 @@ jobs:
       RUSTFLAGS: ${{ matrix.platform.rustflags || '' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set version from tag
         shell: bash
+        env:
+          VERSION: ${{ needs.setup.outputs.version }}
         run: |
-          VERSION="${{ needs.setup.outputs.version }}"
           sed -i.bak "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" Cargo.toml
           rm -f Cargo.toml.bak
           grep -q "^version = \"${VERSION}\"" Cargo.toml || \
             { echo "ERROR: version patch did not apply to Cargo.toml"; exit 1; }
 
       - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v1
+        uses: houseabsolute/actions-rust-cross@85826e468eac832e251ac58f6191ba784db237c8 # v1
         with:
           command: build
           target: ${{ matrix.platform.target }}
           args: "-p edgee-cli --bin edgee --release"
 
       - name: Save binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}
           path: target/${{ matrix.platform.target }}/release/edgee${{ matrix.platform.bin_suffix || '' }}
@@ -218,9 +226,12 @@ jobs:
 
       - name: Prepare release files
         shell: bash
+        env:
+          TARGET: ${{ matrix.platform.target }}
+          BIN_SUFFIX: ${{ matrix.platform.bin_suffix || '' }}
         run: |
-          BIN="edgee.${{ matrix.platform.target }}${{ matrix.platform.bin_suffix || '' }}"
-          cp "target/${{ matrix.platform.target }}/release/edgee${{ matrix.platform.bin_suffix || '' }}" "$BIN"
+          BIN="edgee.${TARGET}${BIN_SUFFIX}"
+          cp "target/${TARGET}/release/edgee${BIN_SUFFIX}" "$BIN"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$BIN" | awk '{print $1}' > "$BIN.sha256"
           else

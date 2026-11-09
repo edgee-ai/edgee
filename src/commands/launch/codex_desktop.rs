@@ -18,6 +18,10 @@
 //! deliberately out of scope here. [`print_launch_hint`] says so to the user's face —
 //! silence here reads as "the whole app is covered" and gets reported as a bug.
 //!
+//! A Codex conversation started without a project reads like a chat but is a Codex
+//! turn (`"workspace_kind":"projectless"`), so it *is* routed; don't take one for the
+//! ChatGPT tab (that mix-up happened on app 26.1007).
+//!
 //! Lifecycle: patch `config.toml`, spawn the app, supervise it, revert when it quits.
 //! The patch must outlive the launch: the app-server builds a fresh `Config` **per
 //! conversation**, re-reading `config.toml` from disk every time a tab is opened. An
@@ -30,6 +34,8 @@
 //! The cost is that this command now runs for as long as the app does. A stranded
 //! patch (terminal closed, crash) is undone by the leftover-backup recovery at the
 //! top of [`run`] on the next launch.
+//! A credential-free provider definition remains after cleanup so saved threads
+//! referencing `edgee-cli` can still be resumed directly through OpenAI.
 //!
 //! Why not something cleaner (all verified against codex 0.147):
 //! `--profile` would need argv we can't set (no `CODEX_PROFILE` env var, and
@@ -44,10 +50,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use console::style;
 
+use super::codex_config::{self, PROVIDER_ID};
 use super::util;
-
-/// Same provider id as the CLI target, so sessions look identical to the gateway.
-const PROVIDER_ID: &str = "edgee-cli";
 
 /// Bracket everything we insert, so it can be removed without touching the rest.
 const MANAGED_BEGIN: &str = "# >>> edgee managed block — removed when the app exits";
@@ -56,7 +60,7 @@ const MANAGED_END: &str = "# <<< edgee managed block";
 #[derive(Debug, clap::Parser)]
 pub struct Options {}
 
-pub async fn run(_opts: Options) -> Result<()> {
+pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Its own key, so the desktop app reports separately from the `codex` CLI.
@@ -79,22 +83,28 @@ pub async fn run(_opts: Options) -> Result<()> {
         .ok_or_else(|| {
             anyhow::anyhow!("no Edgee API key for 'codex_desktop'; run `edgee auth login`")
         })?;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "codex_desktop").await?;
 
-    util::ensure_first_run_installed().await;
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "codex_desktop").await;
 
     let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
     let debug_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
+    // The app is always signed in to ChatGPT, so its Codex fetches the catalog itself
+    // with no feature flag. Only wired once the gateway is seen serving it: a catalog
+    // URL Codex can't load would empty the picker. See `super::codex_catalog`.
+    let catalog_url = super::codex_catalog::is_served(&base_url, &api_key)
+        .await
+        .then(|| super::codex_catalog::catalog_url(&base_url));
     let block = render_provider_block(
         &base_url,
         &api_key,
         &session_id,
         crate::git::detect_origin().as_deref(),
         debug_headers.as_ref(),
+        catalog_url.as_deref(),
     );
 
-    let binary = app_binary()?;
+    let binary = binary()?;
     let config_path = codex_config_path()?;
     let backup = backup_path(&config_path);
 
@@ -218,13 +228,18 @@ fn render_provider_block(
     session_id: &str,
     repo: Option<&str>,
     debug_headers: Option<&crate::crypto::DebugLogHeaderValues>,
+    catalog_url: Option<&str>,
 ) -> ProviderBlock {
+    let catalog_line = catalog_url
+        .map(|url| format!("model_catalog_url = \"{}\"\n", toml_escape(url)))
+        .unwrap_or_default();
     let mut tables = format!(
         "[model_providers.{PROVIDER_ID}]\n\
          name = \"EDGEE\"\n\
          base_url = \"{}\"\n\
          wire_api = \"responses\"\n\
-         requires_openai_auth = true\n\n\
+         requires_openai_auth = true\n\
+         {catalog_line}\n\
          [model_providers.{PROVIDER_ID}.http_headers]\n\
          \"x-edgee-api-key\" = \"{}\"\n\
          \"x-edgee-session-id\" = \"{}\"\n",
@@ -244,9 +259,7 @@ fn render_provider_block(
     }
 
     ProviderBlock {
-        selector: format!(
-            "{MANAGED_BEGIN}\nmodel_provider = \"{PROVIDER_ID}\"\n{MANAGED_END}\n"
-        ),
+        selector: format!("{MANAGED_BEGIN}\nmodel_provider = \"{PROVIDER_ID}\"\n{MANAGED_END}\n"),
         tables: format!("{MANAGED_BEGIN}\n{tables}{MANAGED_END}\n"),
     }
 }
@@ -276,9 +289,23 @@ fn strip_managed_blocks(text: &str) -> String {
 /// Splice `block` in at the first table header: `model_provider` must precede it (a
 /// top-level scalar after a table header joins that table) and our tables must follow
 /// all the user's scalars (or `model = "…"` gets absorbed into our headers table).
-/// Textual, not parse-and-reserialize, so comments and formatting survive.
-fn patch_config_text(existing: &str, block: &ProviderBlock) -> String {
-    let existing = strip_managed_blocks(existing);
+/// Prefer textual edits to preserve comments. If Codex removed our compatibility
+/// markers, parse and replace that provider table to avoid duplicate TOML tables.
+fn patch_config_text(existing: &str, block: &ProviderBlock) -> Result<String> {
+    let mut existing = codex_config::strip_fallback(&strip_managed_blocks(existing));
+    // Codex may have reserialized the compatibility table without its comments.
+    // Replace that definition rather than emitting an invalid duplicate table.
+    let mut parsed: toml::Table = existing
+        .parse()
+        .context("Invalid Codex config.toml; fix it and retry")?;
+    if let Some(providers) = parsed
+        .get_mut("model_providers")
+        .and_then(toml::Value::as_table_mut)
+    {
+        if providers.remove(PROVIDER_ID).is_some() {
+            existing = toml::to_string(&parsed)?;
+        }
+    }
 
     let first_table = existing
         .lines()
@@ -310,7 +337,7 @@ fn patch_config_text(existing: &str, block: &ProviderBlock) -> String {
     out.push_str(&block.tables);
     out.push('\n');
     out.push_str(&tail);
-    out
+    Ok(out)
 }
 
 /// Back up `config_path` and write the patched version.
@@ -320,12 +347,18 @@ fn apply_provider_block(config_path: &Path, backup: &Path, block: &ProviderBlock
             .with_context(|| format!("creating {}", parent.display()))?;
     }
     // A missing config is fine: an empty base is a valid starting point.
-    let existing = std::fs::read_to_string(config_path).unwrap_or_default();
+    let existing = match std::fs::read_to_string(config_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error).context("Cannot read Codex config.toml; check its permissions")
+        }
+    };
+    let patched = patch_config_text(&existing, block)?;
 
     std::fs::write(backup, &existing)
         .with_context(|| format!("writing config backup {}", backup.display()))?;
 
-    let patched = patch_config_text(&existing, block);
     std::fs::write(config_path, patched)
         .with_context(|| format!("patching {}", config_path.display()))?;
     Ok(())
@@ -344,7 +377,28 @@ fn restore_config(config_path: &Path, backup: &Path) -> Result<()> {
     let current = std::fs::read_to_string(config_path).unwrap_or_default();
 
     if current.contains(MANAGED_BEGIN) {
-        let stripped = strip_managed_blocks(&current);
+        let mut stripped = strip_managed_blocks(&current);
+        // Patching replaced the original selector. Restore it as well as removing
+        // our override, without discarding trust/plugin writes made at runtime.
+        let original: toml::Table = backup_body.parse().context("Invalid Codex config backup")?;
+        let restored: toml::Table = stripped
+            .parse()
+            .context("Invalid Codex config after cleanup")?;
+        if !restored.contains_key("model_provider") {
+            if let Some(selector) = original.get("model_provider") {
+                stripped = format!("model_provider = {selector}\n{stripped}");
+            }
+        }
+        if let Some(provider) = original
+            .get("model_providers")
+            .and_then(|v| v.get(PROVIDER_ID))
+        {
+            let mut providers = toml::Table::new();
+            providers.insert(PROVIDER_ID.to_owned(), provider.clone());
+            let mut fragment = toml::Table::new();
+            fragment.insert("model_providers".to_owned(), toml::Value::Table(providers));
+            stripped.push_str(&toml::to_string(&fragment)?);
+        }
         // An empty backup means the file didn't exist before us.
         if backup_body.is_empty() && stripped.trim().is_empty() {
             let _ = std::fs::remove_file(config_path);
@@ -362,6 +416,7 @@ fn restore_config(config_path: &Path, backup: &Path) -> Result<()> {
             .with_context(|| format!("restoring {}", config_path.display()))?;
     }
 
+    codex_config::ensure_fallback(config_path)?;
     let _ = std::fs::remove_file(backup);
     Ok(())
 }
@@ -416,7 +471,7 @@ fn spawn_app(binary: &Path) -> Result<tokio::process::Child> {
 }
 
 /// Resolve the ChatGPT desktop app executable.
-fn app_binary() -> Result<PathBuf> {
+pub(crate) fn binary() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let mut candidates = vec![PathBuf::from(
@@ -452,9 +507,7 @@ fn app_binary() -> Result<PathBuf> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        anyhow::bail!(
-            "The ChatGPT desktop app is only available on macOS and Windows."
-        )
+        anyhow::bail!("The ChatGPT desktop app is only available on macOS and Windows.")
     }
 }
 
@@ -465,7 +518,11 @@ fn print_launch_hint(base_url: &str, session_id: &str) {
     );
     println!("  {} {}", style("gateway:").dim(), style(base_url).cyan());
     println!("  {} {}", style("session:").dim(), session_id);
-    println!("  {} {}", style("routes:").dim(), style("the Codex tab").cyan());
+    println!(
+        "  {} {}",
+        style("routes:").dim(),
+        style("Codex and Work (local tasks)").cyan()
+    );
     println!(
         "  {}",
         style("Quit any running ChatGPT app first — the config is only picked up by a").dim()
@@ -473,18 +530,22 @@ fn print_launch_hint(base_url: &str, session_id: &str) {
     println!("  {}", style("freshly started instance.").dim());
     println!();
     // Without this the user reasonably reads "launching the app through Edgee" as
-    // covering the whole app, and ChatGPT-tab spend silently bypasses the gateway.
+    // covering the whole app, including Chat and cloud tasks that bypass the gateway.
     println!(
         "  {}",
-        style("The ChatGPT tab is NOT routed: it talks to OpenAI directly, so those").yellow()
+        style("Edgee routes local Codex and Work activity in the ChatGPT desktop app.").yellow()
     );
     println!(
         "  {}",
-        style("conversations bill your ChatGPT plan and never reach Edgee — they won't").yellow()
+        style("Chat and tasks running in the cloud do NOT go through Edgee and won't").yellow()
     );
     println!(
         "  {}",
-        style("appear in your stats. Only the Codex tab goes through the gateway.").yellow()
+        style("appear in your Edgee stats.").yellow()
+    );
+    println!(
+        "  {}",
+        style("(Local Codex conversations without a project are also routed.)").dim()
     );
     println!();
     println!(
@@ -498,8 +559,7 @@ fn print_launch_hint(base_url: &str, session_id: &str) {
     );
     println!(
         "  {}",
-        style("While this runs, a bare `codex` on the CLI also routes through Edgee, billed")
-            .dim()
+        style("While this runs, a bare `codex` on the CLI also routes through Edgee, billed").dim()
     );
     println!(
         "  {}",
@@ -518,12 +578,17 @@ fn print_session_complete(creds: &crate::config::Credentials, session_id: &str) 
 }
 
 fn print_stats_url(creds: &crate::config::Credentials, session_id: &str) {
+    let url = match crate::config::console_launch_session_url(creds.org_slug.as_deref(), session_id) {
+        Ok(url) => url,
+        Err(error) => {
+            eprintln!("Failed to build session URL: {error}");
+            return;
+        }
+    };
     println!(
         "  {} {}",
         style("Usage & compression stats:").dim(),
-        style(crate::commands::util::session_log::logs_url_for_session(
-            creds, session_id
-        ))
+        style(url)
         .cyan()
         .underlined()
     );
@@ -541,6 +606,7 @@ mod tests {
             "session-123",
             None,
             None,
+            None,
         )
     }
 
@@ -550,7 +616,7 @@ mod tests {
 
     #[test]
     fn patch_registers_the_edgee_provider() {
-        let out = patch_config_text("", &block());
+        let out = patch_config_text("", &block()).unwrap();
         let doc = parse(&out);
         assert_eq!(doc["model_provider"].as_str(), Some(PROVIDER_ID));
         let provider = &doc["model_providers"][PROVIDER_ID];
@@ -567,7 +633,7 @@ mod tests {
     #[test]
     fn user_top_level_keys_survive_and_stay_top_level() {
         let existing = "model = \"gpt-5.5\"\nmodel_reasoning_effort = \"medium\"\n";
-        let doc = parse(&patch_config_text(existing, &block()));
+        let doc = parse(&patch_config_text(existing, &block()).unwrap());
         assert_eq!(doc["model"].as_str(), Some("gpt-5.5"));
         assert_eq!(doc["model_reasoning_effort"].as_str(), Some("medium"));
         assert!(
@@ -588,7 +654,7 @@ mod tests {
             "\n[mcp_servers.node_repl]\n",
             "command = \"/bin/node_repl\"\n",
         );
-        let doc = parse(&patch_config_text(existing, &block()));
+        let doc = parse(&patch_config_text(existing, &block()).unwrap());
         assert_eq!(
             doc["projects"]["/Users/me/work"]["trust_level"].as_str(),
             Some("trusted")
@@ -603,8 +669,8 @@ mod tests {
     // Duplicate keys/tables are invalid TOML, so re-patching must replace, not stack.
     #[test]
     fn patching_twice_replaces_rather_than_duplicates() {
-        let once = patch_config_text("model = \"gpt-5.5\"\n", &block());
-        let twice = patch_config_text(&once, &block());
+        let once = patch_config_text("model = \"gpt-5.5\"\n", &block()).unwrap();
+        let twice = patch_config_text(&once, &block()).unwrap();
         let doc = parse(&twice); // would fail outright on a duplicate key
         assert_eq!(doc["model_provider"].as_str(), Some(PROVIDER_ID));
         assert_eq!(doc["model"].as_str(), Some("gpt-5.5"));
@@ -615,7 +681,7 @@ mod tests {
                 .count(),
             1
         );
-        let thrice = patch_config_text(&twice, &block());
+        let thrice = patch_config_text(&twice, &block()).unwrap();
         assert_eq!(parse(&thrice)["model"].as_str(), Some("gpt-5.5"));
     }
 
@@ -623,7 +689,7 @@ mod tests {
     #[test]
     fn stripping_our_block_leaves_the_users_config() {
         let original = "model = \"gpt-5.5\"\n\n[projects.\"/w\"]\ntrust_level = \"trusted\"\n";
-        let stripped = strip_managed_blocks(&patch_config_text(original, &block()));
+        let stripped = strip_managed_blocks(&patch_config_text(original, &block()).unwrap());
         assert_eq!(parse(&stripped), parse(original));
         assert!(!stripped.contains(PROVIDER_ID));
     }
@@ -631,7 +697,7 @@ mod tests {
     #[test]
     fn an_existing_selector_is_replaced_not_appended() {
         let existing = "model_provider = \"mine\"\nmodel = \"gpt-5.5\"\n";
-        let doc = parse(&patch_config_text(existing, &block()));
+        let doc = parse(&patch_config_text(existing, &block()).unwrap());
         assert_eq!(doc["model_provider"].as_str(), Some(PROVIDER_ID));
     }
 
@@ -643,8 +709,9 @@ mod tests {
             "s",
             Some("git@github.com:edgee-ai/edgee.git"),
             None,
+            None,
         );
-        let doc = parse(&patch_config_text("", &b));
+        let doc = parse(&patch_config_text("", &b).unwrap());
         assert_eq!(
             doc["model_providers"][PROVIDER_ID]["http_headers"]["x-edgee-repo"].as_str(),
             Some("git@github.com:edgee-ai/edgee.git")
@@ -654,12 +721,37 @@ mod tests {
     // A quote in a repo URL must not break out of the TOML string.
     #[test]
     fn values_are_escaped_into_the_toml_string() {
-        let b = render_provider_block("https://edgee.io/v1", "k", "s", Some("a\"b\\c"), None);
-        let doc = parse(&patch_config_text("", &b));
+        let b = render_provider_block("https://edgee.io/v1", "k", "s", Some("a\"b\\c"), None, None);
+        let doc = parse(&patch_config_text("", &b).unwrap());
         assert_eq!(
             doc["model_providers"][PROVIDER_ID]["http_headers"]["x-edgee-repo"].as_str(),
             Some("a\"b\\c")
         );
+    }
+
+    #[test]
+    fn catalog_url_is_set_on_our_provider_only_when_served() {
+        let without = parse(&patch_config_text("", &block()).unwrap());
+        assert!(without["model_providers"][PROVIDER_ID]
+            .get("model_catalog_url")
+            .is_none());
+
+        let b = render_provider_block(
+            "https://edgee.io/v1",
+            "k",
+            "s",
+            None,
+            None,
+            Some("https://edgee.io/v1/models?catalog=edgee"),
+        );
+        let out = patch_config_text("model = \"gpt-5.5\"\n", &b).unwrap();
+        let doc = parse(&out);
+        assert_eq!(
+            doc["model_providers"][PROVIDER_ID]["model_catalog_url"].as_str(),
+            Some("https://edgee.io/v1/models?catalog=edgee")
+        );
+        // Stripped with the rest of our block.
+        assert!(!strip_managed_blocks(&out).contains("model_catalog_url"));
     }
 
     #[test]
@@ -669,6 +761,40 @@ mod tests {
             backup_path(&cfg),
             PathBuf::from("/home/me/.codex/config.toml.edgee-bak")
         );
+    }
+
+    #[test]
+    fn repeated_launches_restore_selector_and_keep_saved_threads_resolvable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        let backup = backup_path(&cfg);
+        let original = "model_provider = 'mine'\n[model_providers.mine]\nname = 'Mine'\n";
+        std::fs::write(&cfg, original).unwrap();
+        for _ in 0..3 {
+            apply_provider_block(&cfg, &backup, &block()).unwrap();
+            let active = parse(&std::fs::read_to_string(&cfg).unwrap());
+            assert_eq!(active["model_provider"].as_str(), Some(PROVIDER_ID));
+            assert_eq!(
+                active["model_providers"][PROVIDER_ID]["base_url"].as_str(),
+                Some("https://edgee.io/v1")
+            );
+            restore_config(&cfg, &backup).unwrap();
+            let text = std::fs::read_to_string(&cfg).unwrap();
+            let restored = parse(&text);
+            assert_eq!(restored["model_provider"].as_str(), Some("mine"));
+            assert_eq!(
+                restored["model_providers"]["mine"]["name"].as_str(),
+                Some("Mine")
+            );
+            assert_eq!(
+                restored["model_providers"][PROVIDER_ID]["name"].as_str(),
+                Some("OpenAI")
+            );
+            assert!(!text.contains("sk-edgee-test"));
+            assert!(!text.contains("https://edgee.io"));
+            // Simulate Codex rewriting config, including dropping our comments.
+            std::fs::write(&cfg, toml::to_string(&restored).unwrap()).unwrap();
+        }
     }
 
     #[test]
@@ -687,8 +813,11 @@ mod tests {
         restore_config(&cfg, &backup).unwrap();
         // Semantic, not byte-exact: restore strips rather than rolls back.
         let after = std::fs::read_to_string(&cfg).unwrap();
-        assert_eq!(parse(&after), parse(original));
-        assert!(!after.contains(PROVIDER_ID));
+        assert_eq!(
+            parse(&codex_config::strip_fallback(&after)),
+            parse(original)
+        );
+        assert!(!after.contains("sk-edgee-test"));
         assert!(!backup.exists(), "backup should be cleaned up");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -702,8 +831,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = dir.join("config.toml");
         let backup = backup_path(&cfg);
-        std::fs::write(&cfg, "model = \"gpt-5.5\"\n\n[projects.\"/a\"]\ntrust_level = \"trusted\"\n")
-            .unwrap();
+        std::fs::write(
+            &cfg,
+            "model = \"gpt-5.5\"\n\n[projects.\"/a\"]\ntrust_level = \"trusted\"\n",
+        )
+        .unwrap();
 
         apply_provider_block(&cfg, &backup, &block()).unwrap();
 
@@ -718,14 +850,20 @@ mod tests {
         restore_config(&cfg, &backup).unwrap();
 
         let doc = parse(&std::fs::read_to_string(&cfg).unwrap());
-        assert_eq!(doc["projects"]["/a"]["trust_level"].as_str(), Some("trusted"));
+        assert_eq!(
+            doc["projects"]["/a"]["trust_level"].as_str(),
+            Some("trusted")
+        );
         assert_eq!(
             doc["projects"]["/b"]["trust_level"].as_str(),
             Some("trusted"),
             "a project trusted during the session was discarded"
         );
         assert!(!doc.contains_key("model_provider"), "our provider survived");
-        assert!(!doc.contains_key("model_providers"), "our tables survived");
+        assert_eq!(
+            doc["model_providers"][PROVIDER_ID]["name"].as_str(),
+            Some("OpenAI")
+        );
         assert!(!backup.exists());
 
         std::fs::remove_dir_all(&dir).ok();
@@ -756,11 +894,11 @@ mod tests {
         restore_config(&cfg, &backup).unwrap();
 
         let after = std::fs::read_to_string(&cfg).unwrap();
-        assert_eq!(after, original);
-        assert!(
-            !after.contains(PROVIDER_ID),
-            "must never leave the Edgee provider behind"
+        assert_eq!(
+            parse(&codex_config::strip_fallback(&after)),
+            parse(original)
         );
+        assert!(!after.contains("sk-edgee-test"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -792,7 +930,10 @@ mod tests {
     #[tokio::test]
     async fn an_instant_failing_exit_is_not_a_handoff() {
         let mut child = spawn_sh("exit 1");
-        assert!(matches!(supervise_app(&mut child).await, AppOutcome::Exited));
+        assert!(matches!(
+            supervise_app(&mut child).await,
+            AppOutcome::Exited
+        ));
     }
 
     // The regression this file exists for: supervision must span the app's whole life,
@@ -802,16 +943,19 @@ mod tests {
     async fn supervision_lasts_until_the_app_actually_exits() {
         let started = std::time::Instant::now();
         let mut child = spawn_sh("sleep 2");
-        assert!(matches!(supervise_app(&mut child).await, AppOutcome::Exited));
+        assert!(matches!(
+            supervise_app(&mut child).await,
+            AppOutcome::Exited
+        ));
         assert!(
             started.elapsed() >= std::time::Duration::from_millis(1900),
             "returned before the app exited — the patch would be reverted too early"
         );
     }
 
-    // No config before us → none left behind.
+    // No config before us → only the credential-free saved-thread compatibility remains.
     #[test]
-    fn restore_removes_a_config_we_created() {
+    fn restore_leaves_only_compatibility_in_a_config_we_created() {
         let dir = std::env::temp_dir().join(format!("edgee-cxd-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = dir.join("config.toml");
@@ -821,7 +965,12 @@ mod tests {
         assert!(cfg.exists());
 
         restore_config(&cfg, &backup).unwrap();
-        assert!(!cfg.exists(), "should not leave a config we invented");
+        let doc = parse(&std::fs::read_to_string(&cfg).unwrap());
+        assert!(!doc.contains_key("model_provider"));
+        assert_eq!(
+            doc["model_providers"][PROVIDER_ID]["name"].as_str(),
+            Some("OpenAI")
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

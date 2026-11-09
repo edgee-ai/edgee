@@ -11,7 +11,7 @@ pub struct Options {
     pub args: Vec<String>,
 }
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -47,16 +47,9 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 4: launch codebuddy with the correct env vars
     let codebuddy = creds.codebuddy.as_ref().unwrap();
     let api_key = &codebuddy.api_key;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "codebuddy").await?;
 
-    // First-run: install the persistent user-level statusline integration
-    // exactly once. CodeBuddy itself doesn't render an Edgee statusline today,
-    // but users typically also use Claude Code in the same shell — running
-    // the installer on the first `edgee launch` of any agent matches the
-    // "set it up once" flow we want.
-    util::ensure_first_run_installed().await;
-
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "codebuddy").await;
 
     let repo_entry = crate::git::detect_origin()
         .map(|url| format!(",\"x-edgee-repo\"=\"{url}\""))

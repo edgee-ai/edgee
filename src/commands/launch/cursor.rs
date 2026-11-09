@@ -60,7 +60,7 @@ pub async fn run(_opts: Options) -> Result<()> {
     let models = util::without_app_subscription_models(models, &catalog);
 
     let db_path = cursor_state_db_path()?;
-    configure_provider(&db_path, &gateway_url, api_key, &models)?;
+    configure_provider(&db_path, &gateway_url, api_key, &models, &catalog)?;
     if let Some(cursor) = creds.cursor.as_mut() {
         cursor.connection = Some("api".into());
         crate::config::write(&creds)?;
@@ -131,6 +131,7 @@ fn configure_provider(
     gateway_url: &str,
     api_key: &str,
     models: &[String],
+    catalog: &util::ModelCatalog,
 ) -> Result<()> {
     if !db_path.is_file() {
         anyhow::bail!(
@@ -170,6 +171,7 @@ fn configure_provider(
         &mut blob,
         &format!("{}/v1", gateway_url.trim_end_matches('/')),
         models,
+        catalog,
     );
 
     set_value(
@@ -186,7 +188,12 @@ fn configure_provider(
     Ok(())
 }
 
-fn configure_blob(blob: &mut Value, base_url: &str, models: &[String]) {
+fn configure_blob(
+    blob: &mut Value,
+    base_url: &str,
+    models: &[String],
+    catalog: &util::ModelCatalog,
+) {
     if !blob.is_object() {
         *blob = serde_json::json!({});
     }
@@ -207,6 +214,131 @@ fn configure_blob(blob: &mut Value, base_url: &str, models: &[String]) {
     };
     merge_models(ai, "userAddedModels", models);
     merge_models(ai, "modelOverrideEnabled", models);
+    merge_model_metadata(root, models, catalog);
+}
+
+/// Cursor stores model capabilities in `availableDefaultModels2`. Reasoning is
+/// one parameter definition per model, whose enum values are the supported
+/// efforts; variants bind each picker choice to the corresponding request
+/// parameter. Keep one model row rather than encoding efforts into model ids.
+fn merge_model_metadata(
+    root: &mut serde_json::Map<String, Value>,
+    models: &[String],
+    catalog: &util::ModelCatalog,
+) {
+    let available = root
+        .entry("availableDefaultModels2")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !available.is_array() {
+        *available = Value::Array(Vec::new());
+    }
+    let Some(available) = available.as_array_mut() else {
+        return;
+    };
+
+    for id in models {
+        let Some(efforts) = catalog
+            .get(id)
+            .map(|metadata| metadata.reasoning_efforts.as_slice())
+            .filter(|efforts| !efforts.is_empty())
+        else {
+            continue;
+        };
+
+        let index = available
+            .iter()
+            .position(|model| model.get("name").and_then(Value::as_str) == Some(id))
+            .unwrap_or_else(|| {
+                available.push(cursor_model(id));
+                available.len() - 1
+            });
+        let Some(model) = available[index].as_object_mut() else {
+            continue;
+        };
+
+        model.insert("supportsThinking".into(), Value::Bool(true));
+        model.insert(
+            "parameterDefinitions".into(),
+            serde_json::json!([{
+                "id": "reasoning",
+                "name": "Reasoning",
+                "markdownTooltip": "Controls how much reasoning effort the model uses.",
+                "parameterType": {
+                    "enumParameter": {
+                        "values": efforts
+                            .iter()
+                            .map(|effort| serde_json::json!({
+                                "value": effort,
+                                "displayName": reasoning_effort_label(effort),
+                                "modelPickerBadges": []
+                            }))
+                            .collect::<Vec<_>>()
+                    }
+                },
+                "isCycleableByHotkey": true
+            }]),
+        );
+        model.insert(
+            "variants".into(),
+            Value::Array(
+                efforts
+                    .iter()
+                    .enumerate()
+                    .map(|(index, effort)| {
+                        let display_name =
+                            format!("{id} {}", reasoning_effort_label(effort));
+                        serde_json::json!({
+                            "parameterValues": [{
+                                "id": "reasoning",
+                                "value": effort
+                            }],
+                            "displayName": display_name,
+                            "displayNameOutsidePicker": display_name,
+                            "isMaxMode": false,
+                            "isDefaultMaxConfig": index == 0,
+                            "isDefaultNonMaxConfig": index == 0
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+    }
+}
+
+fn cursor_model(id: &str) -> Value {
+    serde_json::json!({
+        "name": id,
+        "defaultOn": false,
+        "supportsAgent": true,
+        "supportsThinking": true,
+        "supportsMaxMode": true,
+        "supportsNonMaxMode": true,
+        "serverModelName": id,
+        "supportsPlanMode": true,
+        "supportsSandboxing": true,
+        "isUserAdded": true,
+        "inputboxShortModelName": id,
+        "parameterDefinitions": [],
+        "variants": [],
+        "legacySlugs": [],
+        "idAliases": [],
+        "namedModelSectionIndex": 1,
+        "cloudAgentEffortModes": [],
+        "modelPickerBadges": []
+    })
+}
+
+fn reasoning_effort_label(effort: &str) -> &str {
+    match effort {
+        "none" => "None",
+        "minimal" => "Minimal",
+        "low" => "Low",
+        "medium" => "Medium",
+        "high" => "High",
+        "xhigh" => "Extra High",
+        "max" => "Max",
+        other => other,
+    }
 }
 
 fn merge_models(ai: &mut serde_json::Map<String, Value>, key: &str, models: &[String]) {
@@ -382,6 +514,7 @@ mod tests {
             &mut blob,
             "https://api.edgee.ai/v1",
             &["anthropic/claude-sonnet-5".into(), "mine".into()],
+            &util::ModelCatalog::new(),
         );
 
         assert_eq!(blob["theme"], "dark");
@@ -390,6 +523,68 @@ mod tests {
         assert_eq!(
             blob["aiSettings"]["userAddedModels"],
             serde_json::json!(["mine", "anthropic/claude-sonnet-5"])
+        );
+    }
+
+    #[test]
+    fn provider_blob_adds_reasoning_efforts_to_each_model() {
+        let catalog: util::ModelCatalog = [(
+            "anthropic/claude-opus-5".to_string(),
+            util::ModelMetadata {
+                reasoning_efforts: vec!["low".into(), "high".into()],
+                ..Default::default()
+            },
+        )]
+        .into();
+        let models = vec![
+            "anthropic/claude-opus-5".into(),
+            "openai/gpt-4.1".into(),
+        ];
+        let mut blob = serde_json::json!({
+            "availableDefaultModels2": [{
+                "name": "anthropic/claude-opus-5",
+                "tagline": "preserved"
+            }]
+        });
+
+        configure_blob(
+            &mut blob,
+            "https://api.edgee.ai/v1",
+            &models,
+            &catalog,
+        );
+
+        assert_eq!(
+            blob["aiSettings"]["userAddedModels"],
+            serde_json::json!([
+                "anthropic/claude-opus-5",
+                "openai/gpt-4.1"
+            ])
+        );
+        let model = &blob["availableDefaultModels2"][0];
+        assert_eq!(model["tagline"], "preserved");
+        assert_eq!(model["supportsThinking"], true);
+        assert_eq!(
+            model["parameterDefinitions"][0]["parameterType"]["enumParameter"]["values"],
+            serde_json::json!([
+                {
+                    "value": "low",
+                    "displayName": "Low",
+                    "modelPickerBadges": []
+                },
+                {
+                    "value": "high",
+                    "displayName": "High",
+                    "modelPickerBadges": []
+                }
+            ])
+        );
+        assert_eq!(
+            model["variants"][1]["parameterValues"],
+            serde_json::json!([{
+                "id": "reasoning",
+                "value": "high"
+            }])
         );
     }
 

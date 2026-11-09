@@ -6,21 +6,29 @@
 
 pub mod claude;
 pub mod claude_desktop;
+mod claude_mods;
 pub mod codebuddy;
 mod mcp;
 pub mod codex;
+mod codex_catalog;
+mod codex_config;
+mod preflight;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;
+pub mod android_studio;
 pub mod intellij;
+pub mod phpstorm;
 pub mod crush;
 pub mod cursor;
 pub mod copilot_vscode;
+pub mod deepseek;
 pub mod kimi;
 pub mod kilo;
 pub mod opencode;
 pub mod omp;
 pub mod pi;
+pub(crate) mod reroute;
 pub(crate) mod util;
 
 use anyhow::Result;
@@ -47,6 +55,8 @@ enum Command {
     Pi(pi::Options),
     /// Oh My Pi CLI
     Omp(omp::Options),
+    /// DeepSeek Harness (dsh)
+    Deepseek(deepseek::Options),
     /// Kimi Code CLI
     Kimi(kimi::Options),
     /// Kilo Code CLI
@@ -63,6 +73,12 @@ enum Command {
     /// GitHub Copilot in IntelliJ IDEA
     #[command(name = "intellij")]
     Intellij(intellij::Options),
+    /// GitHub Copilot in PHPStorm
+    #[command(name = "phpstorm")]
+    Phpstorm(phpstorm::Options),
+    /// GitHub Copilot in Android Studio
+    #[command(name = "android-studio")]
+    AndroidStudio(android_studio::Options),
     /// GitHub Copilot desktop app (macOS)
     #[command(name = "copilot-desktop")]
     CopilotDesktop(copilot_desktop::Options),
@@ -70,34 +86,46 @@ enum Command {
     #[command(name = "claude-desktop")]
     ClaudeDesktop(claude_desktop::Options),
     /// ChatGPT desktop app
-    #[command(name = "codex-desktop")]
+    #[command(name = "codex-desktop", visible_aliases = ["chatgpt-desktop", "chatgpt"])]
     CodexDesktop(codex_desktop::Options),
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct Options {
+    #[command(flatten)]
+    reroute: reroute::Options,
     #[command(subcommand)]
     command: Command,
 }
 
 pub async fn run(opts: Options) -> anyhow::Result<()> {
+    preflight::check(&opts.command)?;
+    if opts.reroute.target.is_some() && matches!(opts.command, Command::Cursor(_)) {
+        anyhow::bail!(
+            "Cursor launch does not attach a session ID. Choose another launch target to use --reroute."
+        );
+    }
+    let reroute = &opts.reroute.resolve().await?;
     match opts.command {
-        Command::Claude(o) => claude::run(o).await,
-        Command::CodeBuddy(o) => codebuddy::run(o).await,
-        Command::Codex(o) => codex::run(o).await,
-        Command::OpenCode(o) => opencode::run(o).await,
-        Command::Crush(o) => crush::run(o).await,
-        Command::Pi(o) => pi::run(o).await,
-        Command::Omp(o) => omp::run(o).await,
-        Command::Kimi(o) => kimi::run(o).await,
-        Command::Kilo(o) => kilo::run(o).await,
-        Command::CopilotCli(o) => copilot_cli::run(o).await,
-        Command::Intellij(o) => intellij::run(o).await,
-        Command::CopilotDesktop(o) => copilot_desktop::run(o).await,
+        Command::Claude(o) => claude::run(o, reroute).await,
+        Command::CodeBuddy(o) => codebuddy::run(o, reroute).await,
+        Command::Codex(o) => codex::run(o, reroute).await,
+        Command::OpenCode(o) => opencode::run(o, reroute).await,
+        Command::Crush(o) => crush::run(o, reroute).await,
+        Command::Pi(o) => pi::run(o, reroute).await,
+        Command::Omp(o) => omp::run(o, reroute).await,
+        Command::Deepseek(o) => deepseek::run(o, reroute).await,
+        Command::Kimi(o) => kimi::run(o, reroute).await,
+        Command::Kilo(o) => kilo::run(o, reroute).await,
+        Command::CopilotCli(o) => copilot_cli::run(o, reroute).await,
+        Command::Intellij(o) => intellij::run(o, reroute).await,
+        Command::Phpstorm(o) => phpstorm::run(o, reroute).await,
+        Command::AndroidStudio(o) => android_studio::run(o, reroute).await,
+        Command::CopilotDesktop(o) => copilot_desktop::run(o, reroute).await,
         Command::Cursor(o) => cursor::run(o).await,
-        Command::CopilotVscode(o) => copilot_vscode::run(o).await,
-        Command::ClaudeDesktop(o) => claude_desktop::run(o).await,
-        Command::CodexDesktop(o) => codex_desktop::run(o).await,
+        Command::CopilotVscode(o) => copilot_vscode::run(o, reroute).await,
+        Command::ClaudeDesktop(o) => claude_desktop::run(o, reroute).await,
+        Command::CodexDesktop(o) => codex_desktop::run(o, reroute).await,
     }
 }
 
@@ -117,7 +145,17 @@ async fn print_session_stats(
         Err(_) => None,
     };
 
-    let logs_url = session_log::logs_url_for_session(creds, session_id);
+    let logs_url = match stats.as_ref().map(|stats| stats.session_id.as_str()).filter(|id| !id.is_empty()) {
+        Some(native_id) => session_log::logs_url_for_session(creds, native_id),
+        None => crate::config::console_launch_session_url(creds.org_slug.as_deref(), session_id),
+    };
+    let logs_url = match logs_url {
+        Ok(url) => url,
+        Err(error) => {
+            eprintln!("Failed to build session URL: {error}");
+            return;
+        }
+    };
 
     println!();
     println!(
@@ -268,6 +306,110 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn reroute_flags_stay_before_the_target() {
+        let opts = crate::Options::try_parse_from([
+            "edgee",
+            "launch",
+            "--reroute",
+            "openai/gpt-5",
+            "--reroute-from",
+            "anthropic/claude-sonnet",
+            "--reroute-provider",
+            "openai",
+            "--reroute-effort",
+            "low",
+            "--reroute-duration",
+            "120",
+            "claude",
+            "-p",
+            "hello",
+        ])
+        .unwrap();
+        let crate::commands::Command::Launch(launch) = opts.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(launch.reroute.target.as_deref(), Some("openai/gpt-5"));
+        let Command::Claude(agent) = launch.command else {
+            panic!("wrong target")
+        };
+        assert_eq!(agent.args, ["-p", "hello"]);
+
+        for flag in [
+            "--reroute",
+            "--reroute-from",
+            "--reroute-provider",
+            "--reroute-effort",
+            "--reroute-duration",
+        ] {
+            assert_eq!(
+                claude_args(&["edgee", "launch", "claude", flag, "value"]),
+                [flag, "value"]
+            );
+        }
+    }
+
+    #[test]
+    fn reroute_requires_target_and_limits_duration() {
+        for flag in [
+            "--reroute-from",
+            "--reroute-provider",
+            "--reroute-effort",
+            "--reroute-duration",
+        ] {
+            assert!(
+                crate::Options::try_parse_from(["edgee", "launch", flag, "60", "claude"]).is_err()
+            );
+        }
+        for duration in ["0", "1441", "invalid"] {
+            assert!(crate::Options::try_parse_from([
+                "edgee",
+                "launch",
+                "--reroute",
+                "openai/gpt-5",
+                "--reroute-duration",
+                duration,
+                "claude",
+            ])
+            .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn cursor_rejects_session_reroute_before_setup() {
+        let opts = crate::Options::try_parse_from([
+            "edgee",
+            "launch",
+            "--reroute",
+            "openai/gpt-5",
+            "cursor",
+        ])
+        .unwrap();
+        let crate::commands::Command::Launch(launch) = opts.command else {
+            panic!("wrong command")
+        };
+        assert!(run(launch)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not attach a session ID"));
+    }
+
+    /// Users know the app as ChatGPT, not as Codex.
+    #[test]
+    fn chatgpt_names_launch_codex_desktop() {
+        for name in ["codex-desktop", "chatgpt-desktop", "chatgpt"] {
+            let opts = crate::Options::try_parse_from(["edgee", "launch", name]).expect("parses");
+            let crate::commands::Command::Launch(launch) = opts.command else {
+                panic!("wrong command")
+            };
+            assert!(
+                matches!(launch.command, Command::CodexDesktop(_)),
+                "{name}"
+            );
+        }
+    }
+
     fn claude_args(argv: &[&str]) -> Vec<String> {
         let opts = crate::Options::try_parse_from(argv).expect("parses");
         assert!(
@@ -318,6 +460,17 @@ mod tests {
         }
     }
 
+    fn pi_args(argv: &[&str]) -> Vec<String> {
+        let opts = crate::Options::try_parse_from(argv).expect("parses");
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::Pi(c) => c.args,
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
     fn omp_args(argv: &[&str]) -> Vec<String> {
         let opts = crate::Options::try_parse_from(argv).expect("parses");
         match opts.command {
@@ -345,6 +498,18 @@ mod tests {
                 [flag, "my prompt"],
             );
         }
+    }
+
+    // The launcher itself adds `-e`/`--skill`; the user's own flags, including
+    // Pi's `-e` and `-ne`, must still arrive untouched and in order.
+    #[test]
+    fn pi_passes_agent_flags_through_verbatim() {
+        assert_eq!(
+            pi_args(&[
+                "edgee", "launch", "pi", "-e", "./ext", "-ne", "-p", "my prompt", "--model", "edgee/x"
+            ]),
+            ["-e", "./ext", "-ne", "-p", "my prompt", "--model", "edgee/x"]
+        );
     }
 
     #[test]
@@ -403,6 +568,42 @@ mod tests {
     }
 
     #[test]
+    fn phpstorm_preserves_project_paths_and_flags() {
+        for argv in [
+            vec!["edgee", "launch", "phpstorm", "-p", "my project", "--help"],
+            vec!["edgee", "launch", "phpstorm", "--", "-p", "my project", "--help"],
+        ] {
+            let opts = crate::Options::try_parse_from(argv).expect("parses");
+            assert!(opts.profile.is_none());
+            match opts.command {
+                crate::commands::Command::Launch(launch) => match launch.command {
+                    Command::Phpstorm(c) => assert_eq!(c.args, ["-p", "my project", "--help"]),
+                    other => panic!("wrong target: {other:?}"),
+                },
+                other => panic!("wrong command: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn android_studio_preserves_project_paths_and_flags() {
+        for argv in [
+            vec!["edgee", "launch", "android-studio", "-p", "my project", "--help"],
+            vec!["edgee", "launch", "android-studio", "--", "-p", "my project", "--help"],
+        ] {
+            let opts = crate::Options::try_parse_from(argv).expect("parses");
+            assert!(opts.profile.is_none());
+            match opts.command {
+                crate::commands::Command::Launch(launch) => match launch.command {
+                    Command::AndroidStudio(c) => assert_eq!(c.args, ["-p", "my project", "--help"]),
+                    other => panic!("wrong target: {other:?}"),
+                },
+                other => panic!("wrong command: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn copilot_desktop_preserves_app_arguments() {
         let opts = crate::Options::try_parse_from([
             "edgee", "launch", "copilot-desktop", "-p", "project", "--help",
@@ -450,6 +651,26 @@ mod tests {
             copilot_cli_args(&["edgee", "launch", "copilot-cli", "--", "--yolo"]),
             ["--yolo"],
         );
+    }
+
+    #[test]
+    fn deepseek_preserves_agent_arguments() {
+        for args in [
+            vec!["web", "--no-open"],
+            vec!["--profile", "custom", "-p", "prompt"],
+            vec!["headless", "task", "--help"],
+        ] {
+            let argv = [vec!["edgee", "launch", "deepseek"], args.clone()].concat();
+            let opts = crate::Options::try_parse_from(argv).expect("parses");
+            assert!(opts.profile.is_none());
+            match opts.command {
+                crate::commands::Command::Launch(launch) => match launch.command {
+                    Command::Deepseek(c) => assert_eq!(c.args, args),
+                    other => panic!("wrong target: {other:?}"),
+                },
+                other => panic!("wrong command: {other:?}"),
+            }
+        }
     }
 
     #[test]

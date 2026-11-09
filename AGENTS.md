@@ -87,15 +87,20 @@ Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
 - `edgee auth {login|status|list|switch}` — OAuth-style flow against the Edgee console. See
   `src/api.rs` and `src/commands/auth/`.
 - `edgee settings [claude|claude_desktop|codebuddy|codex|codex_desktop|opencode|crush|cursor|copilot]`
-  — configures compression, fallback, and reroute settings for a coding-agent key against the
+  — configures compression settings for a coding-agent key against the
   console API. The
   provider list uses bare `copilot`, deliberately distinct from launch's `copilot-vscode`, and
   underscored `claude_desktop`/`codex_desktop` for surfaces metered as their own backend agent.
 - `edgee stats` (visible alias `report`) — session token counts and compression savings.
-- `edgee statusline` — renders/manages the Claude Code statusline integration (README's Statusline
-  section has the install/doctor/fix flow).
+- `edgee statusline`: the Copilot CLI statusline. Bare it renders the line, `--wrap <cmd>` merges it
+  with a statusLine of the user's own, `copilot install|uninstall` manages `~/.copilot/settings.json`
+  (README's GitHub Copilot CLI statusline section). Launch re-checks the entry on every run and points
+  it at the launching binary through `EDGEE_BIN`.
+- Claude Code inline UI lives in `mods/edgee/`. Claude no longer uses `edgee statusline`; Claude
+  launch cleans legacy user/project-local settings via `src/commands/claude_settings.rs`.
 - `edgee alias` — installs CLI PATH shims/shell aliases and desktop app wrappers (`cursor`,
-  `copilot-vscode`) when the host app is installed.
+  `copilot-vscode`, `intellij`, `phpstorm`, `android-studio`, `copilot-desktop`, `claude-desktop`, `codex-desktop`)
+  when the host app is installed.
 - `edgee relay` — hidden (`hide = true`). Local MITM proxy powering the app launch targets;
   transport is an implementation detail, not public UX.
 - `edgee reset` — clears credentials.
@@ -125,7 +130,8 @@ src/
     launch/            # one module per target + README.md naming rules
     auth/              # login, status, list, switch
     settings/          # agent.rs (per-key)
-    statusline/        # render, wrap, width + claude/ (install, doctor, fix, toggle)
+    claude_settings.rs # migration cleanup for the retired Claude statusline integration
+    statusline/        # render, wrap, copilot (settings.json install/uninstall)
     alias/             # PATH shims + desktop.rs app wrappers
     relay/             # hidden MITM proxy (hudsucker + rcgen)
     util/session_log/  # session tracking
