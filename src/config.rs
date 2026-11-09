@@ -323,6 +323,15 @@ pub fn write(creds: &Credentials) -> Result<()> {
 // ---------------------------------------------------------------------------
 // URL helpers — precedence: env var > active profile > hardcoded default
 // ---------------------------------------------------------------------------
+/// Append opaque path segments without interpreting slashes or URL delimiters.
+pub fn url_with_path(base: &str, segments: &[&str]) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(base)?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("Invalid URL base"))?
+        .pop_if_empty()
+        .extend(segments.iter().copied());
+    Ok(url)
+}
 
 pub fn console_base_url() -> String {
     if let Ok(v) = std::env::var("EDGEE_CONSOLE_URL") {
@@ -332,6 +341,22 @@ pub fn console_base_url() -> String {
         .ok()
         .and_then(|p| p.console_url)
         .unwrap_or_else(|| "https://www.edgee.ai".to_string())
+}
+
+/// Agent-facing native session page.
+pub fn console_session_url(org_slug: Option<&str>, session_id: &str) -> Result<String> {
+    let slug = org_slug.filter(|slug| !slug.is_empty()).unwrap_or("me");
+    Ok(url_with_path(&console_base_url(), &["~", slug, "sessions", session_id])?.into())
+}
+
+/// Unambiguous launch alias used before a native session identity is available.
+pub fn console_launch_session_url(org_slug: Option<&str>, launch_id: &str) -> Result<String> {
+    let slug = org_slug.filter(|slug| !slug.is_empty()).unwrap_or("me");
+    Ok(url_with_path(
+        &console_base_url(),
+        &["~", slug, "launch-sessions", launch_id],
+    )?
+    .into())
 }
 
 pub fn console_api_base_url() -> String {
@@ -454,6 +479,36 @@ pub fn debug_log_e2ee_passphrase_profile_override() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn url_path_preserves_opaque_session_segments_and_base_prefix() {
+        let url = url_with_path(
+            "https://console.example/prefix/",
+            &["~", "org/team", "sessions", "agent:run/会話?q#fragment%"],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://console.example/prefix/~/org%2Fteam/sessions/agent:run%2F%E4%BC%9A%E8%A9%B1%3Fq%23fragment%25"
+        );
+        assert_eq!(url.query(), None);
+        assert_eq!(url.fragment(), None);
+    }
+
+    #[test]
+    fn launch_aliases_have_distinct_encoded_paths() {
+        let url = url_with_path(
+            "https://console.example/",
+            &["~", "me", "launch-sessions", "launch/run?x#y"],
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://console.example/~/me/launch-sessions/launch%2Frun%3Fx%23y"
+        );
+        assert_eq!(url.query(), None);
+        assert_eq!(url.fragment(), None);
+    }
+
     use super::*;
 
     #[test]

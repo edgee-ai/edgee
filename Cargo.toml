@@ -1,6 +1,6 @@
 [package]
 name = "edgee-cli"
-version = "0.15.3"
+version = "0.16.1"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://www.edgee.cloud"
@@ -45,7 +45,7 @@ x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
 # Local MITM relay (`edgee relay` / app launch targets)
 bytes = "1.11.1"
 http-body-util = "0.1.3"
-hudsucker = "0.24"
+hudsucker = "0.25"
 rcgen = "0.14"
 sha1 = "0.10"
 sha2 = "0.10"

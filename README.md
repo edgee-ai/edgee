@@ -90,6 +90,21 @@ Open the displayed URL, enter the code from your terminal, and authorize the CLI
 The code expires after 10 minutes. SSH sessions use this flow automatically,
 including when authentication starts during `edgee launch`. No port forwarding is needed.
 
+Session listings, history, session links and Edgee MCP use the coding agent's
+native session ID when available. The CLI reserves an Edgee launch ID before the
+agent starts; startup links use explicit `/launch-sessions/{id}` aliases once usage
+associates them with native IDs. Later `/sessions/{id}` links use the API-returned
+`session_id`. Resuming the same native ID groups launches; resetting to a new native ID starts a separate visible
+session. Native IDs are opaque and encoded as one URL path segment.
+
+Usage arrives asynchronously. If Edgee MCP reports that a native session is not
+available yet, retry after usage arrives; never replace a known native ID with the
+launch ID. Only agents without a native ID use the Edgee ID as their visible
+session identity. Internal gateway routing and budgets still use the launch ID when
+present; native-only traffic routes by its native ID. Every injected Edgee MCP
+transport preserves user-token authentication and sends `X-Edgee-Launch-Id` with
+the actual launch ID, allowing resumed-session controls to target the current run.
+
 ---
 
 ## Quickstart
@@ -135,6 +150,7 @@ edgee launch cursor
 edgee launch copilot-vscode
 edgee launch intellij       # GitHub Copilot in IntelliJ IDEA
 edgee launch phpstorm       # GitHub Copilot in PHPStorm
+edgee launch android-studio # GitHub Copilot in Android Studio
 
 # GitHub Copilot CLI
 edgee launch copilot-cli
@@ -249,6 +265,7 @@ edgee alias cursor          # Cursor.app wrapper (skipped if Cursor is not insta
 edgee alias copilot-vscode  # VS Code wrapper (skipped if VS Code is not installed)
 edgee alias intellij        # IntelliJ IDEA Copilot wrapper (requires the IDE installed)
 edgee alias phpstorm        # PHPStorm Copilot wrapper (requires the IDE installed)
+edgee alias android-studio  # Android Studio Copilot wrapper (requires the IDE installed)
 edgee alias copilot-desktop # GitHub Copilot app wrapper (macOS)
 edgee alias claude-desktop  # Claude Desktop wrapper (skipped if Claude Desktop is not installed)
 edgee alias codex-desktop   # ChatGPT desktop app wrapper (skipped if the app is not installed)
@@ -388,6 +405,7 @@ back your own command if `--wrap` had merged the two.
 | GitHub Copilot in VS Code | `edgee launch copilot-vscode` | ✅ Supported |
 | GitHub Copilot in IntelliJ IDEA | `edgee launch intellij` | Experimental; live validation pending |
 | GitHub Copilot in PHPStorm | `edgee launch phpstorm` | Experimental; live validation pending |
+| GitHub Copilot in Android Studio | `edgee launch android-studio` | Experimental; live validation pending |
 | GitHub Copilot app (macOS, local sessions) | `edgee launch copilot-desktop` | ✅ Supported |
 | GitHub Copilot CLI | `edgee launch copilot-cli` | ✅ Supported |
 | Claude Desktop (Claude Code) | `edgee launch claude-desktop` | ✅ Supported |

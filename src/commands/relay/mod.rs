@@ -28,7 +28,7 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 /// Canonical relay targets (same public names as `edgee launch`). See
 /// `src/commands/launch/README.md` for naming rules.
 const TARGETS: &[&str] =
-    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "phpstorm", "pi", "omp", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
+    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "phpstorm", "android-studio", "pi", "omp", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
@@ -48,6 +48,7 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
         "copilot-desktop" => Some("copilot-desktop"),
         "intellij" => Some("intellij"),
         "phpstorm" => Some("phpstorm"),
+        "android-studio" => Some("android-studio"),
         "pi" => Some("pi"),
         "omp" => Some("omp"),
         // GitHub Copilot in VS Code — canonical name is `copilot-vscode`.
@@ -63,7 +64,7 @@ fn is_copilot_vscode(agent: &str) -> bool {
 
 /// True for JetBrains IDEs hosting the GitHub Copilot plugin.
 fn is_jetbrains(agent: &str) -> bool {
-    matches!(agent, "intellij" | "phpstorm")
+    matches!(agent, "intellij" | "phpstorm" | "android-studio")
 }
 
 /// True for the standalone GitHub Copilot app.
@@ -129,6 +130,8 @@ fn editor_app_name(agent: &str) -> &'static str {
         "IntelliJ IDEA"
     } else if agent == "phpstorm" {
         "PHPStorm"
+    } else if agent == "android-studio" {
+        "Android Studio"
     } else {
         "VS Code"
     }
@@ -180,7 +183,7 @@ fn macos_cli_path_hint(agent: &str) -> Option<&'static [&'static str]> {
 fn key_provider(target: &str) -> &str {
     match target {
         // Copilot surfaces share one provider key and retain GitHub credentials.
-        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" | "phpstorm" => "copilot",
+        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" | "phpstorm" | "android-studio" => "copilot",
         "omp" => "pi",
         // Claude Desktop is a dedicated backend agent with its own key/compression
         // (coding_assistant `claude_desktop`), so it maps to its own provider slot
@@ -193,7 +196,7 @@ fn key_provider(target: &str) -> &str {
 }
 
 setup_command! {
-    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|phpstorm|copilot-vscode|cursor|opencode|pi|omp).
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|phpstorm|android-studio|copilot-vscode|cursor|opencode|pi|omp).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
@@ -201,7 +204,7 @@ setup_command! {
     #[arg(long)]
     pub no_launch: bool,
     /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200,
-    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700, phpstorm 41800, pi 41900, omp 42000) so multiple relays can
+    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700, phpstorm 41800, pi 41900, omp 42000, android-studio 42100) so multiple relays can
     /// run side by side.
     #[arg(long)]
     pub port: Option<u16>,
@@ -349,7 +352,7 @@ async fn run_with_reroute(
     };
     let ca = build_ca(&cert_pem, &key_pem)?;
     let port = opts.port.unwrap_or_else(|| {
-        if is_copilot_desktop(&agent) { 41600 } else if agent == "intellij" { 41700 } else if agent == "phpstorm" { 41800 } else if agent == "omp" { 42000 } else { default_port(&provider) }
+        if is_copilot_desktop(&agent) { 41600 } else if agent == "intellij" { 41700 } else if agent == "phpstorm" { 41800 } else if agent == "omp" { 42000 } else if agent == "android-studio" { 42100 } else { default_port(&provider) }
     });
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
@@ -394,7 +397,8 @@ async fn run_with_reroute(
         opts.log_output.as_deref(),
         &gateway,
         &session_id,
-    );
+        &org_slug,
+    )?;
 
     // Run proxy-only when no agent is named, or when `--no-launch` is set (e.g.
     // driving an external client like Claude Desktop against a named provider's
@@ -1221,6 +1225,8 @@ fn spawn_agent(
     let mut cmd = if is_jetbrains(agent) {
         let bin = if agent == "phpstorm" {
             crate::commands::launch::phpstorm::binary()?
+        } else if agent == "android-studio" {
+            crate::commands::launch::android_studio::binary()?
         } else {
             crate::commands::launch::intellij::binary()?
         };
@@ -1483,7 +1489,8 @@ fn print_banner(
     log_output: Option<&Path>,
     gateway: &GatewayTarget,
     session_id: &str,
-) {
+    org_slug: &str,
+) -> Result<()> {
     println!("{}", style("edgee relay").bold().green());
     println!("  proxy:    http://{addr}");
     println!("  CA cert:  {}", cert_path.display());
@@ -1493,14 +1500,15 @@ fn print_banner(
     );
     println!("  session:  {session_id}");
     println!(
-        "  console:  {}/sessions/{session_id}",
-        crate::config::console_base_url()
+        "  console:  {}",
+        crate::config::console_launch_session_url(Some(org_slug), session_id)?
     );
     match log_output {
         Some(p) => println!("  logs:     {}", p.display()),
         None => println!("  logs:     disabled"),
     }
     println!();
+    Ok(())
 }
 
 /// Hint printed before launching Claude Desktop behind the relay. Unlike the
@@ -1646,6 +1654,19 @@ mod tests {
         assert!(is_gui_editor("phpstorm"));
         assert_eq!(editor_app_name("phpstorm"), "PHPStorm");
         assert!(!uses_trusted_copilot_ca("phpstorm"));
+    }
+
+    #[test]
+    fn android_studio_uses_copilot_subscription_and_editor_lifecycle() {
+        assert_eq!(canonicalize_target("android-studio"), Some("android-studio"));
+        assert!(TARGETS.contains(&"android-studio"));
+        assert_eq!(key_provider("android-studio"), "copilot");
+        assert!(uses_upstream_credentials("android-studio"));
+        assert!(intercepts_copilot_hosts("android-studio"));
+        assert!(is_gui_editor("android-studio"));
+        assert!(is_jetbrains("android-studio"));
+        assert_eq!(editor_app_name("android-studio"), "Android Studio");
+        assert!(!uses_trusted_copilot_ca("android-studio"));
     }
 
     #[test]
