@@ -1,116 +1,78 @@
-//! `edgee statusline` — render the Edgee statusline, optionally merged with a
-//! wrapped command's output, plus management subcommands for per-agent
-//! integrations (currently `claude`).
+//! `edgee statusline`: the Edgee statusline of GitHub Copilot CLI.
 //!
-//! Bare invocation (`edgee statusline` with no flags or subcommand) prints
-//! help. The actual renderer used by Claude Code's `statusLine.command` is
-//! `edgee statusline render`.
+//! Bare, it renders the line (what Copilot's `statusLine.command` runs). With
+//! `--wrap` it renders next to a statusLine of the user's own. `copilot`
+//! installs or removes it from Copilot's settings. Claude Code does not use
+//! this: its inline UI is the Edgee mod (`mods/edgee/`).
 
-pub mod claude;
+pub mod copilot;
 pub mod render;
 pub mod wrap;
-pub mod width;
 
 use anyhow::Result;
 
 #[derive(Debug, clap::Parser)]
-#[command(args_conflicts_with_subcommands = true, arg_required_else_help = true)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct Options {
-    /// **Deprecated** — use `edgee statusline wrap <COMMAND>` instead. Kept
-    /// as a hidden flag so already-deployed `.claude/settings.local.json`
-    /// overlays written by `edgee fix` continue to work.
-    #[arg(long, value_name = "COMMAND", hide = true)]
-    pub wrap: Option<String>,
+    /// Also run this shell command, and show its output next to Edgee's
+    #[arg(long, value_name = "COMMAND", allow_hyphen_values = true)]
+    wrap: Option<String>,
 
     #[command(subcommand)]
-    pub command: Option<Command>,
+    command: Option<Command>,
 }
 
 #[derive(Debug, clap::Subcommand)]
-pub enum Command {
-    /// Render the Edgee statusline segment. Used by Claude Code's
-    /// `statusLine.command` setting.
-    Render,
-    /// Run a command through the platform shell and merge its output with
-    /// Edgee's. Used as an overlay in `.claude/settings.local.json` to
-    /// coexist with a project's own statusLine.
-    Wrap {
-        /// The shell command to run alongside Edgee's renderer.
-        #[arg(required = true)]
-        command: String,
-    },
-    /// Manage the Claude Code statusline integration.
-    Claude(claude::Options),
+enum Command {
+    /// Install or remove the statusline in GitHub Copilot CLI's settings
+    Copilot(copilot::Options),
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    if let Some(cmd) = opts.wrap {
-        return wrap::run(cmd).await;
+    match (opts.command, opts.wrap) {
+        (Some(Command::Copilot(o)), _) => copilot::run(o)?,
+        (None, Some(command)) => wrap::run(&command).await,
+        (None, None) => render::run().await,
     }
-    match opts.command {
-        Some(Command::Render) => render::run().await,
-        Some(Command::Wrap { command }) => wrap::run(command).await,
-        Some(Command::Claude(o)) => claude::run(o).await,
-        None => {
-            // Unreachable: `arg_required_else_help` makes clap exit with help
-            // before we get here.
-            unreachable!("clap should have printed help when no args/subcommand were given")
-        }
-    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::Parser;
 
-    #[test]
-    fn bare_invocation_errors_with_help() {
-        let err = Options::try_parse_from(["edgee-statusline"]).unwrap_err();
-        // clap returns a "DisplayHelpOnMissingArgumentOrSubcommand" kind for
-        // `arg_required_else_help`. We don't need to inspect the kind — the
-        // important behaviour is that bare invocation does NOT yield a parsed
-        // `Options` struct, so we can't accidentally render anything.
-        let rendered = err.to_string();
-        assert!(
-            rendered.contains("Usage:") || rendered.contains("USAGE:"),
-            "expected help text in error: {rendered}"
-        );
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Options, clap::Error> {
+        Options::try_parse_from(std::iter::once("edgee-statusline").chain(args.iter().copied()))
     }
 
     #[test]
-    fn parses_legacy_dash_dash_wrap_flag() {
-        let opts =
-            Options::try_parse_from(["edgee-statusline", "--wrap", "echo hi"]).unwrap();
-        assert_eq!(opts.wrap.as_deref(), Some("echo hi"));
+    fn bare_invocation_renders() {
+        let opts = parse(&[]).unwrap();
+        assert!(opts.command.is_none() && opts.wrap.is_none());
     }
 
     #[test]
-    fn parses_render_subcommand() {
-        let opts = Options::try_parse_from(["edgee-statusline", "render"]).unwrap();
-        assert!(opts.wrap.is_none());
-        assert!(matches!(opts.command, Some(Command::Render)));
+    fn wrap_takes_a_command_even_one_starting_with_a_dash() {
+        assert_eq!(parse(&["--wrap", "echo hi"]).unwrap().wrap.as_deref(), Some("echo hi"));
+        assert_eq!(parse(&["--wrap", "-x"]).unwrap().wrap.as_deref(), Some("-x"));
     }
 
     #[test]
-    fn parses_new_wrap_subcommand() {
-        let opts = Options::try_parse_from(["edgee-statusline", "wrap", "echo hi"]).unwrap();
-        assert!(opts.wrap.is_none());
+    fn copilot_subtree_parses() {
+        let opts = parse(&["copilot", "install", "--wrap"]).unwrap();
         assert!(matches!(
             opts.command,
-            Some(Command::Wrap { ref command }) if command == "echo hi"
-        ));
-    }
-
-    #[test]
-    fn parses_claude_subtree() {
-        let opts =
-            Options::try_parse_from(["edgee-statusline", "claude", "doctor"]).unwrap();
-        assert!(matches!(
-            opts.command,
-            Some(Command::Claude(claude::Options {
-                command: claude::Command::Doctor(_),
+            Some(Command::Copilot(copilot::Options {
+                command: copilot::Command::Install { wrap: true },
             }))
         ));
+        assert!(parse(&["copilot", "uninstall"]).is_ok());
+    }
+
+    #[test]
+    fn wrap_and_subcommand_conflict() {
+        assert!(parse(&["--wrap", "x", "copilot", "uninstall"]).is_err());
     }
 }

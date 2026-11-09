@@ -25,14 +25,13 @@ const EDGEE_ENABLED_TOOLS: &[&str] = &[
 /// server — the same server claude.rs points `--mcp-config` at, delivered here
 /// as TOML overrides instead of a JSON file, the same way `codex_mcp_args`
 /// delivers plugin MCP servers.
-fn edgee_mcp_args(token: &str) -> Vec<String> {
+fn edgee_mcp_args(token: &str, launch_id: &str) -> Vec<String> {
     let mut args = vec![format!(
         "mcp_servers.edgee.url={}",
         plugins::config::toml_string(&crate::config::mcp_base_url())
     )];
 
-    let mut headers = std::collections::HashMap::new();
-    headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+    let headers = super::mcp::edgee_http_headers(token, launch_id);
     args.push(format!(
         "mcp_servers.edgee.http_headers={}",
         plugins::config::toml_table(&headers)
@@ -58,7 +57,8 @@ fn developer_instructions_arg(session_id: &str, repo: Option<&str>, session_url:
     )
 }
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    ensure_saved_thread_provider()?;
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -101,16 +101,9 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 3: launch codex with the correct env vars
     let codex = creds.codex.as_ref().unwrap();
     let api_key = &codex.api_key;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "codex").await?;
 
-    // First-run: install the persistent user-level statusline integration
-    // exactly once. Codex itself doesn't render an Edgee statusline today,
-    // but users typically also use Claude Code in the same shell — running
-    // the installer on the first `edgee launch` of any agent matches the
-    // "set it up once" flow we want.
-    util::ensure_first_run_installed().await;
-
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "codex").await;
 
     let repo_origin = crate::git::detect_origin();
     let repo_entry = repo_origin.as_ref()
@@ -123,7 +116,8 @@ pub async fn run(opts: Options) -> Result<()> {
         })
         .unwrap_or_default();
     let base_url = format!("{}/v1", super::gateway_base_url_with_org(org.as_ref()));
-    let mut cmd = std::process::Command::new(util::resolve_binary("codex"));
+    let codex_bin = util::resolve_binary("codex");
+    let mut cmd = std::process::Command::new(&codex_bin);
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
     cmd.args([
@@ -139,6 +133,10 @@ pub async fn run(opts: Options) -> Result<()> {
         // logged in to codex — the header is simply omitted.
         "-c", "model_providers.edgee-cli.requires_openai_auth=true",
     ]);
+    // Edgee model catalog for Codex's picker and model metadata; see `codex_catalog`.
+    for arg in super::codex_catalog::cli_args(&codex_bin, "edgee-cli", &base_url, api_key).await {
+        cmd.args(["-c", &arg]);
+    }
     // Org plugins. Codex exposes no way to add a skills directory — only to
     // relocate the whole config root via CODEX_HOME — so we build a symlink
     // mirror of it and add ours there. Symlinks mean the user's auth.json,
@@ -155,13 +153,10 @@ pub async fn run(opts: Options) -> Result<()> {
     let use_mcp = creds.enable_mcp.unwrap_or(false) && !mcp_disabled;
     if use_mcp {
         let token = creds.user_token.as_deref().unwrap_or("");
-        for arg in edgee_mcp_args(token) {
+        for arg in edgee_mcp_args(token, &session_id) {
             cmd.args(["-c", &arg]);
         }
-        let session_url = match creds.org_slug.as_deref().filter(|slug| !slug.is_empty()) {
-            Some(slug) => format!("{}/sessions/{slug}/{session_id}", crate::config::console_base_url()),
-            None => format!("{}/sessions/{session_id}", crate::config::console_base_url()),
-        };
+        let session_url = super::mcp::session_url(&creds, &session_id)?;
         cmd.args(["-c", &developer_instructions_arg(&session_id, repo_origin.as_deref(), &session_url)]);
     }
     if let Some(skills_root) = plugin_report.skills_root.as_ref() {
@@ -199,6 +194,11 @@ pub async fn run(opts: Options) -> Result<()> {
     Ok(())
 }
 
+/// Also run when removing the alias, to repair threads from older Edgee versions.
+pub(crate) fn ensure_saved_thread_provider() -> Result<()> {
+    super::codex_config::ensure_fallback(&plugins::codex_home_source().join("config.toml"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,7 +207,7 @@ mod tests {
     fn developer_instructions_round_trip_session_metadata() {
         let session_id = "session-123";
         let repo = "https://example.com/a/\"repo\"";
-        let url = "https://console.example/sessions/org/session-123";
+        let url = "https://console.example/~/org/sessions/session-123";
         let arg = developer_instructions_arg(session_id, Some(repo), url);
         let parsed: toml::Table = arg.parse().unwrap();
         let instructions = parsed["developer_instructions"].as_str().unwrap();
@@ -229,13 +229,15 @@ mod tests {
 
     #[test]
     fn edgee_mcp_args_are_well_formed_toml_overrides() {
-        let args = edgee_mcp_args("tok_123");
+        let args = edgee_mcp_args("tok_123", "launch-current");
 
         assert!(args
             .iter()
             .any(|a| a.starts_with("mcp_servers.edgee.url=") && a.contains(&crate::config::mcp_base_url())));
-        assert!(args
-            .contains(&r#"mcp_servers.edgee.http_headers={"Authorization"="Bearer tok_123"}"#.to_string()));
+        let headers = args.iter().find(|arg| arg.starts_with("mcp_servers.edgee.http_headers=")).unwrap();
+        let parsed: toml::Table = headers.parse().unwrap();
+        assert_eq!(parsed["mcp_servers"]["edgee"]["http_headers"]["Authorization"].as_str(), Some("Bearer tok_123"));
+        assert_eq!(parsed["mcp_servers"]["edgee"]["http_headers"]["X-Edgee-Launch-Id"].as_str(), Some("launch-current"));
         assert!(args.contains(&format!(
             "mcp_servers.edgee.enabled_tools=[{}]",
             EDGEE_ENABLED_TOOLS
@@ -251,7 +253,7 @@ mod tests {
     /// plugin MCP servers.
     #[test]
     fn edgee_mcp_args_escape_control_characters_in_the_token() {
-        let args = edgee_mcp_args("say \"hi\"\nthere");
+        let args = edgee_mcp_args("say \"hi\"\nthere", "launch-current");
         let headers = args
             .iter()
             .find(|a| a.starts_with("mcp_servers.edgee.http_headers="))

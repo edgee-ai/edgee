@@ -9,18 +9,21 @@
 // Windows aliases are shell aliases, not `PATH` shims (`USES_SHIMS = cfg!(unix)`
 // in `commands::alias`), so the re-entry can't happen there; that branch keeps
 // its original `which`/npm resolution.
-#[cfg(not(windows))]
 pub fn resolve_binary(name: &str) -> std::ffi::OsString {
-    let Some(path) = std::env::var_os("PATH") else {
-        return name.into();
-    };
+    find_binary(name)
+        .map(std::path::PathBuf::into_os_string)
+        .unwrap_or_else(|| name.into())
+}
+
+/// Find the real executable, excluding Edgee aliases even when they are on PATH.
+#[cfg(not(windows))]
+pub fn find_binary(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
     let shim_dir = std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(|home| std::path::Path::new(&home).join(".edgee/bin"));
 
     find_on_path(name, &path, shim_dir.as_deref())
-        .map(std::path::PathBuf::into_os_string)
-        .unwrap_or_else(|| name.into())
 }
 
 /// First executable named `name` across `path`, skipping `shim_dir`. `None` if
@@ -54,21 +57,21 @@ fn find_on_path(
 }
 
 #[cfg(windows)]
-pub fn resolve_binary(name: &str) -> std::ffi::OsString {
+pub fn find_binary(name: &str) -> Option<std::path::PathBuf> {
     if let Ok(found) = which::which(name) {
-        return found.into_os_string();
+        return Some(found);
     }
 
     if let Some(npm_bin) = npm_global_bin_dir() {
         for ext in &["cmd", "exe", "ps1"] {
             let candidate = npm_bin.join(format!("{name}.{ext}"));
             if candidate.is_file() {
-                return candidate.into_os_string();
+                return Some(candidate);
             }
         }
     }
 
-    name.into()
+    None
 }
 
 #[cfg(windows)]

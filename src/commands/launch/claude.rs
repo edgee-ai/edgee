@@ -2,7 +2,6 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use anyhow::Result;
-use console::style;
 
 use super::util;
 use crate::commands::util::plugins;
@@ -21,9 +20,10 @@ pub struct Options {
 
 const EDGEE_ALLOWED_TOOLS: &str = "mcp__edgee__setSessionName,mcp__edgee__addSessionPullRequest,mcp__edgee__addSessionCommit,mcp__edgee__setSessionGitRepo";
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    crate::commands::claude_settings::remove_legacy_statusline();
     if opts.relay {
-        return crate::commands::relay::run_for_agent("claude").await;
+        return crate::commands::relay::run_for_agent("claude", reroute).await;
     }
 
     let mut creds = crate::config::read()?;
@@ -69,18 +69,14 @@ pub async fn run(opts: Options) -> Result<()> {
     // Step 4: launch claude with the correct env vars
     let claude = creds.claude.as_ref().unwrap();
     let api_key = &claude.api_key;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = reroute.create_session(&creds, "claude").await?;
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
         .as_ref()
         .map(|url| format!("\nx-edgee-repo: {url}"))
         .unwrap_or_default();
 
-    // First-run: install the persistent user-level statusline integration
-    // exactly once (honors the disable marker).
-    util::ensure_first_run_installed().await;
-
-    util::spawn_cli_version_report(&creds, &session_id);
+    util::report_cli_session(&creds, &session_id, "claude").await;
 
     let gateway_url = super::gateway_base_url_with_org(org.as_ref());
     let debug_log_header = util::resolve_debug_log_keypair()?
@@ -92,7 +88,8 @@ pub async fn run(opts: Options) -> Result<()> {
             )
         })
         .unwrap_or_default();
-    let mut cmd = std::process::Command::new(util::resolve_binary("claude"));
+    let claude_binary = util::resolve_binary("claude");
+    let mut cmd = std::process::Command::new(&claude_binary);
 
     // Set up the environment for the claude CLI to talk to Edgee's gateway instead of Anthropic's API.
     cmd
@@ -105,11 +102,19 @@ pub async fn run(opts: Options) -> Result<()> {
         );
 
     // Set up the environment for the claude CLI to use 1M context window instead of the default 200k on Claude models.
-    cmd.env("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5[1m]")
+    cmd.env("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5-5[1m]")
         .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5-5[1m]");
+
+    // Step 4b: list the org's models in Claude Code's `/model` picker.
+    // Best-effort: on any failure the picker keeps its built-in rows.
+    if let Some(arg) = model_picker_settings_arg(&opts.args, &creds, &gateway_url, api_key).await {
+        cmd.arg(arg);
+    }
 
     // Set up the environment for Edgee session tracking and console API access.
     cmd.env("EDGEE_SESSION_ID", &session_id);
+    // The mod reads session savings through this binary, with the launch profile.
+    cmd.env("EDGEE_CLI_PATH", std::env::current_exe()?);
     cmd.env("EDGEE_ORG_ID", creds.org_id.as_deref().unwrap_or_default());
     cmd.env(
         "EDGEE_ORG_SLUG",
@@ -138,35 +143,27 @@ pub async fn run(opts: Options) -> Result<()> {
     // they set the env var (see `mcp_injection_disabled_with_org`).
     let wants_mcp = creds.enable_mcp.unwrap_or(false);
     if mcp_disabled && wants_mcp {
-        // Without this the integration would just silently vanish, which reads
-        // as a bug rather than a deliberate setting. Name the actual source, so
-        // a forgotten export doesn't look like an org decision.
-        let reason = if crate::config::mcp_injection_disabled_env_override() == Some(true) {
-            "EDGEE_MCP_INJECTION_DISABLED is set"
-        } else {
-            "Edgee MCP is turned off for your organization"
-        };
-        println!("{}", style(format!("  {reason} — skipping.")).dim());
+        super::mcp::print_injection_skipped();
     }
     let use_mcp = wants_mcp && !mcp_disabled;
     if use_mcp {
-        let mcp_config_path = write_mcp_config(&creds)?;
-        let session_url = match creds.org_slug.as_deref() {
-            Some(slug) if !slug.is_empty() => {
-                format!(
-                    "{}/sessions/{slug}/{session_id}",
-                    crate::config::console_base_url()
-                )
-            }
-            _ => format!(
-                "{}/sessions/{session_id}",
-                crate::config::console_base_url()
-            ),
-        };
+        let mcp_config_path = write_mcp_config(&creds, &session_id)?;
+        let session_url = super::mcp::session_url(&creds, &session_id)?;
         let system_prompt =
             super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
         let system_prompt_path = write_system_prompt_file(&system_prompt)?;
-        cmd.args(mcp_injection_args(&mcp_config_path, &system_prompt_path));
+
+        // The bundled mods drive the Edgee MCP server, so they ride along with
+        // it: no MCP, no mods.
+        let mod_dirs = super::claude_mods::prepare(claude_binary.as_ref());
+        cmd.args(mcp_injection_args(
+            &mcp_config_path,
+            &system_prompt_path,
+            !mod_dirs.is_empty(),
+        ));
+        for dir in &mod_dirs {
+            cmd.arg("--plugin-dir").arg(dir);
+        }
     }
 
     // Step 6: deliver the org's plugins. `--plugin-dir` loads a directory for
@@ -222,7 +219,14 @@ pub async fn run(opts: Options) -> Result<()> {
 /// mitigation — with the error "batch file arguments are invalid". Routing the
 /// prompt through a file sidesteps that entirely, since the path itself is a
 /// single line.
-fn mcp_injection_args(config_path: &Path, system_prompt_path: &Path) -> Vec<OsString> {
+///
+/// `with_mod_tools` also allows the Edgee MCP tools the bundled mods call
+/// (see `claude_mods`), when they are loaded.
+fn mcp_injection_args(
+    config_path: &Path,
+    system_prompt_path: &Path,
+    with_mod_tools: bool,
+) -> Vec<OsString> {
     // Built as OsString rather than formatted: paths need not be UTF-8.
     let mut mcp_config = OsString::from("--mcp-config=");
     mcp_config.push(config_path);
@@ -230,27 +234,146 @@ fn mcp_injection_args(config_path: &Path, system_prompt_path: &Path) -> Vec<OsSt
     let mut system_prompt_file = OsString::from("--append-system-prompt-file=");
     system_prompt_file.push(system_prompt_path);
 
-    vec![
-        mcp_config,
-        system_prompt_file,
-        OsString::from(format!("--allowedTools={EDGEE_ALLOWED_TOOLS}")),
-    ]
+    let mut allowed_tools = format!("--allowedTools={EDGEE_ALLOWED_TOOLS}");
+    if with_mod_tools {
+        allowed_tools.push(',');
+        allowed_tools.push_str(super::claude_mods::EDGEE_MOD_TOOLS);
+    }
+
+    vec![mcp_config, system_prompt_file, OsString::from(allowed_tools)]
+}
+
+/// `--settings=<file>` adding the org's models to Claude Code's `/model`
+/// picker through its `modelPicker` setting, or `None` when there is nothing to
+/// add.
+///
+/// Skipped when the user passes `--settings` themselves: Claude Code takes the
+/// whole picker lineup from the highest-priority source, so ours would silently
+/// replace theirs.
+async fn model_picker_settings_arg(
+    user_args: &[String],
+    creds: &crate::config::Credentials,
+    gateway_url: &str,
+    api_key: &str,
+) -> Option<OsString> {
+    if user_passes_settings(user_args) {
+        return None;
+    }
+    let token = creds.user_token.as_deref().filter(|t| !t.is_empty())?;
+    let org_id = creds.org_id.as_deref().filter(|o| !o.is_empty())?;
+    let client = crate::api::ApiClient::new(token).ok()?;
+    // Capped well below the clients' own timeouts: this runs before Claude
+    // starts, and a slow catalog must not hold up the launch.
+    let (available, served) = tokio::time::timeout(
+        MODEL_PICKER_FETCH_TIMEOUT,
+        async {
+            tokio::join!(
+                client.list_available_models(org_id),
+                util::fetch_gateway_models(gateway_url, api_key),
+            )
+        },
+    )
+    .await
+    .ok()?;
+    let settings = model_picker_settings(&available.ok()?, &served)?;
+    let path = write_settings_file(&settings).ok()?;
+    let mut arg = OsString::from("--settings=");
+    arg.push(path);
+    Some(arg)
+}
+
+const MODEL_PICKER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn user_passes_settings(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|a| *a != "--")
+        .any(|a| a == "--settings" || a.starts_with("--settings="))
+}
+
+/// Claude Code's default window for a model it doesn't recognize.
+const CLAUDE_ASSUMED_WINDOW: u64 = 200_000;
+/// Smallest `autoCompactWindow` Claude Code accepts; a model with a smaller
+/// window can't hold a Claude Code session and is left out.
+const MIN_PICKER_WINDOW: u64 = 100_000;
+/// Window Claude Code assumes for an id carrying the `[1m]` suffix.
+const ONE_M_WINDOW: u64 = 1_000_000;
+
+/// One `/model` row per org-enabled model, narrowed to the key's gateway
+/// listing (`served`; empty = fetch failed, no narrowing). Claude Code assumes
+/// 200K for unknown ids, so 1M+ windows get `[1m]` and sub-200K windows an
+/// earlier `autoCompactWindow`.
+fn model_picker_settings(
+    available: &[crate::api::GatewayModel],
+    served: &[String],
+) -> Option<serde_json::Value> {
+    let mut options = Vec::new();
+    let mut model_settings = serde_json::Map::new();
+    let mut models: Vec<_> = available
+        .iter()
+        .filter(|m| m.active && !m.providers.is_empty() && !m.app_subscription_only())
+        .filter_map(|m| Some((m.catalog_id()?, m)))
+        .filter(|(id, _)| served.is_empty() || served.contains(id))
+        .collect();
+    models.sort_by(|a, b| a.0.cmp(&b.0));
+    for (id, m) in models {
+        let window = m.context_limit();
+        if window.is_some_and(|w| w < MIN_PICKER_WINDOW) {
+            continue;
+        }
+        // Claude models go by their bare id: the Claude plan upstream rejects
+        // `anthropic/…`, and Claude Code recognizes the bare id natively.
+        let base = if m.author_id == "anthropic" {
+            m.model_id.clone()
+        } else {
+            id.clone()
+        };
+        let model = match window {
+            Some(w) if w >= ONE_M_WINDOW => format!("{base}[1m]"),
+            Some(w) if w < CLAUDE_ASSUMED_WINDOW => {
+                model_settings.insert(base.clone(), serde_json::json!({ "autoCompactWindow": w }));
+                base
+            }
+            _ => base,
+        };
+        let label = if m.display_name.is_empty() {
+            id.clone()
+        } else {
+            m.display_name.clone()
+        };
+        let description = match window {
+            Some(w) => format!("Via Edgee · {}K context", w / 1000),
+            None => "Via Edgee".to_string(),
+        };
+        options.push(serde_json::json!({
+            "model": model,
+            "label": label,
+            "description": description,
+        }));
+    }
+    if options.is_empty() {
+        return None;
+    }
+    let mut settings = serde_json::json!({ "modelPicker": { "options": options } });
+    if !model_settings.is_empty() {
+        settings["modelSettings"] = serde_json::Value::Object(model_settings);
+    }
+    Some(settings)
+}
+
+fn write_settings_file(settings: &serde_json::Value) -> Result<std::path::PathBuf> {
+    let dir = crate::config::config_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("claude-settings.json");
+    std::fs::write(&path, serde_json::to_string_pretty(settings)?)?;
+    Ok(path)
 }
 
 /// Writes an MCP config file to the Edgee config directory with the user's auth token.
 /// Returns the path to the written file.
-fn write_mcp_config(creds: &crate::config::Credentials) -> Result<std::path::PathBuf> {
+fn write_mcp_config(creds: &crate::config::Credentials, launch_id: &str) -> Result<std::path::PathBuf> {
     let token = creds.user_token.as_deref().unwrap_or("");
     let mcp_config = serde_json::json!({
-        "mcpServers": {
-            "edgee": {
-                "type": "http",
-                "url": crate::config::mcp_base_url(),
-                "headers": {
-                    "Authorization": format!("Bearer {token}")
-                }
-            }
-        }
+        "mcpServers": { "edgee": super::mcp::edgee_http_server(token, launch_id) }
     });
 
     let dir = crate::config::config_dir();
@@ -286,21 +409,106 @@ mod tests {
         let injected = mcp_injection_args(
             Path::new("/tmp/mcp.json"),
             Path::new("/tmp/system-prompt.txt"),
+            true,
         );
 
         assert!(injected.contains(&OsString::from("--mcp-config=/tmp/mcp.json")));
         assert!(injected.contains(&OsString::from(
             "--append-system-prompt-file=/tmp/system-prompt.txt"
         )));
-        assert!(injected
-            .iter()
-            .any(|a| a.to_string_lossy() == format!("--allowedTools={EDGEE_ALLOWED_TOOLS}")));
+        assert!(injected.iter().any(|a| a.to_string_lossy()
+            == format!(
+                "--allowedTools={EDGEE_ALLOWED_TOOLS},{}",
+                super::super::claude_mods::EDGEE_MOD_TOOLS
+            )));
         assert!(
             !injected.iter().any(|a| a == "--mcp-config"
                 || a == "--allowedTools"
                 || a == "--append-system-prompt-file"),
             "variadic flags must not be passed as a space-separated pair: {injected:?}"
         );
+    }
+
+    // The reroute tools are allowed only when the mod that calls them is loaded.
+    #[test]
+    fn mod_tools_are_allowed_only_with_the_mods() {
+        let allowed = |with_mods| {
+            mcp_injection_args(Path::new("/m"), Path::new("/p"), with_mods)
+                .into_iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .find(|a| a.starts_with("--allowedTools="))
+                .unwrap()
+        };
+        assert_eq!(allowed(false), format!("--allowedTools={EDGEE_ALLOWED_TOOLS}"));
+        assert!(allowed(true).ends_with(",mcp__edgee__clearSessionReroute"));
+    }
+
+    fn model(json: &str) -> crate::api::GatewayModel {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn picker_models(settings: &serde_json::Value) -> Vec<String> {
+        settings["modelPicker"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["model"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn model_picker_lists_org_models_except_inactive_and_app_only() {
+        let available = [
+            model(r#"{"model_id":"claude-opus-5-5","author_id":"anthropic","active":true,"providers":{"anthropic":{"context_max_size":200000}}}"#),
+            model(r#"{"model_id":"kimi-k3","author_id":"moonshotai","display_name":"Kimi K3","active":true,"providers":{"moonshotai":{"context_max_size":256000}}}"#),
+            model(r#"{"model_id":"composer-2","author_id":"cursor","active":true,"providers":{"cursor":{"context_max_size":256000}}}"#),
+            model(r#"{"model_id":"old","author_id":"acme","active":false,"providers":{"acme":{"context_max_size":256000}}}"#),
+        ];
+        let settings = model_picker_settings(&available, &[]).unwrap();
+        assert_eq!(
+            picker_models(&settings),
+            ["claude-opus-5-5", "moonshotai/kimi-k3"]
+        );
+        let row = &settings["modelPicker"]["options"][1];
+        assert_eq!(row["label"], "Kimi K3");
+        assert_eq!(row["description"], "Via Edgee · 256K context");
+        assert!(settings.get("modelSettings").is_none());
+    }
+
+    #[test]
+    fn model_picker_is_narrowed_to_the_key_listing() {
+        let available = [
+            model(r#"{"model_id":"a","author_id":"x","active":true,"providers":{"x":{}}}"#),
+            model(r#"{"model_id":"b","author_id":"x","active":true,"providers":{"x":{}}}"#),
+        ];
+        let settings = model_picker_settings(&available, &["x/b".to_string()]).unwrap();
+        assert_eq!(picker_models(&settings), ["x/b"]);
+    }
+
+    #[test]
+    fn model_picker_corrects_context_windows() {
+        let available = [
+            model(r#"{"model_id":"big","author_id":"x","active":true,"providers":{"x":{"context_max_size":1048576}}}"#),
+            model(r#"{"model_id":"small","author_id":"x","active":true,"providers":{"x":{"context_max_size":128000}}}"#),
+            model(r#"{"model_id":"tiny","author_id":"x","active":true,"providers":{"x":{"context_max_size":32000}}}"#),
+        ];
+        let settings = model_picker_settings(&available, &[]).unwrap();
+        assert_eq!(picker_models(&settings), ["x/big[1m]", "x/small"]);
+        assert_eq!(settings["modelSettings"]["x/small"]["autoCompactWindow"], 128000);
+    }
+
+    #[test]
+    fn model_picker_is_omitted_when_nothing_to_add() {
+        assert!(model_picker_settings(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn user_settings_flag_is_detected_before_separator_only() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(user_passes_settings(&args(&["--settings", "x.json"])));
+        assert!(user_passes_settings(&args(&["--settings=x.json"])));
+        assert!(!user_passes_settings(&args(&["-p", "hi"])));
+        assert!(!user_passes_settings(&args(&["--", "--settings"])));
     }
 
     // Regression test: the system prompt used to be injected inline via
@@ -315,6 +523,7 @@ mod tests {
         let injected = mcp_injection_args(
             Path::new("/tmp/mcp.json"),
             Path::new("/tmp/system-prompt.txt"),
+            true,
         );
 
         for arg in &injected {
