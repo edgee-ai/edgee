@@ -332,8 +332,6 @@ pub struct GatewayModel {
     /// the id the gateway's own `/v1/models` listing exposes; see `catalog_id`.
     #[serde(default)]
     pub author_id: String,
-    #[serde(default)]
-    pub display_name: String,
     /// Gateway-normalized reasoning effort values accepted for this model.
     /// Empty means the catalog exposes no configurable effort knob.
     #[serde(default)]
