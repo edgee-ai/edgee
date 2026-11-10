@@ -101,10 +101,6 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
             ),
         );
 
-    // Set up the environment for the claude CLI to use 1M context window instead of the default 200k on Claude models.
-    cmd.env("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5-5[1m]")
-        .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5-5[1m]");
-
     // On a plan connection the gateway forwards the user's own Anthropic subscription, so tell
     // Claude Code to treat Edgee's base URL as Anthropic's API. Behind any other host, Claude
     // Code skips its model catalog and `/model` falls back to a row Anthropic's server sends,
