@@ -732,12 +732,16 @@ pub struct ToolCompressionStat {
 #[derive(Debug, Serialize)]
 pub struct SessionRerouteRequest<'a> {
     pub api_key_id: &'a str,
-    pub source_model: &'a str,
-    pub target_model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_model: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_provider: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passthrough_mode: Option<bool>,
     pub expires_at: &'a str,
 }
 
@@ -1145,49 +1149,6 @@ impl ApiClient {
         )
     }
 
-    pub async fn get_passthrough_mode(
-        &self,
-        org: &str,
-        session_id: &str,
-        api_key_ids: &[String],
-    ) -> Result<crate::commands::launch::passthrough_mode::Status> {
-        let mut url = self.launch_session_url(org, session_id, "passthrough-mode")?;
-        url.query_pairs_mut()
-            .append_pair("api_key_ids", &api_key_ids.join(","));
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .context("Failed to read session Pass-through mode")?;
-        check_status(&response, "read session Pass-through mode")?;
-        response
-            .json()
-            .await
-            .context("Invalid session Pass-through mode response")
-    }
-
-    pub async fn put_passthrough_mode(
-        &self,
-        org: &str,
-        session_id: &str,
-        request: &crate::commands::launch::passthrough_mode::Request<'_>,
-    ) -> Result<crate::commands::launch::passthrough_mode::Status> {
-        let url = self.launch_session_url(org, session_id, "passthrough-mode")?;
-        let response = self
-            .http
-            .put(url)
-            .json(request)
-            .send()
-            .await
-            .context("Failed to publish session Pass-through mode")?;
-        check_status(&response, "publish session Pass-through mode")?;
-        response
-            .json()
-            .await
-            .context("Invalid session Pass-through mode response")
-    }
-
     pub async fn put_session_reroute(
         &self,
         org_id: &str,
@@ -1494,10 +1455,11 @@ mod tests {
             client.base_url = format!("http://{address}");
             let request = super::SessionRerouteRequest {
                 api_key_id: "key",
-                source_model: "*",
-                target_model: "openai/gpt-5",
+                source_model: Some("*"),
+                target_model: Some("openai/gpt-5"),
                 target_provider: None,
                 effort: None,
+                passthrough_mode: None,
                 expires_at: "2026-10-02T12:00:00Z",
             };
             let result = client

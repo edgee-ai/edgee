@@ -327,7 +327,7 @@ fn build_anthropic_provider(
     )
 }
 
-pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -364,7 +364,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     let pi = creds.pi.as_ref().unwrap();
     let api_key = &pi.api_key;
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
-    let (session_id, requirement) = reroute.create_session(&creds, "pi", &gateway_url).await?;
+    let session_id = reroute.create_session(&creds, "pi").await?;
 
 
     let (models, catalog) = tokio::join!(
@@ -406,13 +406,6 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
             build_anthropic_provider(&gateway_url, &anthropic_models, &catalog, debug_log_headers),
         ));
     }
-    if requirement.is_some() {
-        for (_, provider) in &mut providers {
-            for (name, env) in super::passthrough_mode::HEADER_NAMES.into_iter().zip(super::passthrough_mode::HEADER_ENVS) {
-                provider["headers"][name] = Value::String(env.to_string());
-            }
-        }
-    }
 
     let models_path = models_path().context("Could not determine your home directory")?;
     write_providers(&models_path, &providers)?;
@@ -422,11 +415,6 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     let mut cmd = std::process::Command::new(util::resolve_binary("omp"));
     cmd.env(API_KEY_ENV, api_key);
     cmd.env(SESSION_ID_ENV, &session_id);
-    if let Some(requirement) = &requirement {
-        for ((_, value), env) in requirement.headers().into_iter().zip(super::passthrough_mode::HEADER_ENVS) {
-            cmd.env(env, value);
-        }
-    }
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
     cmd.args(plugin_args(&plugin_report));
     cmd.args(&opts.args);

@@ -11,7 +11,7 @@ pub struct Options {
     pub args: Vec<String>,
 }
 
-pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -48,8 +48,8 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     let codebuddy = creds.codebuddy.as_ref().unwrap();
     let api_key = &codebuddy.api_key;
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
-    let (session_id, requirement) = reroute.create_session(&creds, "codebuddy", &gateway_url).await?;
-    let passthrough_headers = super::passthrough_mode::line_headers(requirement.as_ref());
+    let session_id = reroute.create_session(&creds, "codebuddy").await?;
+    
 
 
     let repo_entry = crate::git::detect_origin()
@@ -69,7 +69,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     cmd.env(
         "CODEBUDDY_CUSTOM_HEADERS",
         format!(
-            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_entry}{debug_log_header}{passthrough_headers}"
+            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_entry}{debug_log_header}"
         ),
     );
     // Org plugins. CodeBuddy documents CODEBUDDY_PLUGIN_DIRS as the env-var form

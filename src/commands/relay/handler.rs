@@ -168,8 +168,6 @@ pub struct GatewayTarget {
     /// `None` when no passphrase was resolved — debug logs then upload as
     /// plaintext.
     pub debug_log_headers: Option<crate::crypto::DebugLogHeaderValues>,
-    /// Validated requirements indexed by the actual Edgee credential selected by auth_for.
-    pub passthrough_requirements: std::collections::HashMap<String, http::HeaderMap>,
 }
 
 impl GatewayTarget {
@@ -554,13 +552,6 @@ fn apply_reroute(parts: &mut http::request::Parts, gw: &GatewayTarget, gw_path: 
     if let Ok(v) = http::HeaderValue::from_str(&gw.session_id) {
         h.insert("x-edgee-session-id", v);
     }
-    // Replace the complete set, including duplicate client-supplied values.
-    // Conversion happened before serving, so headers cannot silently be omitted.
-    if let Some(requirement) = gw.passthrough_requirements.get(api_key) {
-        for (name, value) in requirement {
-            h.insert(name.clone(), value.clone());
-        }
-    }
     if let Some(repo) = &gw.repo {
         if let Ok(v) = http::HeaderValue::from_str(repo) {
             h.insert("x-edgee-repo", v);
@@ -656,46 +647,9 @@ mod tests {
             claude_api_key: None,
             codex_api_key: None,
             debug_log_headers: None,
-            passthrough_requirements: Default::default(),
         }
     }
 
-    #[test]
-    fn passthrough_relay_selects_requirements_by_actual_primary_claude_and_codex_key() {
-        use crate::commands::launch::passthrough_mode::{Requirement, HEADER_NAMES};
-        let mut gw = target();
-        gw.base_path = "/tenant/gateway".into();
-        gw.claude_api_key = Some("claude-key".into());
-        gw.codex_api_key = Some("codex-key".into());
-        for (key, revision) in [("sk-edgee-test", 1), ("claude-key", 2), ("codex-key", 3)] {
-            gw.passthrough_requirements.insert(key.into(), Requirement {
-                api_key_id: key.into(),
-                scope_incarnation: "672a7943-3648-46a5-a90f-17b356a13ac4".into(),
-                revision,
-                valid_until: 2_000_000_000,
-            }.header_map().unwrap());
-        }
-        for (url, key, revision) in [
-            ("https://api.githubcopilot.com/chat/completions", "sk-edgee-test", "1"),
-            ("https://api.anthropic.com/v1/messages", "claude-key", "2"),
-            ("https://chatgpt.com/backend-api/codex/responses", "codex-key", "3"),
-        ] {
-            let request = Request::builder().method("POST").uri(url)
-                .header(HEADER_NAMES[0], "stale-client-incarnation")
-                .header(HEADER_NAMES[1], "999")
-                .header(HEADER_NAMES[1], "1000")
-                .body(Body::from(bytes::Bytes::new())).unwrap();
-            let (mut parts, _) = request.into_parts();
-            apply_reroute(&mut parts, &gw, "/v1/responses");
-            assert_eq!(parts.uri.path(), "/tenant/gateway/v1/responses");
-            assert_eq!(parts.headers["x-edgee-api-key"], key);
-            assert_eq!(parts.headers["x-edgee-session-id"], "sess-1");
-            assert_eq!(parts.headers[HEADER_NAMES[0]], "672a7943-3648-46a5-a90f-17b356a13ac4");
-            assert_eq!(parts.headers[HEADER_NAMES[1]], revision);
-            assert_eq!(parts.headers[HEADER_NAMES[2]], "2000000000");
-            assert_eq!(parts.headers.get_all(HEADER_NAMES[1]).iter().count(), 1);
-        }
-    }
 
     #[test]
     fn reroute_rewrites_uri_and_injects_headers() {

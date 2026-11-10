@@ -109,7 +109,7 @@ fn launch_args(args: &[String], patch_path: &Path) -> Vec<String> {
     result
 }
 
-pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
     if creds.user_token.as_deref().unwrap_or("").is_empty() {
         crate::commands::auth::login::perform_login().await?;
@@ -125,7 +125,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     let api_key = creds.provider_api_key("deepseek")
         .context("DeepSeek key missing. Retry `edgee launch deepseek` to provision it.")?;
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
-    let (session_id, requirement) = reroute.create_session(&creds, "deepseek", &gateway_url).await?;
+    let session_id = reroute.create_session(&creds, "deepseek").await?;
 
     let (models, catalog) = tokio::join!(
         util::fetch_gateway_models(gateway_url.trim_end_matches('/'), api_key),
@@ -138,7 +138,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
         "x-edgee-api-key": api_key,
         "x-edgee-session-id": session_id,
     });
-    super::passthrough_mode::insert_headers(&mut headers, requirement.as_ref());
+    
     if let Some(repo) = crate::git::detect_origin() {
         headers["x-edgee-repo"] = json!(repo);
     }

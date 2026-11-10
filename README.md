@@ -250,19 +250,22 @@ security, budgets and usage accounting remain active. Existing bounded retries
 to the same destination remain possible. Stored settings and reroutes are retained
 and take effect again after expiry or when Pass-through mode is turned off.
 
-The CLI checks gateway support and turns on Pass-through mode for every installed key
-before starting the agent. Requests fail closed until that publication reaches the
-serving gateway. An unsupported gateway or failed publication prevents launch.
-Direct Cursor and Pi launches cannot carry this guarantee: use their relay mode
-or organization Pass-through mode. Kimi requires version 0.20.2 or newer. OpenCode
-launches with Pass-through mode On cannot attach to an existing server, and Codex cannot select a local
-provider or override the configured Edgee transport.
+The CLI creates a normal launch session and saves Pass-through mode as an option
+on its existing session reroute override for each installed key before starting the agent.
+An API authentication, validation or write error
+prevents launch. Success confirms persistence, not acknowledgement from every gateway;
+no special request headers or gateway capability negotiation are required.
+Direct Cursor launch has no per-launch session ID: use its relay mode or organization
+Pass-through mode.
+Session overrides require Kimi Code 0.20.2 or newer for session-header support.
+OpenCode must start standalone: attaching to an existing server cannot install the
+new launch's session identity.
 
 Organization admins can also use **Settings → Gateway → Pass-through mode**.
 Choose **Turn on** to set it to **On**; it persists until an admin chooses **Turn off**
 to set it to **Off**. Organization settings override session controls.
-The session page supports explicit key selection and expiry; its status shows
-saved configuration, not acknowledgement from every gateway. Turning session
+The session page provides a switch under session rerouting with a 24-hour expiry;
+its status shows saved configuration, not acknowledgement from every gateway. Turning session
 Pass-through mode Off does not override organization On or delete stored reroutes.
 Local MCP integrations, plugins and mods are not disabled.
 

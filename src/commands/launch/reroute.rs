@@ -11,7 +11,7 @@ use crate::{
 #[group(id = "session_reroute", multiple = true)]
 pub struct Options {
     /// Reroute this session to a model (place before the agent name)
-    #[arg(long = "reroute", value_name = "MODEL", conflicts_with = "enabled")]
+    #[arg(long = "reroute", value_name = "MODEL", conflicts_with = "passthrough_mode")]
     pub target: Option<String>,
     /// Only reroute this source model (default: all models)
     #[arg(long = "reroute-from", requires = "target", value_name = "MODEL")]
@@ -34,11 +34,17 @@ pub struct Options {
         value_parser = clap::value_parser!(u16).range(1..=1440)
     )]
     duration: Option<u16>,
+    /// Disable compression, rerouting and fallback for this session
+    #[arg(long = "passthrough", alias = "passthrough-mode", conflicts_with = "target")]
+    pub passthrough_mode: bool,
+    /// Pass-through lifetime in minutes (default: 60; maximum: 1440)
+    #[arg(long, requires = "passthrough_mode", value_name = "MINUTES", value_parser = clap::value_parser!(u16).range(1..=1440))]
+    pub passthrough_duration: Option<u16>,
 }
 
-/// A reroute validated against the catalog, ready to attach to a launch session.
+/// A session routing override, ready to attach to a launch session.
 #[derive(Debug, Default)]
-pub struct Reroute(Option<Validated>);
+pub struct Reroute(Option<Validated>, Option<u16>);
 
 #[derive(Debug)]
 struct Validated {
@@ -53,6 +59,10 @@ impl Options {
     /// Sign in and validate the reroute before any agent setup, so a bad model
     /// fails fast instead of after onboarding and agent configuration prompts.
     pub async fn resolve(&self) -> Result<Reroute> {
+        if self.passthrough_mode {
+            anyhow::ensure!(self.target.is_none(), "--passthrough cannot be combined with --reroute");
+            return Ok(Reroute(None, Some(self.passthrough_duration.unwrap_or(60))));
+        }
         if self.target.is_none() {
             return Ok(Reroute::default());
         }
@@ -101,7 +111,7 @@ impl Options {
             provider: self.provider.as_deref().map(|p| p.trim().to_string()),
             effort,
             duration: self.duration.unwrap_or(60),
-        })))
+        }), None))
     }
 
     fn validate_target(&self, models: &[GatewayModel]) -> Result<(String, Option<String>)> {
@@ -145,63 +155,77 @@ impl Options {
 
 impl Reroute {
     pub fn is_active(&self) -> bool {
-        self.0.is_some()
+        self.0.is_some() || self.1.is_some()
     }
 
     /// Reserve the exact session ID that the launcher will attach to requests.
-    /// An explicitly requested reroute must succeed before the agent can start.
+    /// An explicitly requested session override must succeed before the agent can start.
     pub async fn create_session(&self, creds: &Credentials, provider: &str) -> Result<String> {
-        if self.0.is_none() {
-            return Ok(uuid::Uuid::new_v4().to_string());
+        self.create_session_for_keys(creds, provider, &[provider]).await
+    }
+
+    pub async fn create_session_for_keys(&self, creds: &Credentials, provider: &str, providers: &[&str]) -> Result<String> {
+        if !self.is_active() {
+            let session_id = uuid::Uuid::new_v4().to_string();
+            super::util::report_cli_session(creds, &session_id, provider).await;
+            return Ok(session_id);
         }
         let token = creds
             .user_token
             .as_deref()
             .filter(|s| !s.is_empty())
-            .context("Sign in with `edgee auth login` before using --reroute")?;
+            .context("Sign in with `edgee auth login` before setting a session override")?;
         let org_id = creds
             .org_id
             .as_deref()
             .filter(|s| !s.is_empty())
-            .context("Select an organization with `edgee auth login` before using --reroute")?;
+            .context("Select an organization with `edgee auth login` before setting a session override")?;
         let key_id = creds
             .provider(provider)
             .and_then(|p| p.api_key_id.as_deref())
             .filter(|s| !s.is_empty())
             .context("Missing agent API key ID; run `edgee auth login` and retry")?;
-        self.reserve(&ApiClient::new(token)?, org_id, key_id).await
+        let mut key_ids = vec![key_id];
+        if self.1.is_some() {
+            for provider in providers {
+                let id = creds.provider(provider).and_then(|key| key.api_key_id.as_deref())
+                    .filter(|id| !id.is_empty())
+                    .context("Missing agent API key ID; run `edgee auth login` and retry")?;
+                if !key_ids.contains(&id) {
+                    key_ids.push(id);
+                }
+            }
+        }
+        self.reserve(&ApiClient::new(token)?, org_id, &key_ids).await
     }
 
-    async fn reserve(&self, client: &ApiClient, org_id: &str, key_id: &str) -> Result<String> {
+    async fn reserve(&self, client: &ApiClient, org_id: &str, key_ids: &[&str]) -> Result<String> {
         let session_id = uuid::Uuid::new_v4().to_string();
-        let Some(reroute) = &self.0 else {
-            return Ok(session_id);
-        };
         client
-            .set_session_cli_version(org_id, &session_id, env!("CARGO_PKG_VERSION"), Some(key_id))
+            .set_session_cli_version(org_id, &session_id, env!("CARGO_PKG_VERSION"), key_ids.first().copied())
             .await
             .context("Agent was not launched. Registering the launch session failed; check your access and retry")?;
+        let duration = self.1.or_else(|| self.0.as_ref().map(|rule| rule.duration)).unwrap_or(60);
         let expires_at = (OffsetDateTime::now_utc()
-            + time::Duration::minutes(i64::from(reroute.duration)))
-        .format(&Rfc3339)?;
-        let request = crate::api::SessionRerouteRequest {
-            api_key_id: key_id,
-            source_model: &reroute.source,
-            target_model: &reroute.target,
-            target_provider: reroute.provider.as_deref(),
-            effort: reroute.effort.as_deref(),
-            expires_at: &expires_at,
-        };
-        client
-            .put_session_reroute(org_id, &session_id, &request)
-            .await
-            .context(
-                "Agent was not launched. Check the reroute model and your access, then retry",
-            )?;
-        eprintln!(
-            "Session reroute to {} enabled for {} minutes.",
-            reroute.target, reroute.duration
-        );
+            + time::Duration::minutes(i64::from(duration))).format(&Rfc3339)?;
+        for key_id in key_ids {
+            let request = crate::api::SessionRerouteRequest {
+                api_key_id: key_id,
+                source_model: self.0.as_ref().map(|rule| rule.source.as_str()),
+                target_model: self.0.as_ref().map(|rule| rule.target.as_str()),
+                target_provider: self.0.as_ref().and_then(|rule| rule.provider.as_deref()),
+                effort: self.0.as_ref().and_then(|rule| rule.effort.as_deref()),
+                passthrough_mode: self.1.map(|_| true),
+                expires_at: &expires_at,
+            };
+            client.put_session_reroute(org_id, &session_id, &request).await
+                .context("Agent was not launched. Check the session override and your access, then retry")?;
+        }
+        if let Some(rule) = &self.0 {
+            eprintln!("Session reroute to {} enabled for {} minutes.", rule.target, duration);
+        } else {
+            eprintln!("Pass-through mode enabled until {expires_at}. Existing policy resumes then; traffic, security and usage remain through Edgee.");
+        }
         Ok(session_id)
     }
 }
@@ -353,7 +377,7 @@ mod tests {
             source: Some("sonnet".into()),
             ..Default::default()
         };
-        let Reroute(Some(reroute)) = opts.validate(&client, "org").await.unwrap() else {
+        let Reroute(Some(reroute), _) = opts.validate(&client, "org").await.unwrap() else {
             panic!("reroute not validated")
         };
         assert_eq!(reroute.source, "anthropic/claude-sonnet");
@@ -386,7 +410,34 @@ mod tests {
             provider: Some("openai".into()),
             effort: Some("low".into()),
             duration: 60,
-        }))
+        }), None)
+    }
+
+    #[tokio::test]
+    async fn passthrough_uses_existing_reroute_api_for_every_installed_key() {
+        let (base_url, seen) = mock_api(vec![
+            ("POST /v1/organizations/org/launch-sessions/", "200 OK", serde_json::json!({})),
+            ("PUT /v1/organizations/org/launch-sessions/", "200 OK", serde_json::json!({})),
+            ("PUT /v1/organizations/org/launch-sessions/", "200 OK", serde_json::json!({})),
+        ]).await;
+        let client = ApiClient::with_base_url("token", &base_url).unwrap();
+        let rule = Options {
+            passthrough_mode: true,
+            passthrough_duration: Some(120),
+            ..Default::default()
+        }.resolve().await.unwrap();
+        let session = rule.reserve(&client, "org", &["primary", "secondary"]).await.unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        for ((line, body), key) in seen[1..].iter().zip(["primary", "secondary"]) {
+            assert_eq!(line, &format!("PUT /v1/organizations/org/launch-sessions/{session}/reroute"));
+            assert_eq!(body["api_key_id"], key);
+            assert_eq!(body["passthrough_mode"], true);
+            assert_eq!(body.as_object().unwrap().len(), 3);
+            let expiry = OffsetDateTime::parse(body["expires_at"].as_str().unwrap(), &Rfc3339).unwrap();
+            let remaining = (expiry - OffsetDateTime::now_utc()).whole_minutes();
+            assert!((119..=120).contains(&remaining));
+        }
     }
 
     #[tokio::test]
@@ -404,7 +455,7 @@ mod tests {
             ),
         ]).await;
         let client = ApiClient::with_base_url("token", &base_url).unwrap();
-        let session = validated().reserve(&client, "org", "key").await.unwrap();
+        let session = validated().reserve(&client, "org", &["key"]).await.unwrap();
 
         let seen = seen.lock().unwrap();
         let [(registered, metadata), (line, body)] = seen.as_slice() else {
@@ -439,7 +490,7 @@ mod tests {
         ]).await;
         let client = ApiClient::with_base_url("token", &base_url).unwrap();
         let err = validated()
-            .reserve(&client, "org", "key")
+            .reserve(&client, "org", &["key"])
             .await
             .unwrap_err();
         assert!(err.to_string().contains("Agent was not launched"));

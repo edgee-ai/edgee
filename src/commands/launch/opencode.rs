@@ -460,7 +460,8 @@ fn standalone_args(args: &[String]) -> Vec<String> {
     out
 }
 
-fn reject_passthrough_server_attachment(args: &[String]) -> Result<()> {
+
+fn reject_session_override_server_attachment(args: &[String]) -> Result<()> {
     anyhow::ensure!(
         args.first().is_none_or(|arg| arg != "attach")
             && !args.iter().take_while(|arg| arg.as_str() != "--").any(|arg| {
@@ -468,14 +469,14 @@ fn reject_passthrough_server_attachment(args: &[String]) -> Result<()> {
                     || arg.starts_with("--server=")
                     || arg.starts_with("--attach=")
             }),
-        "OpenCode server attachment cannot install this launch's Pass-through mode requirements. Start a standalone session without --server/--attach, or use organization Pass-through mode."
+        "OpenCode server attachment cannot install this launch's session identity. Start a standalone session without --server/--attach, or use organization pass-through mode."
     );
     Ok(())
 }
 
-pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
-    if reroute.passthrough_mode.enabled {
-        reject_passthrough_server_attachment(&opts.args)?;
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    if reroute.is_active() {
+        reject_session_override_server_attachment(&opts.args)?;
     }
     let mut creds = crate::config::read()?;
 
@@ -523,7 +524,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     // Step 4: build merged config from user's existing opencode.json + edgee provider
     let opencode = creds.opencode.as_ref().unwrap();
     let api_key = &opencode.api_key;
-    let (session_id, requirement) = reroute.create_session(&creds, "opencode", &gateway_url).await?;
+    let session_id = reroute.create_session(&creds, "opencode").await?;
 
 
     let mut config = find_user_config().unwrap_or_else(|| {
@@ -540,7 +541,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     let binary = util::resolve_binary("opencode");
     let version = detect_config_version(&binary);
-    let (provider_key, mut edgee_provider) = match version {
+    let (provider_key, edgee_provider) = match version {
         ConfigVersion::V1 => (
             "provider",
             build_edgee_provider(
@@ -564,11 +565,6 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
             ),
         ),
     };
-    let headers = match version {
-        ConfigVersion::V1 => &mut edgee_provider["options"]["headers"],
-        ConfigVersion::V2 => &mut edgee_provider["headers"],
-    };
-    super::passthrough_mode::insert_headers(headers, requirement.as_ref());
     let mut edgee_entry = serde_json::Map::new();
     edgee_entry.insert("edgee".to_string(), edgee_provider);
     plugins::config::merge_object(&mut config, provider_key, Value::Object(edgee_entry));
@@ -669,17 +665,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn passthrough_opencode_rejects_existing_server_attachment() {
+    fn session_overrides_reject_existing_server_attachment() {
         for args in [
             vec!["--server", "http://existing"],
             vec!["run", "--server=http://existing"],
             vec!["attach", "http://existing"],
             vec!["run", "--attach", "http://existing"],
         ] {
-            assert!(reject_passthrough_server_attachment(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
+            assert!(reject_session_override_server_attachment(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
         }
-        assert!(reject_passthrough_server_attachment(&["run".into(), "--".into(), "--server".into()]).is_ok());
+        assert!(reject_session_override_server_attachment(&["run".into(), "--".into(), "--server".into()]).is_ok());
     }
+
 
     fn provider_with(models: &[&str], limits: &[(&str, u64)]) -> Value {
         let models: Vec<String> = models.iter().map(|m| m.to_string()).collect();
