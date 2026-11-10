@@ -522,6 +522,10 @@ real Copilot-billed traffic to `githubcopilot.com` reroutes through the
 gateway, preserving the user's actual GitHub Copilot subscription, which the
 BYOK lever cannot do.
 
+Launch sets `COPILOT_CLI_DISABLE_WEBSOCKET_RESPONSES=true` because the gateway
+relay supports HTTP Responses, not WebSocket upgrades. Model catalogs pass
+through unchanged; GitHub subscription credentials remain intact.
+
 ### What the launch injects
 
 Prepared in `copilot_cli::prepare`, after the relay has created the session,
