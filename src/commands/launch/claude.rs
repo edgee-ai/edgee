@@ -105,6 +105,17 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     cmd.env("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5-5[1m]")
         .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5-5[1m]");
 
+    // On a plan connection the gateway forwards the user's own Anthropic subscription, so tell
+    // Claude Code to treat Edgee's base URL as Anthropic's API. Behind any other host, Claude
+    // Code skips its model catalog and `/model` falls back to a row Anthropic's server sends,
+    // which can lag a release (it kept offering Fable 5.1 after Fable 5.2 shipped).
+    // A value the user set themselves wins.
+    if claude.connection.as_deref() == Some("plan")
+        && std::env::var_os("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL").is_none()
+    {
+        cmd.env("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "1");
+    }
+
     // Set up the environment for Edgee session tracking and console API access.
     cmd.env("EDGEE_SESSION_ID", &session_id);
     // The mod reads session savings through this binary, with the launch profile.

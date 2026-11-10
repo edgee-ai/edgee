@@ -61,6 +61,8 @@ ANTHROPIC_CUSTOM_HEADERS= x-edgee-api-key: …
                           x-edgee-repo: …            (when in a git repo)
 ANTHROPIC_DEFAULT_SONNET_MODEL / ANTHROPIC_DEFAULT_OPUS_MODEL
 ENABLE_TOOL_SEARCH      = true                        (only when tool-surface reduction is on)
+_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL = 1          (plan connection, unless already set: Claude Code
+                                                       keeps its model catalog and current /model rows)
 ```
 
 Plus, when the user has opted into Edgee's MCP server, three documented CLI flags:
