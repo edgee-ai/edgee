@@ -105,6 +105,23 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     cmd.env("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5-5[1m]")
         .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5-5[1m]");
 
+    // On a plan connection the gateway forwards the user's own Anthropic subscription, so tell
+    // Claude Code to treat Edgee's base URL as Anthropic's API. Behind any other host, Claude
+    // Code skips its model catalog and `/model` falls back to a row Anthropic's server sends,
+    // which can lag a release (it kept offering Fable 5.1 after Fable 5.2 shipped).
+    // A value the user set themselves wins.
+    if claude.connection.as_deref() == Some("plan")
+        && std::env::var_os("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL").is_none()
+    {
+        cmd.env("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "1");
+    }
+
+    // Step 4b: list the org's models in Claude Code's `/model` picker.
+    // Best-effort: on any failure the picker keeps its built-in rows.
+    if let Some(arg) = model_picker_settings_arg(&opts.args, &creds, &gateway_url, api_key).await {
+        cmd.arg(arg);
+    }
+
     // Set up the environment for Edgee session tracking and console API access.
     cmd.env("EDGEE_SESSION_ID", &session_id);
     // The mod reads session savings through this binary, with the launch profile.
@@ -237,6 +254,130 @@ fn mcp_injection_args(
     vec![mcp_config, system_prompt_file, OsString::from(allowed_tools)]
 }
 
+/// `--settings=<file>` adding the org's models to Claude Code's `/model`
+/// picker through its `modelPicker` setting, or `None` when there is nothing to
+/// add.
+///
+/// Skipped when the user passes `--settings` themselves: Claude Code takes the
+/// whole picker lineup from the highest-priority source, so ours would silently
+/// replace theirs.
+async fn model_picker_settings_arg(
+    user_args: &[String],
+    creds: &crate::config::Credentials,
+    gateway_url: &str,
+    api_key: &str,
+) -> Option<OsString> {
+    if user_passes_settings(user_args) {
+        return None;
+    }
+    let token = creds.user_token.as_deref().filter(|t| !t.is_empty())?;
+    let org_id = creds.org_id.as_deref().filter(|o| !o.is_empty())?;
+    let client = crate::api::ApiClient::new(token).ok()?;
+    // Capped well below the clients' own timeouts: this runs before Claude
+    // starts, and a slow catalog must not hold up the launch.
+    let (available, served) = tokio::time::timeout(
+        MODEL_PICKER_FETCH_TIMEOUT,
+        async {
+            tokio::join!(
+                client.list_available_models(org_id),
+                util::fetch_gateway_models(gateway_url, api_key),
+            )
+        },
+    )
+    .await
+    .ok()?;
+    let settings = model_picker_settings(&available.ok()?, &served)?;
+    let path = write_settings_file(&settings).ok()?;
+    let mut arg = OsString::from("--settings=");
+    arg.push(path);
+    Some(arg)
+}
+
+const MODEL_PICKER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn user_passes_settings(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|a| *a != "--")
+        .any(|a| a == "--settings" || a.starts_with("--settings="))
+}
+
+/// Claude Code's default window for a model it doesn't recognize.
+const CLAUDE_ASSUMED_WINDOW: u64 = 200_000;
+/// Smallest `autoCompactWindow` Claude Code accepts; a model with a smaller
+/// window can't hold a Claude Code session and is left out.
+const MIN_PICKER_WINDOW: u64 = 100_000;
+/// Window Claude Code assumes for an id carrying the `[1m]` suffix.
+const ONE_M_WINDOW: u64 = 1_000_000;
+
+/// One `/model` row per org-enabled model, narrowed to the key's gateway
+/// listing (`served`; empty = fetch failed, no narrowing). Claude Code assumes
+/// 200K for unknown ids, so 1M+ windows get `[1m]` and sub-200K windows an
+/// earlier `autoCompactWindow`.
+fn model_picker_settings(
+    available: &[crate::api::GatewayModel],
+    served: &[String],
+) -> Option<serde_json::Value> {
+    let mut options = Vec::new();
+    let mut model_settings = serde_json::Map::new();
+    let mut models: Vec<_> = available
+        .iter()
+        .filter(|m| m.active && !m.providers.is_empty() && !m.app_subscription_only())
+        .filter_map(|m| Some((m.catalog_id()?, m)))
+        .filter(|(id, _)| served.is_empty() || served.contains(id))
+        .collect();
+    models.sort_by(|a, b| a.0.cmp(&b.0));
+    for (id, m) in models {
+        let window = m.context_limit();
+        if window.is_some_and(|w| w < MIN_PICKER_WINDOW) {
+            continue;
+        }
+        // Claude models go by their bare id: the Claude plan upstream rejects
+        // `anthropic/…`, and Claude Code recognizes the bare id natively.
+        let base = if m.author_id == "anthropic" {
+            m.model_id.clone()
+        } else {
+            id.clone()
+        };
+        let model = match window {
+            Some(w) if w >= ONE_M_WINDOW => format!("{base}[1m]"),
+            Some(w) if w < CLAUDE_ASSUMED_WINDOW => {
+                model_settings.insert(base.clone(), serde_json::json!({ "autoCompactWindow": w }));
+                base
+            }
+            _ => base,
+        };
+        let label = if m.display_name.is_empty() {
+            id.clone()
+        } else {
+            m.display_name.clone()
+        };
+        let description = match window {
+            Some(w) => format!("Via Edgee · {}K context", w / 1000),
+            None => "Via Edgee".to_string(),
+        };
+        options.push(serde_json::json!({
+            "model": model,
+            "label": label,
+            "description": description,
+        }));
+    }
+    if options.is_empty() {
+        return None;
+    }
+    let mut settings = serde_json::json!({ "modelPicker": { "options": options } });
+    if !model_settings.is_empty() {
+        settings["modelSettings"] = serde_json::Value::Object(model_settings);
+    }
+    Some(settings)
+}
+
+fn write_settings_file(settings: &serde_json::Value) -> Result<std::path::PathBuf> {
+    let dir = crate::config::config_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("claude-settings.json");
+    std::fs::write(&path, serde_json::to_string_pretty(settings)?)?;
+    Ok(path)
+}
 
 /// Writes an MCP config file to the Edgee config directory with the user's auth token.
 /// Returns the path to the written file.
@@ -311,6 +452,74 @@ mod tests {
         };
         assert_eq!(allowed(false), format!("--allowedTools={EDGEE_ALLOWED_TOOLS}"));
         assert!(allowed(true).ends_with(",mcp__edgee__clearSessionReroute"));
+    }
+
+    fn model(json: &str) -> crate::api::GatewayModel {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn picker_models(settings: &serde_json::Value) -> Vec<String> {
+        settings["modelPicker"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["model"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn model_picker_lists_org_models_except_inactive_and_app_only() {
+        let available = [
+            model(r#"{"model_id":"claude-opus-5-5","author_id":"anthropic","active":true,"providers":{"anthropic":{"context_max_size":200000}}}"#),
+            model(r#"{"model_id":"kimi-k3","author_id":"moonshotai","display_name":"Kimi K3","active":true,"providers":{"moonshotai":{"context_max_size":256000}}}"#),
+            model(r#"{"model_id":"composer-2","author_id":"cursor","active":true,"providers":{"cursor":{"context_max_size":256000}}}"#),
+            model(r#"{"model_id":"old","author_id":"acme","active":false,"providers":{"acme":{"context_max_size":256000}}}"#),
+        ];
+        let settings = model_picker_settings(&available, &[]).unwrap();
+        assert_eq!(
+            picker_models(&settings),
+            ["claude-opus-5-5", "moonshotai/kimi-k3"]
+        );
+        let row = &settings["modelPicker"]["options"][1];
+        assert_eq!(row["label"], "Kimi K3");
+        assert_eq!(row["description"], "Via Edgee · 256K context");
+        assert!(settings.get("modelSettings").is_none());
+    }
+
+    #[test]
+    fn model_picker_is_narrowed_to_the_key_listing() {
+        let available = [
+            model(r#"{"model_id":"a","author_id":"x","active":true,"providers":{"x":{}}}"#),
+            model(r#"{"model_id":"b","author_id":"x","active":true,"providers":{"x":{}}}"#),
+        ];
+        let settings = model_picker_settings(&available, &["x/b".to_string()]).unwrap();
+        assert_eq!(picker_models(&settings), ["x/b"]);
+    }
+
+    #[test]
+    fn model_picker_corrects_context_windows() {
+        let available = [
+            model(r#"{"model_id":"big","author_id":"x","active":true,"providers":{"x":{"context_max_size":1048576}}}"#),
+            model(r#"{"model_id":"small","author_id":"x","active":true,"providers":{"x":{"context_max_size":128000}}}"#),
+            model(r#"{"model_id":"tiny","author_id":"x","active":true,"providers":{"x":{"context_max_size":32000}}}"#),
+        ];
+        let settings = model_picker_settings(&available, &[]).unwrap();
+        assert_eq!(picker_models(&settings), ["x/big[1m]", "x/small"]);
+        assert_eq!(settings["modelSettings"]["x/small"]["autoCompactWindow"], 128000);
+    }
+
+    #[test]
+    fn model_picker_is_omitted_when_nothing_to_add() {
+        assert!(model_picker_settings(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn user_settings_flag_is_detected_before_separator_only() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(user_passes_settings(&args(&["--settings", "x.json"])));
+        assert!(user_passes_settings(&args(&["--settings=x.json"])));
+        assert!(!user_passes_settings(&args(&["-p", "hi"])));
+        assert!(!user_passes_settings(&args(&["--", "--settings"])));
     }
 
     // Regression test: the system prompt used to be injected inline via
