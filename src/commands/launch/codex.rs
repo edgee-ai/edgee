@@ -57,10 +57,7 @@ fn developer_instructions_arg(session_id: &str, repo: Option<&str>, session_url:
     )
 }
 
-pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
-    if reroute.passthrough_mode.enabled {
-        reject_passthrough_transport_overrides(&opts.args)?;
-    }
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     ensure_saved_thread_provider()?;
     let mut creds = crate::config::read()?;
 
@@ -105,8 +102,8 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     let codex = creds.codex.as_ref().unwrap();
     let api_key = &codex.api_key;
     let gateway_url = super::gateway_base_url_with_org(org.as_ref());
-    let (session_id, requirement) = reroute.create_session(&creds, "codex", &gateway_url).await?;
-    let passthrough_headers = super::passthrough_mode::toml_headers(requirement.as_ref());
+    let session_id = reroute.create_session(&creds, "codex").await?;
+    
 
 
     let repo_origin = crate::git::detect_origin();
@@ -128,7 +125,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
         "-c", "model_provider=\"edgee-cli\"",
         "-c", "model_providers.edgee-cli.name=\"EDGEE\"",
         "-c", &format!("model_providers.edgee-cli.base_url=\"{base_url}\""),
-        "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"{repo_entry}{debug_log_entry}{passthrough_headers}}}"),
+        "-c", &format!("model_providers.edgee-cli.http_headers={{\"x-edgee-api-key\"=\"{api_key}\",\"x-edgee-session-id\"=\"{session_id}\"{repo_entry}{debug_log_entry}}}"),
         "-c", "model_providers.edgee-cli.wire_api=\"responses\"",
         // Codex only attaches the user's ChatGPT `Authorization: Bearer` token to a
         // custom provider when this is set. It used to default to on; codex 0.149
@@ -198,35 +195,6 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     Ok(())
 }
 
-/// Codex applies later -c overrides last. Explicit Pass-through mode cannot let a user's
-/// provider override erase the required headers or select an unregistered key.
-fn reject_passthrough_transport_overrides(args: &[String]) -> Result<()> {
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        if arg == "--" {
-            break;
-        }
-        anyhow::ensure!(
-            !matches!(arg.as_str(), "--oss" | "--local-provider")
-                && !arg.starts_with("--oss=")
-                && !arg.starts_with("--local-provider="),
-            "Codex local-provider flags bypass Edgee. Omit them when using --passthrough."
-        );
-        let config = if arg == "-c" || arg == "--config" {
-            args.next().map(String::as_str)
-        } else {
-            arg.strip_prefix("--config=").or_else(|| arg.strip_prefix("-c").filter(|value| !value.is_empty()))
-        };
-        if let Some(config) = config {
-            let key = config.split_once('=').map(|(key, _)| key).unwrap_or(config);
-            let path: toml::Table = format!("{key}=true").parse()
-                .map_err(|_| anyhow::anyhow!("Cannot verify Codex config override for a Pass-through mode launch: {key}"))?;
-            anyhow::ensure!(!["model_provider", "model_providers", "profiles", "profile"].iter().any(|key| path.contains_key(*key)),
-                "Codex provider/profile overrides can remove required Pass-through mode headers. Omit this override when using --passthrough, or use organization Pass-through mode.");
-        }
-    }
-    Ok(())
-}
 
 /// Also run when removing the alias, to repair threads from older Edgee versions.
 pub(crate) fn ensure_saved_thread_provider() -> Result<()> {
@@ -237,23 +205,6 @@ pub(crate) fn ensure_saved_thread_provider() -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn passthrough_codex_cannot_override_its_registered_provider_or_requirement_headers() {
-        for args in [
-            vec!["-c", "model_providers.edgee-cli.http_headers={}"],
-            vec!["--config=model_provider=\"other\""],
-            vec!["-cmodel_providers={}"],
-            vec!["-c", "'model_provider' = \"other\""],
-            vec!["--oss"],
-            vec!["--local-provider=ollama"],
-        ] {
-            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
-            assert!(reject_passthrough_transport_overrides(&args).is_err());
-        }
-        let args = ["-c", "model_reasoning_effort=high", "--", "-c", "literal prompt"]
-            .into_iter().map(String::from).collect::<Vec<_>>();
-        assert!(reject_passthrough_transport_overrides(&args).is_ok());
-    }
 
     #[test]
     fn developer_instructions_round_trip_session_metadata() {

@@ -29,7 +29,6 @@ pub mod opencode;
 pub mod omp;
 pub mod pi;
 pub(crate) mod reroute;
-pub(crate) mod passthrough_mode;
 pub(crate) mod util;
 
 use anyhow::Result;
@@ -95,23 +94,13 @@ enum Command {
 pub struct Options {
     #[command(flatten)]
     reroute: reroute::Options,
-    #[command(flatten)]
-    passthrough_mode: passthrough_mode::Options,
     #[command(subcommand)]
     command: Command,
 }
 
 pub async fn run(opts: Options) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !opts.passthrough_mode.enabled || opts.reroute.target.is_none(),
-        "--passthrough cannot be combined with --reroute"
-    );
-    if opts.passthrough_mode.enabled {
-        match &opts.command {
-            Command::Cursor(_) => anyhow::bail!("Direct Cursor launch has no per-launch session ID. Use `edgee relay --passthrough cursor` or turn on Pass-through mode for the organization."),
-            Command::Pi(_) => anyhow::bail!("Direct Pi's external pi-edgee extension contract does not support required session-control headers. Use `edgee relay --passthrough pi` or turn on Pass-through mode for the organization."),
-            _ => {}
-        }
+    if opts.reroute.passthrough_mode && matches!(opts.command, Command::Cursor(_)) {
+        anyhow::bail!("Direct Cursor launch has no per-launch session ID. Use `edgee relay --passthrough cursor` or turn on Pass-through mode for the organization.");
     }
     preflight::check(&opts.command)?;
     if opts.reroute.target.is_some() && matches!(opts.command, Command::Cursor(_)) {
@@ -119,10 +108,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
             "Cursor launch does not attach a session ID. Choose another launch target to use --reroute."
         );
     }
-    let reroute = &passthrough_mode::Controls {
-        reroute: opts.reroute.resolve().await?,
-        passthrough_mode: opts.passthrough_mode,
-    };
+    let reroute = &opts.reroute.resolve().await?;
     match opts.command {
         Command::Claude(o) => claude::run(o, reroute).await,
         Command::CodeBuddy(o) => codebuddy::run(o, reroute).await,
@@ -325,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_passthrough_direct_launches_fail_before_preflight_or_authentication() {
-        for target in ["cursor", "pi"] {
+        for target in ["cursor"] {
             let opts = crate::Options::try_parse_from(["edgee", "launch", "--passthrough", target]).unwrap();
             let crate::commands::Command::Launch(launch) = opts.command else { panic!("wrong command") };
             let error = run(launch).await.unwrap_err().to_string();
@@ -340,8 +326,8 @@ mod tests {
             "claude", "-p", "hello",
         ]).unwrap();
         let crate::commands::Command::Launch(launch) = opts.command else { panic!("wrong command") };
-        assert!(launch.passthrough_mode.enabled);
-        assert_eq!(launch.passthrough_mode.passthrough_duration, Some(1440));
+        assert!(launch.reroute.passthrough_mode);
+        assert_eq!(launch.reroute.passthrough_duration, Some(1440));
         let Command::Claude(agent) = launch.command else { panic!("wrong target") };
         assert_eq!(agent.args, ["-p", "hello"]);
         assert_eq!(claude_args(&["edgee", "launch", "claude", "--passthrough", "--passthrough-duration", "17"]),

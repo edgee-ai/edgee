@@ -81,13 +81,13 @@ fn resolve_model() -> String {
     pick_model(raw.as_deref()).to_string()
 }
 
-pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
-    if reroute.passthrough_mode.enabled {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    if reroute.is_active() {
         let output = std::process::Command::new(util::resolve_binary("kimi"))
             .arg("--version").output()
-            .map_err(|error| anyhow::anyhow!("Cannot verify Kimi custom-header support: {error}. Upgrade Kimi Code to 0.20.2 or newer before using --passthrough."))?;
-        anyhow::ensure!(output.status.success() && supports_passthrough_headers(&String::from_utf8_lossy(&output.stdout)),
-            "Pass-through mode launches require Kimi Code 0.20.2 or newer, which supports KIMI_CODE_CUSTOM_HEADERS. Upgrade Kimi Code or use organization Pass-through mode.");
+            .map_err(|error| anyhow::anyhow!("Cannot verify Kimi custom-header support: {error}. Upgrade Kimi Code to 0.20.2 or newer before setting a session override."))?;
+        anyhow::ensure!(output.status.success() && supports_session_headers(&String::from_utf8_lossy(&output.stdout)),
+            "Session overrides require Kimi Code 0.20.2 or newer, which supports KIMI_CODE_CUSTOM_HEADERS. Upgrade Kimi Code or use organization pass-through mode.");
     }
     let mut creds = crate::config::read()?;
 
@@ -124,8 +124,8 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     let kimi = creds.kimi.as_ref().unwrap();
     let api_key = &kimi.api_key;
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
-    let (session_id, requirement) = reroute.create_session(&creds, "kimi", &gateway_url).await?;
-    let passthrough_headers = super::passthrough_mode::line_headers(requirement.as_ref());
+    let session_id = reroute.create_session(&creds, "kimi").await?;
+    
 
 
 
@@ -160,7 +160,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     cmd.env(
         "KIMI_CODE_CUSTOM_HEADERS",
         format!(
-            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}{passthrough_headers}"
+            "x-edgee-api-key: {api_key}\nx-edgee-session-id: {session_id}{repo_header}{debug_log_header}"
         ),
     );
 
@@ -194,7 +194,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     Ok(())
 }
 
-fn supports_passthrough_headers(version: &str) -> bool {
+fn supports_session_headers(version: &str) -> bool {
     version.split_whitespace().filter_map(|part| {
         let mut parts = part.trim_matches(|c: char| !c.is_ascii_digit() && c != '.').split('.');
         let version = (parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?);
@@ -202,20 +202,18 @@ fn supports_passthrough_headers(version: &str) -> bool {
     }).any(|version| version >= (0, 20, 2))
 }
 
-#[cfg(test)]
-mod passthrough_mode_tests {
-    #[test]
-    fn older_kimi_without_custom_headers_is_not_passthrough_capable() {
-        assert!(!super::supports_passthrough_headers("kimi, version 0.20.1"));
-        assert!(!super::supports_passthrough_headers("unknown"));
-        assert!(super::supports_passthrough_headers("kimi, version 0.20.2"));
-        assert!(super::supports_passthrough_headers("kimi 1.0.0"));
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_overrides_require_custom_header_support() {
+        assert!(!supports_session_headers("kimi, version 0.20.1"));
+        assert!(!supports_session_headers("unknown"));
+        assert!(supports_session_headers("kimi, version 0.20.2"));
+        assert!(supports_session_headers("kimi 1.0.0"));
+    }
 
     #[test]
     fn falls_back_to_the_default_model() {

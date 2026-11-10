@@ -201,7 +201,7 @@ fn insert_edgee_provider(config: &mut Value, provider: Value) {
     }
 }
 
-pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -239,7 +239,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     let crush = creds.crush.as_ref().unwrap();
     let api_key = &crush.api_key;
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
-    let (session_id, requirement) = reroute.create_session(&creds, "crush", &gateway_url).await?;
+    let session_id = reroute.create_session(&creds, "crush").await?;
 
 
 
@@ -255,7 +255,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
     );
     let models = util::without_app_subscription_models(models, &catalog);
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
-    let mut edgee_provider = build_edgee_provider(
+    let edgee_provider = build_edgee_provider(
         api_key,
         &session_id,
         &gateway_url,
@@ -263,7 +263,7 @@ pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> 
         &catalog,
         debug_log_headers,
     );
-    super::passthrough_mode::insert_headers(&mut edgee_provider["extra_headers"], requirement.as_ref());
+    
     insert_edgee_provider(&mut config, edgee_provider);
 
     // Org plugins. Crush's own schema carries `options.skills_paths`, a top-level

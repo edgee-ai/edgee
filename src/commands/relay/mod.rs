@@ -197,7 +197,7 @@ fn key_provider(target: &str) -> &str {
 
 setup_command! {
     #[command(flatten)]
-    pub passthrough_mode: crate::commands::launch::passthrough_mode::Options,
+    pub reroute: crate::commands::launch::reroute::Options,
     /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|phpstorm|android-studio|copilot-vscode|cursor|opencode|pi|omp).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
@@ -229,19 +229,13 @@ setup_command! {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
-    let controls = crate::commands::launch::passthrough_mode::Controls {
-        passthrough_mode: crate::commands::launch::passthrough_mode::Options {
-            enabled: opts.passthrough_mode.enabled,
-            passthrough_duration: opts.passthrough_mode.passthrough_duration,
-        },
-        ..Default::default()
-    };
+    let controls = opts.reroute.resolve().await?;
     run_with_reroute(opts, &controls).await
 }
 
 async fn run_with_reroute(
     opts: Options,
-    reroute: &crate::commands::launch::passthrough_mode::Controls,
+    reroute: &crate::commands::launch::reroute::Reroute,
 ) -> Result<()> {
     let raw = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
     if opts.untrust {
@@ -324,8 +318,8 @@ async fn run_with_reroute(
     if is_provider_cli(&agent) {
         providers.push("codex");
     }
-    let (session_id, passthrough_requirements) = reroute
-        .create_session_for_keys(&creds, &provider, &providers, &gateway_url).await?;
+    let session_id = reroute
+        .create_session_for_keys(&creds, &provider, &providers).await?;
     let org_slug = creds.org_slug.clone().unwrap_or_default();
     let repo = crate::git::detect_origin();
 
@@ -347,9 +341,6 @@ async fn run_with_reroute(
     if is_provider_cli(&agent) {
         gateway.codex_api_key = creds.provider_api_key("codex").map(str::to_string);
     }
-    gateway.passthrough_requirements = passthrough_requirements.into_iter()
-        .map(|(key, requirement)| Ok((key, requirement.header_map()?)))
-        .collect::<Result<_>>()?;
 
     // Native Copilot clients and GUI front-ends use dedicated, name-constrained
     // CAs because their TLS stacks do not consistently trust NODE_EXTRA_CA_CERTS.
@@ -588,7 +579,7 @@ async fn run_with_reroute(
 /// `edgee launch <agent> --relay`.
 pub async fn run_for_agent(
     agent: &str,
-    reroute: &crate::commands::launch::passthrough_mode::Controls,
+    reroute: &crate::commands::launch::reroute::Reroute,
 ) -> Result<()> {
     run_for_agent_with_args(agent, &[], reroute).await
 }
@@ -599,11 +590,11 @@ pub async fn run_for_agent(
 pub async fn run_for_agent_with_args(
     agent: &str,
     extra_args: &[String],
-    reroute: &crate::commands::launch::passthrough_mode::Controls,
+    reroute: &crate::commands::launch::reroute::Reroute,
 ) -> Result<()> {
     run_with_reroute(
         Options {
-            passthrough_mode: Default::default(),
+            reroute: Default::default(),
             agent: Some(agent.to_string()),
             no_launch: false,
             port: None,
@@ -676,7 +667,6 @@ fn build_gateway_target(
         claude_api_key,
         codex_api_key: None,
         debug_log_headers,
-        passthrough_requirements: Default::default(),
     })
 }
 
