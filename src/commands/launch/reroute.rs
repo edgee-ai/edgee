@@ -11,7 +11,7 @@ use crate::{
 #[group(id = "session_reroute", multiple = true)]
 pub struct Options {
     /// Reroute this session to a model (place before the agent name)
-    #[arg(long = "reroute", value_name = "MODEL")]
+    #[arg(long = "reroute", value_name = "MODEL", conflicts_with = "enabled")]
     pub target: Option<String>,
     /// Only reroute this source model (default: all models)
     #[arg(long = "reroute-from", requires = "target", value_name = "MODEL")]
@@ -144,6 +144,10 @@ impl Options {
 }
 
 impl Reroute {
+    pub fn is_active(&self) -> bool {
+        self.0.is_some()
+    }
+
     /// Reserve the exact session ID that the launcher will attach to requests.
     /// An explicitly requested reroute must succeed before the agent can start.
     pub async fn create_session(&self, creds: &Credentials, provider: &str) -> Result<String> {

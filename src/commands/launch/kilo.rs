@@ -182,7 +182,7 @@ fn build_config_content(edgee_provider: Value) -> Value {
     })
 }
 
-pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -218,11 +218,10 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     // Step 4: build the inline config carrying the Edgee provider
     let kilo = creds.kilo.as_ref().unwrap();
     let api_key = &kilo.api_key;
-    let session_id = reroute.create_session(&creds, "kilo").await?;
-    util::report_cli_session(&creds, &session_id, "kilo").await;
-
-
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let (session_id, requirement) = reroute.create_session(&creds, "kilo", &gateway_url).await?;
+
+
 
     let (models, catalog) = tokio::join!(
         util::fetch_gateway_models(&gateway_url, api_key),
@@ -230,7 +229,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     );
     let models = util::without_app_subscription_models(models, &catalog);
     let debug_log_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
-    let edgee_provider = build_edgee_provider(
+    let mut edgee_provider = build_edgee_provider(
         api_key,
         &session_id,
         &gateway_url,
@@ -238,6 +237,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         &catalog,
         debug_log_headers,
     );
+    super::passthrough_mode::insert_headers(&mut edgee_provider["options"]["headers"], requirement.as_ref());
     let config_content = serde_json::to_string(&build_config_content(edgee_provider))?;
 
     // Step 5: launch kilo with the correct env vars

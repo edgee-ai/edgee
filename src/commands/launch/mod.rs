@@ -29,6 +29,7 @@ pub mod opencode;
 pub mod omp;
 pub mod pi;
 pub(crate) mod reroute;
+pub(crate) mod passthrough_mode;
 pub(crate) mod util;
 
 use anyhow::Result;
@@ -94,18 +95,34 @@ enum Command {
 pub struct Options {
     #[command(flatten)]
     reroute: reroute::Options,
+    #[command(flatten)]
+    passthrough_mode: passthrough_mode::Options,
     #[command(subcommand)]
     command: Command,
 }
 
 pub async fn run(opts: Options) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !opts.passthrough_mode.enabled || opts.reroute.target.is_none(),
+        "--passthrough cannot be combined with --reroute"
+    );
+    if opts.passthrough_mode.enabled {
+        match &opts.command {
+            Command::Cursor(_) => anyhow::bail!("Direct Cursor launch has no per-launch session ID. Use `edgee relay --passthrough cursor` or turn on Pass-through mode for the organization."),
+            Command::Pi(_) => anyhow::bail!("Direct Pi's external pi-edgee extension contract does not support required session-control headers. Use `edgee relay --passthrough pi` or turn on Pass-through mode for the organization."),
+            _ => {}
+        }
+    }
     preflight::check(&opts.command)?;
     if opts.reroute.target.is_some() && matches!(opts.command, Command::Cursor(_)) {
         anyhow::bail!(
             "Cursor launch does not attach a session ID. Choose another launch target to use --reroute."
         );
     }
-    let reroute = &opts.reroute.resolve().await?;
+    let reroute = &passthrough_mode::Controls {
+        reroute: opts.reroute.resolve().await?,
+        passthrough_mode: opts.passthrough_mode,
+    };
     match opts.command {
         Command::Claude(o) => claude::run(o, reroute).await,
         Command::CodeBuddy(o) => codebuddy::run(o, reroute).await,
@@ -305,6 +322,44 @@ mod tests {
     use clap::Parser;
 
     use super::*;
+
+    #[tokio::test]
+    async fn unsupported_passthrough_direct_launches_fail_before_preflight_or_authentication() {
+        for target in ["cursor", "pi"] {
+            let opts = crate::Options::try_parse_from(["edgee", "launch", "--passthrough", target]).unwrap();
+            let crate::commands::Command::Launch(launch) = opts.command else { panic!("wrong command") };
+            let error = run(launch).await.unwrap_err().to_string();
+            assert!(error.contains(&format!("edgee relay --passthrough {target}")));
+        }
+    }
+
+    #[test]
+    fn passthrough_flags_are_launch_scoped_and_preserve_agent_arguments() {
+        let opts = crate::Options::try_parse_from([
+            "edgee", "launch", "--passthrough", "--passthrough-duration", "1440",
+            "claude", "-p", "hello",
+        ]).unwrap();
+        let crate::commands::Command::Launch(launch) = opts.command else { panic!("wrong command") };
+        assert!(launch.passthrough_mode.enabled);
+        assert_eq!(launch.passthrough_mode.passthrough_duration, Some(1440));
+        let Command::Claude(agent) = launch.command else { panic!("wrong target") };
+        assert_eq!(agent.args, ["-p", "hello"]);
+        assert_eq!(claude_args(&["edgee", "launch", "claude", "--passthrough", "--passthrough-duration", "17"]),
+            ["--passthrough", "--passthrough-duration", "17"]);
+    }
+
+    #[test]
+    fn passthrough_rejects_invalid_duration_missing_flag_and_reroute_combination() {
+        for duration in ["0", "1441", "invalid"] {
+            assert!(crate::Options::try_parse_from([
+                "edgee", "launch", "--passthrough", "--passthrough-duration", duration, "claude",
+            ]).is_err());
+        }
+        assert!(crate::Options::try_parse_from(["edgee", "launch", "--passthrough-duration", "60", "claude"]).is_err());
+        assert!(crate::Options::try_parse_from(["edgee", "launch", "--passthrough", "--reroute", "openai/gpt-5", "claude"]).is_err());
+        assert!(crate::Options::try_parse_from(["edgee", "relay", "--passthrough-duration", "60", "claude"]).is_err());
+        assert!(crate::Options::try_parse_from(["edgee", "relay", "--passthrough", "--passthrough-duration", "60", "cursor"]).is_ok());
+    }
 
     #[test]
     fn reroute_flags_stay_before_the_target() {

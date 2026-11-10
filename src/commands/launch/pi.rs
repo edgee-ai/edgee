@@ -412,7 +412,8 @@ fn report_cleanup(outcome: &LegacyCleanup) {
     }
 }
 
-pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+pub async fn run(opts: Options, reroute: &super::passthrough_mode::Controls) -> Result<()> {
+    anyhow::ensure!(!reroute.passthrough_mode.enabled, "Direct Pi's external pi-edgee extension cannot carry required Pass-through mode headers. Use `edgee relay --passthrough pi` or organization Pass-through mode.");
     let mut creds = crate::config::read()?;
 
     if creds.user_token.as_deref().unwrap_or("").is_empty() {
@@ -440,8 +441,10 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         crate::config::write(&creds)?;
     }
 
-    let session_id = reroute.create_session(&creds, "pi").await?;
-    util::report_cli_session(&creds, &session_id, "pi").await;
+    let session_id = reroute.reroute.create_session(&creds, "pi").await?;
+    if !reroute.reroute.is_active() {
+        util::report_cli_session(&creds, &session_id, "pi").await;
+    }
 
     let org = super::fetch_active_org(&creds).await;
     let gateway_url = super::gateway_base_url_with_org(org.as_ref());
