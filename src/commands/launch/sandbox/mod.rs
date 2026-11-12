@@ -222,6 +222,9 @@ pub(super) async fn run(
         for setting in [
             "model_provider=\"edgee-cli\"".to_owned(),
             "features.apps=false".to_owned(),
+            // The outer Edgee OS sandbox is the security boundary. A second
+            // Seatbelt application is prohibited by macOS.
+            "sandbox_mode=\"danger-full-access\"".to_owned(),
             "model_providers.edgee-cli.name=\"EDGEE\"".to_owned(),
             format!("model_providers.edgee-cli.base_url={}", toml_string(&format!("{}/v1", gateway.trim_end_matches('/')))),
             "model_providers.edgee-cli.wire_api=\"responses\"".to_owned(),
@@ -252,6 +255,9 @@ pub(super) async fn run(
         prepared.workspace.display(),
         prepared.policy.allowed_domains.join(", ")
     );
+    if agent == "codex" {
+        eprintln!("Codex command isolation is provided by the outer Edgee OS sandbox; native approval settings still apply.");
+    }
     let status = runtime::execute(&cmd, &spec)?;
     // Explicit cleanup precedes process::exit, which otherwise skips destructors.
     session.close().context("Sandbox ended but private session cleanup failed; remove the session directory before retrying.")?;

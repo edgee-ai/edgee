@@ -14,6 +14,7 @@ agent-shaped test commands, and actual installed agent sessions.
 | Codex CLI 0.164.0 `--version` | Passed | Not run |
 | Codex authenticated model response | Passed, exact expected response | Not run |
 | Codex interactive TUI gateway response and Ctrl-C exit | Passed | Not run |
+| Native agent file write + shell test | Passed for both agents (Claude with explicit Bash permission) | Not run |
 | Installed mandatory root policy end to end | Not run; policy ownership/ACL/parser unit tests passed | Disposable CI fixture added; result pending |
 
 The JS suite uses fake secrets, a controlled HTTP endpoint and Unix socket,

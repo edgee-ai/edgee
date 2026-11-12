@@ -166,3 +166,11 @@ Native argv, stdin/stdout/stderr and exit codes are preserved by the supervisor;
 terminal ownership is transferred for interactive sessions. Agent sessions do
 not persist their private home after exit. See [threat model](sandbox-threat-model.md)
 and [validation record](sandbox-validation.md) for guarantees and testing limits.
+
+Codex's inner OS sandbox defaults to `danger-full-access` in this mode because
+macOS prohibits applying Seatbelt twice. This is announced at startup: Edgee's
+outer OS sandbox still confines every command, and native approval settings
+remain in force. Explicit agent arguments can change native settings but cannot
+relax the outer policy. For unattended Claude tool use, pass the native tool
+approvals you intend (for example `--allowedTools=Bash`); Edgee does not bypass
+those prompts.

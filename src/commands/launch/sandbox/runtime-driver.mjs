@@ -118,7 +118,37 @@ try {
     enableWeakerNetworkIsolation: false,
     allowPty: true,
   };
+  if (process.platform === 'linux') {
+    if (!['x64', 'arm64'].includes(process.arch)) throw new SetupError('Linux sandbox requires an x64 or arm64 seccomp helper.');
+    let helper;
+    try {
+      helper = fs.realpathSync(path.join(packageRoot, 'vendor/seccomp', process.arch, 'apply-seccomp'));
+      fs.accessSync(helper, fs.constants.R_OK | fs.constants.X_OK);
+      if (!fs.statSync(helper).isFile()) throw new Error('Not a regular executable');
+    } catch {
+      throw new SetupError('Linux seccomp helper is missing or not executable; reinstall the pinned sandbox runtime.');
+    }
+    // The runtime executes this helper INSIDE bubblewrap. A root read-deny
+    // otherwise hides its npm installation. Expose exactly this executable,
+    // never node_modules or its parent directory, and prohibit modification.
+    config.seccomp = { applyPath: helper };
+    config.filesystem.allowRead.push(literal(helper));
+    config.filesystem.denyWrite.push(literal(helper));
+  }
   await manager.initialize(config, undefined, false);
+  if (process.platform === 'linux') {
+    // Upstream binds these before applying filesystem masks. Restore only its
+    // own two authenticated bridge endpoints through the root read-deny; never
+    // grant host /tmp. socat connects before the workload's seccomp filter is
+    // installed. The workload still cannot create any AF_UNIX socket.
+    const sockets = [...new Set([manager.getLinuxHttpSocketPath(), manager.getLinuxSocksSocketPath()])];
+    for (const socket of sockets) {
+      if (!socket || !fs.lstatSync(socket).isSocket()) throw new SetupError('Linux sandbox proxy bridge is unavailable; launch refused.');
+      config.filesystem.allowRead.push(literal(fs.realpathSync(socket)));
+      config.filesystem.denyWrite.push(literal(fs.realpathSync(socket)));
+    }
+    manager.updateConfig(config);
+  }
   // Prove the backend actually launches, and that a real outside secret is not
   // readable, before printing an active-isolation status or launching the agent.
   const probe = fs.mkdtempSync(path.join(path.dirname(specPath), 'edgee-probe-'));
