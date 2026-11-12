@@ -34,7 +34,7 @@ Every launch target uses exactly one of three transports. Nothing else exists in
 | --- | --- | --- | --- |
 | **A. Environment / config injection** | Sets documented env vars or CLI config flags on the child process only | `claude`, `codex`, `opencode`, `codebuddy`, `crush`, `kimi`, `kilo`, `pi` | **Yes**, with one caveat. Each variable below links to the vendor's own docs; `KIMI_CODE_CUSTOM_HEADERS` is announced in Kimi's release notes but missing from its reference page |
 | **B. Config-file patch** | Writes provider settings into the app's own configuration | `omp`, `cursor`, `codex-desktop` | **Partly.** The config keys are documented; patching another app's storage is our own pattern |
-| **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `copilot-vscode`, `copilot-desktop`, `claude-desktop`; `edgee relay cursor` for Plan mode | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
+| **C. Local relay (MITM)** | Runs a loopback proxy, decrypts only known inference hosts, reroutes to the gateway | `copilot-vscode`, `copilot-desktop`, `copilot-xcode`, `claude-desktop`; `edgee relay cursor` for Plan mode | **No.** It uses documented proxy and CA plumbing, but the interception itself is outside any published contract |
 
 Transport A covers the products that drive most enterprise coding-agent spend. Transport C is the
 compatibility path for GUI apps that expose no configuration surface at all.
@@ -786,3 +786,36 @@ The shipped app ignores `COPILOT_CLI_PATH`; BYOK would replace subscription bill
 | `copilot-desktop` | Unsupported: delivery unverified | Unsupported: delivery unverified | Unsupported: delivery unverified | Unsupported: delivery unverified |
 
 Remote/cloud sessions and Windows/Linux desktop launching remain outside this integration.
+
+### GitHub Copilot in Xcode (`edgee launch copilot-xcode`)
+
+[Launch module](../src/commands/launch/copilot_xcode.rs). macOS, Xcode 27.3 beta or later.
+The Xcode executable is launched directly with:
+
+```text
+HTTPS_PROXY=http://127.0.0.1:42200
+HTTP_PROXY=http://127.0.0.1:42200
+https_proxy=http://127.0.0.1:42200
+http_proxy=http://127.0.0.1:42200
+NO_PROXY=localhost,127.0.0.1,::1 (plus existing exclusions)
+no_proxy=<same exclusions>
+NODE_EXTRA_CA_CERTS=~/.local/share/edgee/ca/edgee-copilot-ca.pem
+COPILOT_CLI_DISABLE_WEBSOCKET_RESPONSES=true
+```
+
+This redirects an agent the user already authenticated with GitHub Copilot: Xcode spawns
+Copilot CLI (`copilot --acp`) as a child, which inherits this environment and keeps the
+user's subscription. Env injection (`COPILOT_PROVIDER_*`) is not used because it is BYOK and
+replaces the subscription, and Xcode chooses the child's flags itself. Same dedicated CA and
+lifecycle as `copilot-desktop`.
+
+[GitHub's announcement](https://github.blog/changelog/2026-11-04-github-copilot-is-now-available-in-xcodes-coding-assistant/)
+documents setup only (Xcode > Settings > Intelligence); proxy inheritance is observed
+behavior, not a published contract — verified on 2026-11-12 with Xcode 27.3 beta (27C5020n)
+and bundled Copilot CLI 1.0.100, with a chat turn and an `XcodeRead` tool round trip rerouted
+to the gateway. Re-check on each
+Xcode release. [GitHub documents proxy variables for Copilot](https://docs.github.com/en/copilot/concepts/network-settings).
+
+| Target | Skills | Subagents | Hooks | MCP servers |
+| --- | --- | --- | --- | --- |
+| `copilot-xcode` | Unsupported: Xcode owns Copilot's arguments and config root | Unsupported: same | Unsupported: same | Unsupported: same |

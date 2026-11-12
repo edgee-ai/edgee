@@ -28,7 +28,7 @@ use handler::{GatewayTarget, RelayHandler, Sink};
 /// Canonical relay targets (same public names as `edgee launch`). See
 /// `src/commands/launch/README.md` for naming rules.
 const TARGETS: &[&str] =
-    &["claude", "claude-desktop", "codex", "copilot-desktop", "intellij", "phpstorm", "android-studio", "pi", "omp", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
+    &["claude", "claude-desktop", "codex", "copilot-desktop", "copilot-xcode", "intellij", "phpstorm", "android-studio", "pi", "omp", "copilot-cli", "copilot-vscode", "cursor", "opencode"];
 
 /// Map a user-supplied agent name (including legacy aliases) to a canonical
 /// launch/relay target. Returns `None` for unknown names.
@@ -46,6 +46,8 @@ fn canonicalize_target(agent: &str) -> Option<&'static str> {
         // user's real GitHub OAuth session; see `is_copilot_cli`.
         "copilot-cli" => Some("copilot-cli"),
         "copilot-desktop" => Some("copilot-desktop"),
+        // GitHub Copilot in Xcode's coding assistant (Xcode 27.3+).
+        "copilot-xcode" | "xcode-copilot" => Some("copilot-xcode"),
         "intellij" => Some("intellij"),
         "phpstorm" => Some("phpstorm"),
         "android-studio" => Some("android-studio"),
@@ -72,6 +74,17 @@ fn is_copilot_desktop(agent: &str) -> bool {
     agent == "copilot-desktop"
 }
 
+/// True for Xcode, whose coding assistant spawns a bundled Copilot CLI.
+fn is_copilot_xcode(agent: &str) -> bool {
+    agent == "copilot-xcode"
+}
+
+/// Native macOS apps that run a bundled Copilot CLI as a child process. They are
+/// launched from their app bundle and live exactly as long as the relay.
+fn is_copilot_app(agent: &str) -> bool {
+    is_copilot_desktop(agent) || is_copilot_xcode(agent)
+}
+
 /// True for the Copilot CLI, launched directly without a GUI window.
 fn is_copilot_cli(agent: &str) -> bool {
     agent == "copilot-cli"
@@ -81,7 +94,7 @@ fn is_copilot_cli(agent: &str) -> bool {
 /// system keychain. The desktop app runs a bundled Copilot CLI, so both CLI
 /// launch targets share the same trust lifecycle as Copilot in VS Code.
 fn uses_trusted_copilot_ca(agent: &str) -> bool {
-    is_copilot_vscode(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent)
+    is_copilot_vscode(agent) || is_copilot_cli(agent) || is_copilot_app(agent)
 }
 
 /// True for provider CLIs running with their existing provider configuration in
@@ -94,7 +107,7 @@ fn is_provider_cli(agent: &str) -> bool {
 /// Whether this relay target can produce GitHub Copilot traffic. Provider CLIs are
 /// included because Copilot may be selected in the user's existing config.
 fn intercepts_copilot_hosts(agent: &str) -> bool {
-    is_copilot_cli(agent) || is_copilot_desktop(agent) || is_jetbrains(agent) || is_copilot_vscode(agent) || is_provider_cli(agent)
+    is_copilot_cli(agent) || is_copilot_app(agent) || is_jetbrains(agent) || is_copilot_vscode(agent) || is_provider_cli(agent)
 }
 
 /// True for the Cursor relay target (launches the `cursor` binary).
@@ -118,7 +131,7 @@ fn is_gui_editor(agent: &str) -> bool {
 /// Whether requests retain the agent's existing provider credentials and must
 /// be forwarded to their original upstream by the gateway.
 fn uses_upstream_credentials(agent: &str) -> bool {
-    is_gui_editor(agent) || is_copilot_cli(agent) || is_copilot_desktop(agent) || is_provider_cli(agent)
+    is_gui_editor(agent) || is_copilot_cli(agent) || is_copilot_app(agent) || is_provider_cli(agent)
 }
 
 /// Display name of the GUI editor behind a relay target, for user-facing messages.
@@ -183,7 +196,7 @@ fn macos_cli_path_hint(agent: &str) -> Option<&'static [&'static str]> {
 fn key_provider(target: &str) -> &str {
     match target {
         // Copilot surfaces share one provider key and retain GitHub credentials.
-        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "intellij" | "phpstorm" | "android-studio" => "copilot",
+        "copilot-cli" | "copilot-vscode" | "copilot-desktop" | "copilot-xcode" | "intellij" | "phpstorm" | "android-studio" => "copilot",
         "omp" => "pi",
         // Claude Desktop is a dedicated backend agent with its own key/compression
         // (coding_assistant `claude_desktop`), so it maps to its own provider slot
@@ -198,7 +211,7 @@ fn key_provider(target: &str) -> &str {
 setup_command! {
     #[command(flatten)]
     pub reroute: crate::commands::launch::reroute::Options,
-    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|intellij|phpstorm|android-studio|copilot-vscode|cursor|opencode|pi|omp).
+    /// Launch/relay target (claude|claude-desktop|codex|copilot-cli|copilot-desktop|copilot-xcode|intellij|phpstorm|android-studio|copilot-vscode|cursor|opencode|pi|omp).
     /// Aliases for Copilot-in-VS-Code: vscode-copilot|vscode|code. Launched unless
     /// --no-launch. Omit to run proxy-only with the claude key.
     pub agent: Option<String>,
@@ -206,7 +219,7 @@ setup_command! {
     #[arg(long)]
     pub no_launch: bool,
     /// Port the proxy listens on. Defaults per agent (claude 41100, codex 41200,
-    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700, phpstorm 41800, pi 41900, omp 42000, android-studio 42100) so multiple relays can
+    /// cursor 41300, claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700, phpstorm 41800, pi 41900, omp 42000, android-studio 42100, copilot-xcode 42200) so multiple relays can
     /// run side by side.
     #[arg(long)]
     pub port: Option<u16>,
@@ -358,9 +371,14 @@ async fn run_with_reroute(
     };
     let ca = build_ca(&cert_pem, &key_pem)?;
     let port = opts.port.unwrap_or_else(|| {
-        if is_copilot_desktop(&agent) { 41600 } else if agent == "intellij" { 41700 } else if agent == "phpstorm" { 41800 } else if agent == "omp" { 42000 } else if agent == "android-studio" { 42100 } else { default_port(&provider) }
+        if is_copilot_desktop(&agent) { 41600 } else if agent == "intellij" { 41700 } else if agent == "phpstorm" { 41800 } else if agent == "omp" { 42000 } else if agent == "android-studio" { 42100 } else if is_copilot_xcode(&agent) { 42200 } else { default_port(&provider) }
     });
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    // The proxy runs in a detached task whose bind error is dropped, so an app
+    // launched while another relay holds the port would point at a dead proxy.
+    std::net::TcpListener::bind(addr).with_context(|| {
+        format!("port {port} is in use: another `edgee relay {agent}` may be running. Stop it, or pass --port.")
+    })?;
 
     // Logging is opt-in: enabled only when a log file is given.
     let log_enabled = opts.log_output.is_some();
@@ -463,12 +481,18 @@ async fn run_with_reroute(
             // Ctrl-C during the session — stop everything.
             None => task.abort(),
         }
-    } else if is_claude_desktop(&agent) || is_copilot_desktop(&agent) {
+    } else if is_claude_desktop(&agent) || is_copilot_app(&agent) {
         // Desktop apps must close before their proxy stops (they
         // cannot recover once the proxy dies), so — unlike the TUI agents below —
         // we race its exit against Ctrl-C and kill it explicitly.
         if is_claude_desktop(&agent) {
             print_claude_desktop_hint();
+        } else if is_copilot_xcode(&agent) {
+            println!("Launching Xcode with GitHub Copilot through Edgee. Quit Xcode completely first.");
+            println!("Set up Copilot in Xcode > Settings > Intelligence; it keeps your Copilot subscription.");
+            println!("Usage is grouped under Copilot. Other coding assistant providers are not routed.");
+            println!("Edgee plugin delivery is not supported: Xcode chooses the Copilot CLI's arguments.");
+            println!("Keep this command running. Ctrl-C closes Xcode and stops its connection.");
         } else {
             println!("Launching GitHub Copilot app through Edgee. Quit any existing Copilot app first.");
             println!("Local sessions use your Copilot subscription; remote sessions are not routed.");
@@ -1240,8 +1264,18 @@ fn spawn_agent(
         let mut c = tokio::process::Command::new(bin);
         c.args(&extras.args).stdin(std::process::Stdio::null());
         c
-    } else if is_copilot_desktop(agent) {
-        let mut c = tokio::process::Command::new(crate::commands::launch::copilot_desktop::binary()?);
+    } else if is_copilot_app(agent) {
+        let bin = if is_copilot_xcode(agent) {
+            crate::commands::launch::copilot_xcode::binary()?
+        } else {
+            crate::commands::launch::copilot_desktop::binary()?
+        };
+        let mut c = tokio::process::Command::new(bin);
+        if is_copilot_xcode(agent) {
+            // Inherited by Xcode's Copilot CLI child; the relay carries HTTP
+            // Responses, not WebSocket upgrades (same as `copilot-cli`).
+            c.env("COPILOT_CLI_DISABLE_WEBSOCKET_RESPONSES", "true");
+        }
         c.args(&extras.args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -1723,6 +1757,20 @@ mod tests {
         assert!(intercepts_copilot_hosts("copilot-desktop"));
         assert!(!is_gui_editor("copilot-desktop"));
         assert!(!is_claude_desktop("copilot-desktop"));
+    }
+
+    #[test]
+    fn copilot_xcode_runs_like_the_copilot_app() {
+        assert_eq!(canonicalize_target("copilot-xcode"), Some("copilot-xcode"));
+        assert_eq!(canonicalize_target("xcode-copilot"), Some("copilot-xcode"));
+        assert!(TARGETS.contains(&"copilot-xcode"));
+        assert_eq!(key_provider("copilot-xcode"), "copilot");
+        assert!(uses_upstream_credentials("copilot-xcode"));
+        assert!(intercepts_copilot_hosts("copilot-xcode"));
+        assert!(uses_trusted_copilot_ca("copilot-xcode"));
+        assert!(is_copilot_app("copilot-xcode"));
+        assert!(!is_gui_editor("copilot-xcode"));
+        assert!(!is_copilot_desktop("copilot-xcode"));
     }
 
     #[test]

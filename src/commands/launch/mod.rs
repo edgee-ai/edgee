@@ -16,6 +16,7 @@ mod preflight;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;
+pub mod copilot_xcode;
 pub mod android_studio;
 pub mod intellij;
 pub mod phpstorm;
@@ -82,6 +83,9 @@ enum Command {
     /// GitHub Copilot desktop app (macOS)
     #[command(name = "copilot-desktop")]
     CopilotDesktop(copilot_desktop::Options),
+    /// GitHub Copilot in Xcode (macOS, Xcode 27.3+)
+    #[command(name = "copilot-xcode", alias = "xcode-copilot")]
+    CopilotXcode(copilot_xcode::Options),
     /// Claude Desktop app
     #[command(name = "claude-desktop")]
     ClaudeDesktop(claude_desktop::Options),
@@ -125,6 +129,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Phpstorm(o) => phpstorm::run(o, reroute).await,
         Command::AndroidStudio(o) => android_studio::run(o, reroute).await,
         Command::CopilotDesktop(o) => copilot_desktop::run(o, reroute).await,
+        Command::CopilotXcode(o) => copilot_xcode::run(o, reroute).await,
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o, reroute).await,
         Command::ClaudeDesktop(o) => claude_desktop::run(o, reroute).await,
@@ -653,6 +658,20 @@ mod tests {
         match opts.command {
             crate::commands::Command::Launch(launch) => match launch.command {
                 Command::CopilotDesktop(c) => assert_eq!(c.args, ["-p", "project", "--help"]),
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn copilot_xcode_preserves_project_arguments() {
+        let opts = crate::Options::try_parse_from([
+            "edgee", "launch", "copilot-xcode", "MyApp.xcodeproj", "-h",
+        ]).expect("parses");
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::CopilotXcode(c) => assert_eq!(c.args, ["MyApp.xcodeproj", "-h"]),
                 other => panic!("wrong target: {other:?}"),
             },
             other => panic!("wrong command: {other:?}"),
