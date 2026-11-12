@@ -441,4 +441,44 @@ describe("edgee", () => {
     await pane.unmount();
     await band.unmount();
   });
+  test("a /clear restores the line, or the pane the user left expanded", async ($, on) => {
+    const opens: { id: string; focus?: true }[] = [];
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("command.register", ($, e) => ({ value: { command: e.name } }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
+    on("clock.now", () => ({ value: Date.UTC(2026, 9, 2, 10, 0) }));
+    on("ui.status", () => ({ value: undefined }));
+    on("mcp.call", () => text({ models: MODELS }));
+    on("ui.open", ($, e) => {
+      opens.push({ id: e.id, focus: e.focus });
+      return { value: { isPlaced: true } };
+    });
+    on("ui.close", () => ({ value: undefined }));
+    on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Box({ children: [] }));
+    on("classic.SessionStart", () => ({}));
+    mock.store(on);
+    // A /clear goes on under a new session: the session's values start over.
+    let cleared = false;
+    on("state.get", { plugin: "edgee", key: "minimized" } as any, ($, e, next) => (cleared ? { value: { value: undefined, version: 0 } } : next(e)));
+    on("state.set", { plugin: "edgee", key: "minimized" } as any, ($, e, next) => ((cleared = false), next(e)));
+    const clear = async () => {
+      cleared = true;
+      await $.classic.SessionStart({ source: "clear" } as any);
+    };
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const band = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS, viewport: FULLSCREEN });
+    expect(await band.find({ type: "Text", text: /● direct/ })).toBeDefined();
+
+    await clear();
+    expect(await band.find({ type: "Text", text: /● direct/ })).toBeDefined();
+    expect(opens).toEqual([]);
+
+    // Left expanded, the pane comes back without taking the keyboard.
+    await $.command.run({ command: "edgee", args: "panel" } as any);
+    await clear();
+    expect(opens.at(-1)).toEqual({ id: "edgee-requests", focus: undefined });
+    expect(await band.find({ type: "Text", text: /Edgee/ })).toBeUndefined();
+    await band.unmount();
+  });
 });
