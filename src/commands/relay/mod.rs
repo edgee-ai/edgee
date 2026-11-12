@@ -374,6 +374,11 @@ async fn run_with_reroute(
         if is_copilot_desktop(&agent) { 41600 } else if agent == "intellij" { 41700 } else if agent == "phpstorm" { 41800 } else if agent == "omp" { 42000 } else if agent == "android-studio" { 42100 } else if is_copilot_xcode(&agent) { 42200 } else { default_port(&provider) }
     });
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    // The proxy runs in a detached task whose bind error is dropped, so an app
+    // launched while another relay holds the port would point at a dead proxy.
+    std::net::TcpListener::bind(addr).with_context(|| {
+        format!("port {port} is in use: another `edgee relay {agent}` may be running. Stop it, or pass --port.")
+    })?;
 
     // Logging is opt-in: enabled only when a log file is given.
     let log_enabled = opts.log_output.is_some();

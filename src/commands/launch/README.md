@@ -635,6 +635,10 @@ Default port 42200. Xcode exit stops the relay; Ctrl-C closes Xcode first. The b
 is preferred over `Xcode.app`; `EDGEE_XCODE_BINARY` overrides. Plugin delivery is
 structurally unsupported — Xcode owns the child's argv and `COPILOT_HOME`.
 
+The relay now refuses to start when its port is already bound: the proxy runs in a
+detached task whose bind error was dropped, so a second launch used to open the app
+pointed at a dead proxy.
+
 ## `intellij` — GitHub Copilot in IntelliJ IDEA
 
 Quit IntelliJ IDEA completely, then run `edgee launch intellij /path/to/project`.
