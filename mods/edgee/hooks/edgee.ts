@@ -56,14 +56,15 @@ export function register(on: On) {
       description: "Route this session to another model through Edgee",
       argumentHint: "[list [filter] | <model> [minutes] | off | panel | minimize]",
     });
-    const folded = (await storedMinimized($)) !== false;
-    await $.state.set(minimized, folded);
-    // Start with the compact line unless the user last left the pane expanded.
-    // Restoring the pane does not take the keyboard.
-    if (!folded) await openPane($, { focus: false });
-    if (await $.env.get("EDGEE_CLI_PATH")) {
-      void refreshSavings($).catch(() => {}); // the host may unload during a refresh
-    }
+    await restoreView($);
+    return result;
+  });
+
+  // /clear (and /new, /resume) go on under a new session id with fresh state,
+  // and no `session.start` fires for it: restore the band or pane here.
+  on("classic.SessionStart", async ($, e, next) => {
+    const result = await next(e);
+    if (e.source === "clear" || e.source === "resume") await restoreView($);
     return result;
   });
 
@@ -302,6 +303,17 @@ async function openPane($: $, { focus = true } = {}): Promise<string> {
   // Not awaited: the MCP server may still be connecting; the picker shows a loading state meanwhile.
   void loadCatalog($);
   return opened.isPlaced ? "Edgee requests pane opened." : `Edgee requests pane waits: ${opened.reason}`;
+}
+
+// Start with the compact line unless the user last left the pane expanded.
+// Restoring the pane does not take the keyboard.
+async function restoreView($: $): Promise<void> {
+  const folded = (await storedMinimized($)) !== false;
+  await $.state.set(minimized, folded);
+  if (!folded) await openPane($, { focus: false });
+  if (await $.env.get("EDGEE_CLI_PATH")) {
+    void refreshSavings($).catch(() => {}); // the host may unload during a refresh
+  }
 }
 
 async function minimize($: $): Promise<void> {
