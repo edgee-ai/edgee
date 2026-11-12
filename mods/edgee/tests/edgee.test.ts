@@ -145,6 +145,20 @@ describe("edgee", () => {
     // The pane and the band show the reroute: no status line under the prompt too.
     expect(statuses).toEqual([]);
 
+    // An effort between the model and the minutes pins the target's reasoning effort.
+    // The harness wants a full command event; the mod reads only command and args.
+    const run = (args: string) => $.command.run({ command: "edgee", args } as unknown as Parameters<typeof $.command.run>[0]);
+    const pinned = await run("coder HIGH 30");
+    expect(pinned.text).toMatch(/rerouted to qwen\/qwen3-coder-next at high effort for 30 min/);
+    expect(calls.at(-1)).toEqual({
+      tool: "setSessionReroute",
+      args: { sessionId: "sess-1", targetModel: "qwen/qwen3-coder-next", durationMinutes: 30, effort: "high" },
+    });
+    expect((await run("")).text).toMatch(/Rerouted to qwen\/qwen3-coder-next \(high effort\)/);
+    const callsBefore = calls.length;
+    expect((await run("coder turbo 30")).text).toMatch(/Invalid effort "turbo"/);
+    expect(calls.slice(callsBefore).map((c) => c.tool)).toEqual(["listSessionModels"]);
+
     // Past expiry, the reroute is gone.
     now += 31 * 60_000;
     await $.turn.complete({ reason: "answer", answer: "ok", durationMs: 1 } as any);

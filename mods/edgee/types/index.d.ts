@@ -1,4 +1,4 @@
-export type EdgeeReroute = { model: string; expiresAt: number };
+export type EdgeeReroute = { model: string; expiresAt: number; effort?: string };
 
 export type EdgeeRequest = {
   at: number;

@@ -4,7 +4,7 @@
 //
 //   /edgee                    show the active reroute
 //   /edgee list [filter]      models this session's API key can use
-//   /edgee <model> [minutes]  reroute the session (default 60, max 1440)
+//   /edgee <model> [effort] [minutes]  reroute the session, optionally pinning its reasoning effort (default 60 minutes, max 1440)
 //   /edgee off                route normally again
 //   /edgee panel              open and focus the side pane: a model selector, each API request and the model that served it
 //   /edgee minimize           fold the pane into one line above the prompt (its [–] and Esc do too; the line's [+] unfolds it)
@@ -20,6 +20,8 @@ const COMMAND = "edgee";
 const DEFAULT_MINUTES = 60;
 const PANE_MINUTES = 1440; // a pick in the pane lasts the longest reroute the gateway allows
 const MAX_MINUTES = 1440;
+// The reasoning efforts setSessionReroute accepts; the gateway also checks the target model supports it.
+const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 const LIST_LIMIT = 40;
 const PANE = "edgee-requests";
 const RECENT = 30;
@@ -55,7 +57,7 @@ export function register(on: On) {
     await $.command.register({
       name: COMMAND,
       description: "Route this session to another model through Edgee",
-      argumentHint: "[list [filter] | <model> [minutes] | off | panel | minimize]",
+      argumentHint: "[list [filter] | <model> [effort] [minutes] | off | panel | minimize]",
     });
     await restoreView($);
     return result;
@@ -178,7 +180,7 @@ export function register(on: On) {
       if (verb === "") return { text: await describe($) };
       if (verb === "list") return { text: await list($, sessionId, rest.join(" ")) };
       if (verb === "off" || verb === "clear" || verb === "reset") return { text: await clear($, sessionId) };
-      return { text: await set($, sessionId, verb, rest[0]) };
+      return { text: await set($, sessionId, verb, rest) };
     } catch (err) {
       // No `edgee` server (MCP not enabled), or its reroute tools not allowed yet.
       return { text: `Edgee MCP call failed: ${errorText(err)}` };
@@ -188,8 +190,8 @@ export function register(on: On) {
 
 async function describe($: $): Promise<string> {
   const active = await current($);
-  if (!active) return `No reroute: requests go to the model Claude Code asks for.\nUsage: /${COMMAND} list [filter] · /${COMMAND} <model> [minutes] · /${COMMAND} off`;
-  return `Rerouted to ${active.model} until ${clockTime(active.expiresAt)}.`;
+  if (!active) return `No reroute: requests go to the model Claude Code asks for.\nUsage: /${COMMAND} list [filter] · /${COMMAND} <model> [effort] [minutes] · /${COMMAND} off`;
+  return `Rerouted to ${active.model}${active.effort ? ` (${active.effort} effort)` : ""} until ${clockTime(active.expiresAt)}.`;
 }
 
 async function list($: $, sessionId: string, filter: string): Promise<string> {
@@ -212,22 +214,29 @@ async function list($: $, sessionId: string, filter: string): Promise<string> {
   return `${shown.join("\n")}${more}`;
 }
 
-async function set($: $, sessionId: string, query: string, minutesArg: string | undefined): Promise<string> {
+// `<model> [effort] [minutes]`: effort is optional, told apart from the minutes by its vocabulary.
+async function set($: $, sessionId: string, query: string, rest: string[]): Promise<string> {
   const models = await availableModels($, sessionId);
   const match = resolveModel(models, query);
   if (match.error !== undefined) return match.error;
 
+  let [effortArg, minutesArg]: (string | undefined)[] = rest;
+  if (effortArg !== undefined && !EFFORTS.includes(effortArg.toLowerCase())) {
+    if (!/^\d+$/.test(effortArg)) return `Invalid effort "${effortArg}": give one of ${EFFORTS.join(", ")}.`;
+    [effortArg, minutesArg] = [undefined, effortArg];
+  }
   const minutes = clampMinutes(minutesArg);
   if (minutes === null) return `Invalid duration "${minutesArg}": give minutes between 1 and ${MAX_MINUTES}.`;
-  return applyReroute($, sessionId, match.model, minutes);
+  return applyReroute($, sessionId, match.model, minutes, effortArg?.toLowerCase());
 }
 
-async function applyReroute($: $, sessionId: string, model: string, minutes: number): Promise<string> {
-  await callEdgee($, "setSessionReroute", { sessionId, targetModel: model, durationMinutes: minutes });
+async function applyReroute($: $, sessionId: string, model: string, minutes: number, effort?: string): Promise<string> {
+  await callEdgee($, "setSessionReroute", { sessionId, targetModel: model, durationMinutes: minutes, ...(effort ? { effort } : {}) });
   const expiresAt = (await $.clock.now()) + minutes * 60_000;
-  await $.state.set(reroute, { model, expiresAt });
+  await $.state.set(reroute, { model, expiresAt, ...(effort ? { effort } : {}) });
   const span = minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`;
-  return `Session rerouted to ${model} for ${span} (until ${clockTime(expiresAt)}).`;
+  const pinned = effort ? ` at ${effort} effort` : "";
+  return `Session rerouted to ${model}${pinned} for ${span} (until ${clockTime(expiresAt)}).`;
 }
 
 async function clear($: $, sessionId: string): Promise<string> {
@@ -546,6 +555,7 @@ function paneView(elements: Elements, { sessionId, active, catalog, picker, rece
             span(fit(bare(lastAsked ?? "claude"), Math.floor(inner / 3)).trimEnd(), { dimColor: true, strikethrough: true }),
             span("  ━━▶  ", { color: ACCENT, bold: true }),
             span(active.model, { color: providerColor(active.model), bold: true }),
+            ...(active.effort ? [span(` · ${active.effort}`, { color: ACCENT })] : []),
             span(`  ⏱ ${clockTime(active.expiresAt)}`, { dimColor: true }),
           ])
         : span(sessionId ? "No reroute: requests go to the model Claude Code asks for" : "Not under edgee launch: requests are only observed", { dimColor: true, italic: true }),
@@ -805,7 +815,7 @@ function bandView({ Box, Text, Button }: Elements, { active, catalog, recent, to
         children: [
           Text({ color: ACCENT, bold: true, children: "◆ Edgee  " }),
           active
-            ? Text({ color: ACCENT, bold: true, children: `⇄ ${bare(active.model)} until ${clockTime(active.expiresAt)}` })
+            ? Text({ color: ACCENT, bold: true, children: `⇄ ${bare(active.model)}${active.effort ? ` (${active.effort})` : ""} until ${clockTime(active.expiresAt)}` })
             : Text({ color: "green", children: "● direct" }),
           ...(served ? [Text({ dimColor: true, children: " · " }), Text({ color: providerColor(served), children: bare(served) })] : []),
           Text({ dimColor: true, wrap: "truncate-end", children: ` · ${facts}` }),
