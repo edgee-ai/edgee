@@ -19,6 +19,15 @@ network access. Unix sockets, host loopback and private resolved addresses are
 blocked. Descendants inherit confinement. No existing Edgee MITM relay port is
 exempted.
 
+On Linux, a private bubblewrap argument adapter seals anonymous read-deny tmpfs
+scaffolding read-only after explicit workspace/session mounts are restored.
+It consumes argument arrays (including NUL-delimited argument FDs), rejects
+unknown options for the pinned runtime, and never evaluates workload arguments.
+The OS-provided `/dev` and `/proc` namespaces remain pseudo-filesystem exceptions;
+they do not expose host temporary files or processes. Only the exact seccomp
+helper and runtime-owned authenticated proxy sockets are restored through
+read-denied directories.
+
 The pinned macOS profile is narrowed by exact checked substitutions removing
 Keychain/SecurityServer, host preferences and POSIX shared-memory/semaphore
 grants. Unexpected profile text fails closed. This is version-coupled and must

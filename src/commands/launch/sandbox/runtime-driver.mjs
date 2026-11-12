@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 const specPath = process.argv[1];
 let manager;
 let child;
+let linuxWrapperDirectory;
 let interrupted = false;
 class SetupError extends Error {}
 const parentPid = process.ppid;
@@ -38,6 +39,70 @@ function narrowMacProfile(wrapper) {
     if (wrapper.split(from).length !== 2) throw new SetupError('Runtime macOS profile differs from the reviewed profile; reinstall the pinned dependency.');
     wrapper = wrapper.replace(from, to);
   }
+  return wrapper;
+}
+
+function linuxBwrapWrapper() {
+  const realBwrap = process.env.PATH.split(path.delimiter).map(dir => path.join(dir, 'bwrap')).find(candidate => {
+    try { fs.accessSync(candidate, fs.constants.X_OK); return fs.statSync(candidate).isFile(); } catch { return false; }
+  });
+  if (!realBwrap) throw new SetupError('bubblewrap is missing from the trusted tool path; install it before launching.');
+  linuxWrapperDirectory = fs.mkdtempSync(path.join(path.dirname(specPath), 'edgee-bwrap-'));
+  const wrapper = path.join(linuxWrapperDirectory, 'bwrap');
+  // Receive actual argv from the maintained runtime, never parse its shell
+  // command. The read-deny tmpfs mounts are private but writable by upstream
+  // default; seal their scaffolding after all read/write submounts exist.
+  // --remount-ro is nonrecursive, so authorized workspace/session binds remain
+  // writable. Bash -p ignores BASH_ENV and imported functions on this host hop.
+  const script = [
+    '#!/bin/bash -p',
+    'set -eo pipefail',
+    `real_bwrap=${quote(fs.realpathSync(realBwrap))}`,
+    "args=(\"$@\")",
+    "if [[ ${#args[@]} == 1 && ( \"${args[0]}\" == --version || \"${args[0]}\" == --help ) ]]; then exec \"$real_bwrap\" \"${args[@]}\"; fi",
+    "tmpfs_paths=()",
+    "separator=-1",
+    "i=0",
+    "while ((i<${#args[@]})); do",
+    "  arg=${args[i]}",
+    "  case \"$arg\" in",
+    "    --) separator=$i; break ;;",
+    "    --args)",
+    "      ((i+1<${#args[@]})) || exit 125",
+    "      fd=${args[i+1]}",
+    "      [[ \"$fd\" =~ ^[0-9]{1,6}$ && $fd -ge 3 ]] || exit 125",
+    "      profile=(); item=\"\"",
+    "      while IFS= read -r -d \"\" item; do profile+=(\"$item\"); done <&\"$fd\"",
+    "      [[ -z \"$item\" ]] || exit 125",
+    "      args=(\"${args[@]:0:i}\" \"${profile[@]}\" \"${args[@]:i+2}\")",
+    "      continue ;;",
+    "    --new-session|--die-with-parent|--unshare-net|--unshare-pid|--unshare-user|--disable-userns) count=0 ;;",
+    "    --tmpfs|--dev|--proc|--remount-ro|--unsetenv|--cap-add|--cap-drop) count=1 ;;",
+    "    --bind|--ro-bind|--dev-bind|--setenv) count=2 ;;",
+    "    *) printf \"%s\\n\" \"Edgee sandbox: unexpected bubblewrap option; launch refused.\" >&2; exit 125 ;;",
+    "  esac",
+    "  ((i+count<${#args[@]})) || exit 125",
+    "  case \"$arg\" in",
+    "    --tmpfs|--dev|--proc|--bind|--ro-bind|--dev-bind)",
+    "      dest=${args[i+count]}",
+    "      [[ \"$dest\" == /* ]] || exit 125",
+    "      for j in \"${!tmpfs_paths[@]}\"; do",
+    "        candidate=${tmpfs_paths[j]}",
+    "        if [[ \"$dest\" == / || \"$candidate\" == \"$dest\" || \"$candidate\" == \"$dest/\"* ]]; then tmpfs_paths[j]=\"\"; fi",
+    "      done",
+    "      if [[ \"$arg\" == --tmpfs || \"$arg\" == --dev ]]; then tmpfs_paths+=(\"$dest\"); fi ;;",
+    "  esac",
+    "  ((i+=count+1))",
+    "done",
+    "((separator>=0)) || exit 125",
+    "mounts=()",
+    "for dest in \"${tmpfs_paths[@]}\"; do",
+    "  if [[ -n \"$dest\" ]]; then mounts+=(--remount-ro \"$dest\"); fi",
+    "done",
+    "exec \"$real_bwrap\" \"${args[@]:0:separator}\" \"${mounts[@]}\" \"${args[@]:separator}\"",
+    '',
+  ].join('\n');
+  fs.writeFileSync(wrapper, script, { mode: 0o700 });
   return wrapper;
 }
 
@@ -131,6 +196,9 @@ try {
     // The runtime executes this helper INSIDE bubblewrap. A root read-deny
     // otherwise hides its npm installation. Expose exactly this executable,
     // never node_modules or its parent directory, and prohibit modification.
+    config.bwrapPath = linuxBwrapWrapper();
+    config.filesystem.denyRead.push(literal(linuxWrapperDirectory));
+    config.filesystem.denyWrite.push(literal(linuxWrapperDirectory));
     config.seccomp = { applyPath: helper };
     config.filesystem.allowRead.push(literal(helper));
     config.filesystem.denyWrite.push(literal(helper));
@@ -181,4 +249,5 @@ try {
 } finally {
   clearInterval(orphanCheck);
   if (manager) await manager.reset().catch(() => {});
+  if (linuxWrapperDirectory) fs.rmSync(linuxWrapperDirectory, { recursive: true, force: true });
 }
