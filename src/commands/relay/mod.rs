@@ -229,14 +229,35 @@ setup_command! {
 }
 
 pub async fn run(opts: Options) -> Result<()> {
+    check_sandbox_launch_policy(&opts)?;
     let controls = opts.reroute.resolve().await?;
     run_with_reroute(opts, &controls).await
+}
+
+fn check_sandbox_launch_policy(opts: &Options) -> Result<()> {
+    enforce_sandbox_launch_policy(opts, || {
+        Ok(crate::commands::launch::sandbox::policy::Policy::load()?.mandatory)
+    })
+}
+
+fn enforce_sandbox_launch_policy(
+    opts: &Options,
+    mandatory: impl FnOnce() -> Result<bool>,
+) -> Result<()> {
+    // Proxy-only sessions and CA cleanup do not launch an agent. Keep them
+    // available even if the machine policy needs an administrator's repair.
+    if opts.agent.is_some() && !opts.no_launch && !opts.untrust && mandatory()? {
+        anyhow::bail!("Administrator policy requires sandboxed agent execution. Use `edgee launch claude` or `edgee launch codex`; the legacy relay cannot launch an unconfined agent.");
+    }
+    Ok(())
 }
 
 async fn run_with_reroute(
     opts: Options,
     reroute: &crate::commands::launch::reroute::Reroute,
 ) -> Result<()> {
+    // Programmatic launch wrappers also enter here directly, without run().
+    check_sandbox_launch_policy(&opts)?;
     let raw = opts.agent.clone().unwrap_or_else(|| "claude".to_string());
     if opts.untrust {
         let agent = canonicalize_target(&raw)
@@ -1650,7 +1671,34 @@ fn print_external_help(addr: &SocketAddr, cert_path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::*;
+
+    #[test]
+    fn direct_relay_cannot_bypass_mandatory_sandbox() {
+        for target in ["claude", "codex", "copilot-cli", "cursor"] {
+            let options = Options::try_parse_from(["relay", target]).unwrap();
+            assert!(enforce_sandbox_launch_policy(&options, || Ok(true)).is_err());
+            assert!(enforce_sandbox_launch_policy(&options, || Ok(false)).is_ok());
+            assert!(
+                enforce_sandbox_launch_policy(&options, || anyhow::bail!("invalid policy"))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn relay_proxy_and_ca_cleanup_do_not_load_launch_policy() {
+        for argv in [
+            vec!["relay"],
+            vec!["relay", "claude", "--no-launch"],
+            vec!["relay", "claude", "--untrust"],
+        ] {
+            let options = Options::try_parse_from(argv).unwrap();
+            enforce_sandbox_launch_policy(&options, || panic!("no agent is launched")).unwrap();
+        }
+    }
 
     #[test]
     fn phpstorm_uses_copilot_subscription_and_editor_lifecycle() {

@@ -13,7 +13,7 @@ pub mod codex;
 mod codex_catalog;
 mod codex_config;
 mod preflight;
-mod sandbox;
+pub(crate) mod sandbox;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;

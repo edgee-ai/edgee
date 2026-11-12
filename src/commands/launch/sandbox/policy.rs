@@ -29,8 +29,6 @@ pub struct Policy {
     pub mandatory: bool,
     pub allowed_domains: Vec<String>,
     pub read_paths: Vec<PathBuf>,
-    pub node_binary: Option<PathBuf>,
-    pub runtime_root: Option<PathBuf>,
     #[serde(skip)]
     pub tool_path: String,
 }
@@ -41,8 +39,6 @@ impl Default for Policy {
             mandatory: false,
             allowed_domains: vec!["api.edgee.ai".into(), "chatgpt.com".into()],
             read_paths: Vec::new(),
-            node_binary: None,
-            runtime_root: None,
             tool_path: TOOL_PATH.into(),
         }
     }
@@ -73,11 +69,6 @@ impl Policy {
         validate_admin_path(path)?;
         let mut policy: Self = toml::from_str(&std::fs::read_to_string(path)?)
             .context("Invalid administrator sandbox policy; ask your administrator to fix it")?;
-        if policy.mandatory && (policy.node_binary.is_none() || policy.runtime_root.is_none()) {
-            bail!(
-                "Mandatory sandbox policy must configure root-owned node_binary and runtime_root"
-            );
-        }
         for domain in &mut policy.allowed_domains {
             *domain = domain.to_ascii_lowercase();
             if !valid_domain(domain) {
@@ -90,28 +81,10 @@ impl Policy {
             }
             *path = validate_scope(path)?;
         }
-        for path in [&mut policy.node_binary, &mut policy.runtime_root]
-            .into_iter()
-            .flatten()
-        {
-            if !path.is_absolute() {
-                bail!("Administrator runtime_root and node_binary must be absolute paths");
-            }
-            // Check original components before canonicalization can hide symlinks.
-            if policy.mandatory {
-                validate_admin_path(path)?;
-            }
-            *path = path
-                .canonicalize()
-                .context("Administrator sandbox runtime path does not exist")?;
-        }
-        if policy.node_binary.as_ref().is_some_and(|p| !p.is_file())
-            || policy.runtime_root.as_ref().is_some_and(|p| !p.is_dir())
-        {
-            bail!("Sandbox node_binary must be a file and runtime_root must be a directory");
-        }
         if policy.mandatory {
-            validate_admin_tree(policy.runtime_root.as_ref().expect("required above"))?;
+            validate_trusted_alias(&std::env::current_exe()?).context(
+                "Mandatory sandbox requires an administrator-installed, root-owned Edgee binary",
+            )?;
             policy.tool_path = trusted_tool_path()?;
         }
         Ok(policy)
@@ -128,9 +101,9 @@ fn trusted_tool_path() -> Result<String> {
         .filter(|path| path.is_dir() && validate_trusted_alias(path).is_ok())
         .collect();
     let required: &[&str] = if cfg!(target_os = "linux") {
-        &["rg", "bwrap", "socat"]
+        &["bwrap"]
     } else {
-        &["rg"]
+        &["sandbox-exec"]
     };
     for helper in required {
         let path = directories.iter().map(|dir| dir.join(helper)).find(|path| {
@@ -151,6 +124,11 @@ fn trusted_tool_path() -> Result<String> {
 
 #[cfg(not(unix))]
 fn trusted_tool_path() -> Result<String> {
+    bail!("Mandatory local sandbox requires macOS or Linux")
+}
+
+#[cfg(not(unix))]
+fn validate_trusted_alias(_path: &Path) -> Result<()> {
     bail!("Mandatory local sandbox requires macOS or Linux")
 }
 
@@ -212,65 +190,6 @@ fn validate_admin_path(path: &Path) -> Result<()> {
         bail!("Administrator sandbox policy is supported only on macOS and Linux");
     }
     Ok(())
-}
-
-/// Runtime dependencies are executable policy-enforcement code too. Checking
-/// only the package root would allow a writable dependency to disable isolation.
-#[cfg(unix)]
-fn validate_admin_tree(root: &Path) -> Result<()> {
-    use std::os::unix::fs::MetadataExt;
-
-    let mut pending = vec![root.to_path_buf()];
-    let mut inspected = 0_usize;
-    while let Some(path) = pending.pop() {
-        inspected += 1;
-        if inspected > 100_000 {
-            bail!("Sandbox runtime contains too many files to validate safely");
-        }
-        let metadata = std::fs::symlink_metadata(&path)?;
-        if metadata.uid() != 0 {
-            bail!(
-                "Every sandbox runtime file must be root-owned: {}",
-                path.display()
-            );
-        }
-        if metadata.file_type().is_symlink() {
-            let target = path
-                .canonicalize()
-                .context("Sandbox runtime contains a broken symlink")?;
-            if !target.starts_with(root) {
-                bail!(
-                    "Sandbox runtime symlink escapes its root: {}",
-                    path.display()
-                );
-            }
-            validate_admin_path(&target)?;
-        } else {
-            reject_extended_acl(&path)?;
-            if metadata.mode() & 0o022 != 0 {
-                bail!(
-                    "Sandbox runtime must not be group/world writable: {}",
-                    path.display()
-                );
-            }
-            if metadata.is_dir() {
-                for entry in std::fs::read_dir(&path)? {
-                    pending.push(entry?.path());
-                }
-            } else if !metadata.is_file() {
-                bail!(
-                    "Sandbox runtime contains an unsupported special file: {}",
-                    path.display()
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_admin_tree(_root: &Path) -> Result<()> {
-    bail!("Mandatory local sandbox is supported only on macOS and Linux")
 }
 
 #[cfg(target_os = "macos")]
@@ -354,18 +273,14 @@ pub fn prepare(options: &Options) -> Result<Option<Prepared>> {
     };
     let mut protected = vec![PathBuf::from("/etc"), PathBuf::from("/private/etc")];
     if let Some(home) = account_home() {
-        protected.extend([
-            home.join(".config/edgee"),
-            home.join(".local/share/edgee/sandbox-runtime"),
-        ]);
-    }
-    if let Some(runtime) = &policy.runtime_root {
-        protected.push(runtime.clone());
+        protected.push(home.join(".config/edgee"));
     }
     for path in protected {
         if let Ok(path) = path.canonicalize() {
             if workspace.starts_with(&path) || path.starts_with(&workspace) {
-                bail!("Workspace overlaps sandbox policy or runtime files; choose a separate project directory");
+                bail!(
+                    "Workspace overlaps sandbox policy files; choose a separate project directory"
+                );
             }
         }
     }
@@ -607,6 +522,11 @@ mod tests {
     fn policy_rejects_unknown_fields_and_unsafe_domains() {
         assert!(toml::from_str::<Policy>("disable = true").is_err());
         assert_eq!(toml::from_str::<Policy>("").unwrap().tool_path, TOOL_PATH);
+        let native = toml::from_str::<Policy>("mandatory = true").unwrap();
+        assert!(native.mandatory);
+        for removed in ["node_binary", "runtime_root"] {
+            assert!(toml::from_str::<Policy>(&format!("{removed} = '/obsolete'")).is_err());
+        }
         for bad in [
             "",
             "*.example.com",
@@ -648,7 +568,7 @@ mod tests {
         std::os::unix::fs::symlink("/", tmp.path().join("root")).unwrap();
         assert!(validate_scope(&tmp.path().join("root")).is_err());
         assert!(validate_admin_path(&tmp.path().join("root")).is_err());
-        assert!(validate_admin_tree(tmp.path()).is_err());
+        assert!(validate_trusted_alias(&tmp.path().join("root")).is_err());
     }
 
     #[cfg(target_os = "macos")]

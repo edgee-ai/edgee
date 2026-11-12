@@ -1,15 +1,32 @@
-//! Pinned Anthropic Sandbox Runtime supervisor. No implicit unconfined fallback.
-
-use std::io::Write;
-use std::path::{Path, PathBuf};
+//! Native OS sandbox orchestration. A requested sandbox never falls back.
+#[cfg(unix)]
+use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
+#[cfg(unix)]
+use std::process::Stdio;
 
-use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use anyhow::{bail, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use serde::{Deserialize, Serialize};
 
-const DRIVER: &str = include_str!("runtime-driver.mjs");
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod linux;
+#[cfg(unix)]
+#[path = "proxy.rs"]
+mod proxy;
+#[cfg(target_os = "macos")]
+#[path = "seatbelt.rs"]
+mod seatbelt;
+#[cfg(target_os = "linux")]
+#[path = "seccomp.rs"]
+mod seccomp;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RuntimeSpec {
     pub workspace: PathBuf,
     pub cwd: PathBuf,
@@ -18,108 +35,187 @@ pub struct RuntimeSpec {
     pub write_paths: Vec<PathBuf>,
     pub deny_write_paths: Vec<PathBuf>,
     pub allowed_domains: Vec<String>,
-    pub runtime_root: PathBuf,
-    pub node_binary: PathBuf,
     pub tool_path: String,
 }
-
-/// Dependency validation runs before authentication or agent setup. Both paths
-/// must already have been validated against the applicable administrator policy.
-pub fn preflight(node_binary: &Path, runtime_root: &Path, tool_path: &str) -> Result<()> {
-    if !cfg!(any(target_os = "macos", target_os = "linux")) {
-        bail!("Local sandbox supports macOS and Linux only; use a supported host.");
-    }
-    if !node_binary.is_absolute() || !runtime_root.is_absolute() {
-        bail!("Sandbox Node.js and runtime paths must be absolute.");
-    }
-    let package = runtime_root.join("node_modules/@anthropic-ai/sandbox-runtime/package.json");
-    if !node_binary.is_file() || !package.is_file() {
-        bail!("Sandbox runtime is missing. Install Node.js >=22.12 and the pinned dependencies from scripts/sandbox-runtime with npm ci --ignore-scripts --omit=optional; configure their absolute paths.");
-    }
-    let payload = serde_json::json!({"preflight": true, "runtime_root": runtime_root});
-    let mut input =
-        tempfile::NamedTempFile::new().context("Create private sandbox preflight input")?;
-    serde_json::to_writer(&mut input, &payload)?;
-    input.flush()?;
-    let mut cmd = supervisor(node_binary, input.path(), tool_path);
-    let status = cmd
-        .status()
-        .context("Start sandbox dependency check; verify the configured Node.js binary")?;
-    if !status.success() {
-        bail!("Sandbox dependency check failed; install the required runtime dependencies. No agent was launched.");
-    }
-    Ok(())
+#[cfg(unix)]
+#[derive(Serialize, Deserialize)]
+struct Payload {
+    argv: Vec<String>,
+    env: BTreeMap<String, String>,
+    cwd: PathBuf,
+    socket: PathBuf,
 }
-
-fn supervisor(node: &Path, input: &Path, tool_path: &str) -> Command {
-    let mut command = Command::new(node);
-    command.env_clear().env("PATH", tool_path);
-    command.args(["--input-type=module", "--eval", DRIVER]);
-    command.arg(input);
-    command
-}
-
-/// Run only an explicitly constructed child environment. Inherited variables
-/// are intentionally ignored even if the caller forgot Command::env_clear().
-pub fn execute(command: &Command, spec: &RuntimeSpec) -> Result<ExitStatus> {
+pub fn preflight(tool_path: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = tool_path;
+        anyhow::ensure!(Path::new("/usr/bin/sandbox-exec").is_file(), "macOS Seatbelt launcher is unavailable; repair the operating system before sandboxing.");
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::bwrap(tool_path).map(|_| ())
+    }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = (command, spec);
-        bail!("Local sandbox supports macOS and Linux only; use a supported host.");
+        let _ = tool_path;
+        bail!("Local sandbox supports macOS and Linux only; use a supported host.")
     }
+}
+pub fn execute(command: &Command, spec: &RuntimeSpec) -> Result<ExitStatus> {
+    preflight(&spec.tool_path)?;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         execute_unix(command, spec)
     }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = command;
+        bail!("Local sandbox requires macOS or Linux")
+    }
+}
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn execute_unix(command: &Command, spec: &RuntimeSpec) -> Result<ExitStatus> {
+    let proxy = proxy::Proxy::start(&spec.allowed_domains)?;
+    let control = tempfile::Builder::new()
+        .prefix("edgee-sandbox-control-")
+        .tempdir()?;
+    let control_path = control.path().canonicalize()?;
+    #[cfg(target_os = "linux")]
+    let _bridge = linux::HostBridge::start(&control_path.join("proxy.sock"), proxy.port)?;
+    #[cfg(target_os = "linux")]
+    let _stubs = linux::DenyStubs::prepare(spec)?;
+    let utf8 = |s: &std::ffi::OsStr| -> Result<String> {
+        Ok(s.to_str()
+            .context("Sandbox arguments and environment must be UTF-8")?
+            .to_owned())
+    };
+    let argv = std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .map(utf8)
+        .collect::<Result<Vec<_>>>()?;
+    let mut env = command
+        .get_envs()
+        .filter_map(|(k, v)| v.map(|v| (k, v)))
+        .map(|(k, v)| Ok((utf8(k)?, utf8(v)?)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    // Native resolvers do not need access to host DNS files for a numeric proxy.
+    #[cfg(target_os = "macos")]
+    let port = proxy.port;
+    #[cfg(target_os = "linux")]
+    let port = linux::BRIDGE_PORT;
+    for name in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        env.insert(name.into(), proxy.url(port));
+    }
+    for name in ["NO_PROXY", "no_proxy"] {
+        env.insert(name.into(), String::new());
+    }
+    env.insert("GIT_CONFIG_COUNT".into(), "1".into());
+    env.insert("GIT_CONFIG_KEY_0".into(), "safe.directory".into());
+    env.insert(
+        "GIT_CONFIG_VALUE_0".into(),
+        spec.workspace.to_string_lossy().into_owned(),
+    );
+    let payload = Payload {
+        argv,
+        env,
+        cwd: spec.cwd.clone(),
+        socket: control_path.join("proxy.sock"),
+    };
+    let secret = control_path.join("probe-secret");
+    std::fs::write(&secret, b"fake-edgee-secret")?;
+    let outside = control_path.join("probe-write");
+    let probe = Payload {
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "test ! -r \"$1\" && ! (echo denied > \"$2\") 2>/dev/null".into(),
+            "edgee-probe".into(),
+            secret.to_string_lossy().into_owned(),
+            outside.to_string_lossy().into_owned(),
+        ],
+        env: payload.env.clone(),
+        cwd: payload.cwd.clone(),
+        socket: payload.socket.clone(),
+    };
+    let mut probe_command = backend(&probe, spec, &control_path, proxy.port, true)?;
+    probe_command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    let status = supervise(probe_command, false).context("Start OS sandbox probe")?;
+    anyhow::ensure!(status.success() && !outside.exists(), "OS sandbox probe failed; agent was not launched. Verify OS permissions and isolation dependencies.");
+    eprintln!(
+        "Edgee sandbox active ({}); workspace: {}",
+        if cfg!(target_os = "macos") {
+            "Seatbelt"
+        } else {
+            "bubblewrap + seccomp"
+        },
+        spec.workspace.display()
+    );
+    eprintln!(
+        "Network allowlist: {}; host local services and Unix sockets blocked; isolated home.",
+        spec.allowed_domains.join(", ")
+    );
+    let status = supervise(
+        backend(&payload, spec, &control_path, proxy.port, false)?,
+        true,
+    )?;
+    drop(proxy);
+    Ok(status)
+}
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn backend(
+    payload: &Payload,
+    spec: &RuntimeSpec,
+    control: &Path,
+    port: u16,
+    probe: bool,
+) -> Result<Command> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = probe;
+        seatbelt::command(payload, spec, control, port)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = port;
+        linux::command(payload, spec, control, probe)
+    }
+}
+#[cfg(target_os = "linux")]
+pub(crate) fn internal(path: &Path) -> Result<()> {
+    linux::internal(path)
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn execute_unix(command: &Command, spec: &RuntimeSpec) -> Result<ExitStatus> {
-    use std::collections::BTreeMap;
-    use std::os::unix::process::CommandExt;
-
-    let utf8 = |value: &std::ffi::OsStr| -> Result<String> {
-        Ok(value
-            .to_str()
-            .context("Sandbox arguments and environment must be valid UTF-8")?
-            .to_owned())
-    };
-    let argv: Vec<String> = std::iter::once(command.get_program())
-        .chain(command.get_args())
-        .map(utf8)
-        .collect::<Result<_>>()?;
-    let env: BTreeMap<String, String> = command
-        .get_envs()
-        .filter_map(|(key, value)| value.map(|value| (key, value)))
-        .map(|(key, value)| Ok((utf8(key)?, utf8(value)?)))
-        .collect::<Result<_>>()?;
-    let mut payload = serde_json::to_value(spec)?;
-    payload["argv"] = serde_json::to_value(argv)?;
-    payload["env"] = serde_json::to_value(env)?;
-    // Outside the session directory: the sandbox must never read the launch
-    // specification. NamedTempFile uses 0600; the supervisor unlinks it at once.
-    let mut input =
-        tempfile::NamedTempFile::new().context("Create private sandbox launch input")?;
-    serde_json::to_writer(&mut input, &payload)?;
-    input.flush()?;
+fn supervise(mut command: Command, foreground: bool) -> Result<ExitStatus> {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
     let signals = ExecutionSignals::new()?;
-    let mut supervisor = supervisor(&spec.node_binary, input.path(), &spec.tool_path);
-    supervisor
-        .current_dir(&spec.cwd)
-        .env("HOME", &spec.session_dir);
-    supervisor.process_group(0);
-    let mut child = supervisor
-        .spawn()
-        .context("Start OS sandbox supervisor; agent was not launched")?;
-    let guard = ProcessGroupGuard::new(child.id() as libc::pid_t)?;
+    command.process_group(0);
+    let mut child = command.spawn().context("Start native sandbox process")?;
+    let guard = if foreground {
+        ProcessGroupGuard::new(child.id() as libc::pid_t)?
+    } else {
+        ProcessGroupGuard {
+            group: child.id() as libc::pid_t,
+            previous: -1,
+            terminal: false,
+        }
+    };
     let mut forwarded = None;
     let mut deadline = None;
     let status = loop {
         let signal = signals.pending.swap(0, std::sync::atomic::Ordering::SeqCst) as libc::c_int;
         if signal != 0 {
-            // Terminal signals normally reach the foreground child directly.
-            // Signals explicitly sent to Edgee (including noninteractive jobs)
-            // are forwarded instead of terminating Rust before session cleanup.
             unsafe {
                 libc::kill(-(child.id() as libc::pid_t), signal);
             }
@@ -132,19 +228,14 @@ fn execute_unix(command: &Command, spec: &RuntimeSpec) -> Result<ExitStatus> {
             }
             deadline = None;
         }
-        if let Some(status) = child.try_wait().context("Wait for OS sandbox supervisor")? {
+        if let Some(status) = child.try_wait()? {
             break status;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
     drop(guard);
-    if let Some(signal) = forwarded {
-        use std::os::unix::process::ExitStatusExt;
-        return Ok(ExitStatus::from_raw(signal));
-    }
-    Ok(status)
+    Ok(forwarded.map(ExitStatus::from_raw).unwrap_or(status))
 }
-
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 struct ExecutionSignals {
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -237,126 +328,5 @@ fn set_foreground(group: libc::pid_t) -> bool {
         let success = libc::tcsetpgrp(libc::STDIN_FILENO, group) == 0;
         libc::pthread_sigmask(libc::SIG_SETMASK, &previous, std::ptr::null_mut());
         success
-    }
-}
-
-// This suite is explicitly enabled in the macOS/Linux isolation CI job. No
-// missing-runtime skip: unavailable dependencies or missing fixtures fail it.
-#[cfg(all(test, feature = "sandbox-runtime-tests", unix))]
-mod real_runtime_tests {
-    use super::*;
-
-    #[test]
-    fn real_runtime_lifecycle_filters_inherited_secrets_and_cleans_descendants() {
-        assert_eq!(
-            std::env::var("FAKE_HOST_SECRET").as_deref(),
-            Ok("host-only-fake-secret"),
-            "Set FAKE_HOST_SECRET=host-only-fake-secret in the test parent environment"
-        );
-        let node_binary = PathBuf::from(
-            std::env::var_os("EDGEE_TEST_NODE")
-                .expect("EDGEE_TEST_NODE must name the installed Node.js binary"),
-        )
-        .canonicalize()
-        .unwrap();
-        let runtime_root = PathBuf::from(
-            std::env::var_os("EDGEE_TEST_RUNTIME_ROOT")
-                .expect("EDGEE_TEST_RUNTIME_ROOT must name the installed pinned runtime"),
-        )
-        .canonicalize()
-        .unwrap();
-        let tool_path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_owned();
-        preflight(&node_binary, &runtime_root, &tool_path)
-            .expect("Real runtime preflight must succeed");
-        let directory = tempfile::tempdir().unwrap();
-        let base = directory.path().canonicalize().unwrap();
-        let workspace = base.join("workspace with spaces");
-        let session_dir = base.join("private session");
-        std::fs::create_dir(&workspace).unwrap();
-        std::fs::create_dir(&session_dir).unwrap();
-        let secret = base.join("fake-secret-outside");
-        std::fs::write(&secret, "fake-file-secret").unwrap();
-        let spec = RuntimeSpec {
-            cwd: workspace.clone(),
-            workspace: workspace.clone(),
-            session_dir: session_dir.clone(),
-            read_paths: super::super::system_read_paths(),
-            write_paths: vec![],
-            deny_write_paths: vec![],
-            allowed_domains: vec![],
-            runtime_root,
-            node_binary,
-            tool_path,
-        };
-        // Deliberately DON'T env_clear here. execute must omit inherited state
-        // even when a future launcher forgets to scrub its Command explicitly.
-        let mut command = Command::new("/bin/sh");
-        command
-            .env("HOME", &session_dir)
-            .env("TMPDIR", &session_dir)
-            .env("PATH", "/usr/bin:/bin")
-            .env("EXPLICIT_TEST_VALUE", "allowed-fake-value")
-            .args([
-                "-c",
-                r#"
-                test -z "${FAKE_HOST_SECRET+x}" || exit 90
-                test "$EXPLICIT_TEST_VALUE" = allowed-fake-value || exit 91
-                test "$1" = 'spaces and "quotes"' || exit 92
-                test "$2" = '$(touch never-evaluated)' || exit 93
-                test ! -r "$3" || exit 94
-                printf '%s' "$EXPLICIT_TEST_VALUE" > proof
-                (/bin/sleep 2; printf leaked > surviving-descendant) &
-                exit 42
-            "#,
-                "edgee-test",
-                "spaces and \"quotes\"",
-                "$(touch never-evaluated)",
-            ])
-            .arg(&secret);
-        let status = execute(&command, &spec).expect("Execute through actual OS sandbox");
-        assert_eq!(
-            status.code(),
-            Some(42),
-            "Agent exit status must survive the Rust supervisor"
-        );
-        assert_eq!(
-            std::fs::read_to_string(workspace.join("proof")).unwrap(),
-            "allowed-fake-value"
-        );
-        assert!(!workspace.join("never-evaluated").exists());
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        assert!(
-            !workspace.join("surviving-descendant").exists(),
-            "Rust process-group cleanup must stop background children"
-        );
-        assert_eq!(std::fs::read_to_string(secret).unwrap(), "fake-file-secret");
-
-        // Signal the Rust parent, not its foreground child. This is what job
-        // supervisors do for cancellation and must still return through cleanup.
-        let ready = workspace.join("signal-ready");
-        let signal_ready = ready.clone();
-        let sender = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while !signal_ready.exists() {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "Signal fixture did not start"
-                );
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGTERM);
-            }
-        });
-        let mut interrupted = Command::new("/bin/sh");
-        interrupted.env_clear().env("HOME", &session_dir).env("TMPDIR", &session_dir)
-            .env("PATH", "/usr/bin:/bin")
-            .args(["-c", "touch signal-ready; (/bin/sleep 3; touch signal-descendant-survived) & /bin/sleep 30"]);
-        let interrupted_status = execute(&interrupted, &spec).unwrap();
-        sender.join().unwrap();
-        use std::os::unix::process::ExitStatusExt;
-        assert_eq!(interrupted_status.signal(), Some(libc::SIGTERM));
-        std::thread::sleep(std::time::Duration::from_secs(4));
-        assert!(!workspace.join("signal-descendant-survived").exists());
     }
 }

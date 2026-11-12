@@ -7,21 +7,16 @@ unless a machine administrator requires sandboxing.
 
 ## Install
 
-The launcher requires Node.js 22.12 or newer and exactly
-`@anthropic-ai/sandbox-runtime` **0.0.82** (Apache-2.0). Install the checked-in
-lockfile, not an unpinned global `srt`:
+The sandbox supervisor, policy enforcement and authenticated network proxy are
+compiled into the Edgee Rust binary. No Node.js, npm package or downloaded
+sandbox runtime is required.
 
-```sh
-mkdir -p "$HOME/.local/share/edgee/sandbox-runtime"
-cp scripts/sandbox-runtime/package*.json "$HOME/.local/share/edgee/sandbox-runtime/"
-npm ci --prefix "$HOME/.local/share/edgee/sandbox-runtime" --ignore-scripts --omit=optional
-```
-
-macOS also needs Git/Xcode Command Line Tools and ripgrep (`brew install ripgrep`). Linux needs bubblewrap,
-socat and ripgrep (`sudo apt-get install bubblewrap socat ripgrep`), working user
-namespaces, and the runtime's seccomp support. Missing or degraded isolation
-fails closed. Windows and nested environments that cannot supply these
-restrictions are unsupported. No dependency is downloaded during launch.
+macOS uses the system Seatbelt facility and needs Git/Xcode Command Line Tools
+for Git operations. Linux uses bubblewrap and a Rust-generated seccomp filter;
+install bubblewrap with your distribution package manager. Working unprivileged
+user namespaces are required. Missing or degraded isolation fails closed.
+Windows and nested environments that cannot supply these restrictions are
+unsupported. No dependency is downloaded during launch.
 
 ## Launch
 
@@ -39,7 +34,7 @@ From a Git repository, Edgee selects its root and preserves the current
 subdirectory. An explicit workspace must exist. Without either, an interactive
 terminal prompts for a directory; unattended execution requires `--workspace`.
 System root, the account home and their ancestors are rejected, even through
-symlinks or a changed `HOME`. Workspaces overlapping policy/runtime directories
+symlinks or a changed `HOME`. Workspaces overlapping policy directories
 are rejected.
 
 **Existing workspace edits are real and persist. A sandbox does not make a
@@ -58,15 +53,14 @@ network allowlist. A refusal never falls back to an unprotected agent.
 Only `/etc/edgee/sandbox.toml` is consulted (the canonical
 `/private/etc/edgee/sandbox.toml` on macOS). Repository files and environment
 variables cannot replace this policy. Unknown fields or invalid/untrusted files
-cause refusal. The file and its parent directories must be root-owned and not
+cause refusal. Remove the obsolete `node_binary` and `runtime_root` keys when
+migrating from the earlier runtime-based implementation. The file and its parent directories must be root-owned and not
 writable by group/others. Symlinked policy files are rejected.
 
 Example (paths must exist):
 
 ```toml
 mandatory = true
-node_binary = "/opt/edgee/node/bin/node"
-runtime_root = "/opt/edgee/sandbox-runtime"
 allowed_domains = ["api.edgee.ai", "chatgpt.com", "github.com", "registry.npmjs.org"]
 read_paths = ["/opt/edgee/toolchains"]
 ```
@@ -77,12 +71,10 @@ IP addresses, URLs or private-network names. DNS-resolved local/private addresse
 are rejected by the runtime proxy. The gateway must be HTTPS on port 443 and
 match an allowed domain. HTTPS redirects do not grant new allowed destinations.
 
-For mandatory policy, install Node, the runtime **and its dependencies/helpers**
-in administrator-controlled locations. Their ownership and permissions are
-checked before execution. A member-writable Node/npm installation is unsuitable
-for mandatory enforcement. The trust boundary assumes the installed Edgee
-binary and system toolchain are administrator-controlled too; this does not
-prevent a workstation administrator from running a different binary.
+For mandatory policy, install Edgee and its OS helpers in administrator-controlled
+locations. Their ownership and permissions are checked before execution.
+The trust boundary includes the system toolchain; this does not prevent a
+workstation administrator from running a different binary.
 
 `read_paths` grants recursive read/execute access to explicit toolchain roots.
 It does not grant writes or pass through environment variables. Avoid placing
@@ -142,15 +134,13 @@ and Unix-socket MCP transports are blocked by the default policy. Remote MCP hos
 must be explicitly allowed and have their own credentials. Preexisting services
 are not retroactively sandboxed; host localhost and Unix sockets are blocked.
 
-The sandbox runtime's restricted local network transport is separate from the
+The Rust sandbox supervisor's restricted local network transport is separate from the
 existing Edgee MITM relay. `--relay` is rejected because that relay's broad
 passthrough is not a suitable security boundary. Model HTTPS/streaming traffic
-uses the allowed Edgee gateway through the runtime transport.
+uses the allowed Edgee gateway through the authenticated Rust proxy.
 
 ## Diagnostics and limits
 
-- `Sandbox runtime is missing`: install the exact lockfile at the documented
-  prefix or configure the administrator runtime paths.
 - Dependency/isolation probe failure: fix user namespaces, seccomp, missing
   helpers or platform restrictions; do not disable isolation.
 - Agent cannot find a library/tool: add its specific installation root to

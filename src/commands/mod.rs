@@ -23,6 +23,9 @@ setup_commands! {
     /// Relay LLM API traffic through the Edgee gateway via a local MITM proxy
     #[command(hide = true)]
     Relay(relay),
+    /// Internal native sandbox bridge (not a user launch interface)
+    #[command(hide = true)]
+    SandboxInternal(sandbox_internal),
     /// Reset Edgee credentials and connection mode
     Reset(reset),
     [cfg(feature = "self-update")]

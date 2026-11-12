@@ -3,41 +3,39 @@
 The adversary is an agent, repository content, shell command or newly spawned
 local MCP server trying to read unrelated workstation data, write outside its
 workspace/session or contact disallowed destinations. The trusted computing
-base is Edgee, the administrator policy, Node, the pinned Anthropic Sandbox
-Runtime and dependencies, and the OS/toolchain. Host authentication/setup runs
+base is the Edgee Rust binary, the administrator policy, bubblewrap on Linux,
+and the OS/toolchain. Host authentication/setup runs
 outside isolation. Machine administrators and compromised kernels are out of
 scope; the promise covers sessions launched through Edgee.
 
 ## Enforcement
 
-Anthropic Sandbox Runtime 0.0.82 supplies macOS Seatbelt and Linux bubblewrap,
-network namespaces and seccomp. Read access starts denied at `/`, with explicit
+Edgee generates macOS Seatbelt policies and Linux bubblewrap mounts and seccomp
+filters directly in Rust. Read access starts denied at `/`, with explicit
 literal canonical allow paths. Writes are confined to workspace/session with
-protected configuration denies. The runtime network allowlist is backed by OS
-restrictions; changing proxy variables or opening direct sockets does not grant
-network access. Unix sockets, host loopback and private resolved addresses are
-blocked. Descendants inherit confinement. No existing Edgee MITM relay port is
-exempted.
+protected configuration denies. The authenticated Rust proxy checks exact
+hostnames and resolved addresses before connecting. OS restrictions prevent
+changing proxy variables or opening direct sockets from bypassing that policy.
+Unix sockets, host loopback services and private resolved addresses are blocked.
+Descendants inherit confinement. No existing Edgee MITM relay port is exempted.
 
-On Linux, a private bubblewrap argument adapter seals anonymous read-deny tmpfs
-scaffolding read-only after explicit workspace/session mounts are restored.
-It consumes argument arrays (including NUL-delimited argument FDs), rejects
-unknown options for the pinned runtime, and never evaluates workload arguments.
-The OS-provided `/dev` and `/proc` namespaces remain pseudo-filesystem exceptions;
-they do not expose host temporary files or processes. Only the exact seccomp
-helper and runtime-owned authenticated proxy sockets are restored through
-read-denied directories.
+On Linux, bubblewrap supplies isolated mount, network, user and PID namespaces.
+The filesystem starts with an empty root; explicit read-only and writable mounts
+are added, and scaffolding is sealed read-only. A private Rust bridge connects
+namespace-local proxy traffic to the host proxy. The workload receives a seccomp
+filter preventing Unix/vsock socket creation and namespace/process-control
+operations that could attack the bridge. `/dev` and `/proc` are isolated
+pseudo-filesystem exceptions, not access to host temporary files or processes.
 
-The pinned macOS profile is narrowed by exact checked substitutions removing
-Keychain/SecurityServer, host preferences and POSIX shared-memory/semaphore
-grants. Unexpected profile text fails closed. This is version-coupled and must
-be reviewed and tested before changing the pin. Runtime's shared `/tmp/claude`
-write allowance is denied; each session uses private temp space instead.
+The macOS profile is generated from a default-deny policy, without grants to
+Keychain/SecurityServer, host preferences or POSIX shared memory/semaphores.
+Only the authenticated proxy's exact loopback TCP endpoint is permitted.
+Each session uses its own private home and temporary directory.
 
 The policy is read from a fixed administrator location, not the workspace.
-Mandatory mode requires trusted Node/runtime paths and helpers; invalid policy
-is an error even if the user did not ask for a sandbox. Environment sanitization
-also applies to the trusted runtime supervisor, removing proxy and Node loader
+Mandatory mode requires a trusted installed Edgee executable and OS helpers;
+invalid policy is an error even if the user did not ask for a sandbox. The
+workload environment is explicitly constructed, without host proxy or loader
 injection. Secrets are not intentionally logged or placed in shell command
 arguments. The agent's own scoped provider/OAuth credentials remain readable
 by the agent; console credentials are not supplied.
@@ -71,12 +69,24 @@ by the agent; console credentials are not supplied.
   session history or credential refresh state. It rejects unsupported launch
   targets and the legacy relay instead of silently weakening its boundary.
 
-## Runtime distribution review
+## Distribution
 
-The upstream package is Apache-2.0, distributed through npm with an exact version
-and checked-in integrity lockfile. Node >=22.12 and OS-specific helpers are
-external dependencies; optional packages and install scripts are omitted.
-`npm audit` reported upstream Zod 3 advisory GHSA-mrhx-c7xc-m3w5 (unbounded
-collection validation causing memory exhaustion). The runtime consumes generated
-trusted configuration here, but this is a dependency risk to track. Do not
-silently substitute a different runtime version or incompatible Zod major.
+The supervisor, proxy, profiles and seccomp filter generation ship as Rust code
+in Edgee under the repository's Apache-2.0 license. There is no npm dependency,
+JavaScript supervisor, downloaded seccomp helper or external sandbox runtime.
+Linux bubblewrap is installed through the operating system package manager;
+macOS uses the system sandbox facility. Changes to these security boundaries
+must pass the real macOS/Linux isolation suite, as well as ordinary Rust checks.
+
+Existing nested security configuration is scanned before launch without following
+directory symlinks. The scan refuses workspaces exceeding 250,000 entries or
+4,096 protected paths. Existing `.git/modules` administration is read-only.
+New security-config directories created below previously ordinary nested paths
+are not retroactively discovered; review workspace changes before using new
+repositories, editor configurations or executable code outside the sandbox.
+
+Protected security trees reject symlinks and multiply-linked regular files:
+read-only access through one name must not leave another writable alias to the
+same security configuration. Replace those links with independent files before
+launching; this does not change the residual hardlink risk for ordinary project
+data described above.

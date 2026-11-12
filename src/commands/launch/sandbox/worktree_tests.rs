@@ -156,3 +156,55 @@ fn external_git_administration_must_point_back_to_selected_workspace() {
     .unwrap();
     assert!(worktree_access(&fixture.prepared).is_err());
 }
+
+#[test]
+fn existing_nested_security_configurations_are_protected_without_following_links() {
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = directory.path().join("workspace");
+    let outside = directory.path().join("outside");
+    for path in [
+        workspace.join("nested/.git"),
+        workspace.join("nested/.vscode"),
+        outside.join(".git"),
+    ] {
+        fs::create_dir_all(path).unwrap();
+    }
+    fs::write(workspace.join("nested/.mcp.json"), "{}").unwrap();
+    symlink(&outside, workspace.join("linked-outside")).unwrap();
+    let protected = protected_paths(&workspace).unwrap();
+    for path in [
+        ".mcp.json",
+        ".claude",
+        ".git/modules",
+        "nested/.git/config",
+        "nested/.git/hooks",
+        "nested/.git/modules",
+        "nested/.vscode",
+        "nested/.mcp.json",
+    ] {
+        assert!(protected.contains(&workspace.join(path)), "{path}");
+    }
+    assert!(!protected.iter().any(
+        |path| path.starts_with(&outside) || path.starts_with(workspace.join("linked-outside"))
+    ));
+    assert!(protected_paths_bounded(&workspace, 1, 4096).is_err());
+    assert!(protected_paths_bounded(&workspace, 100, 1).is_err());
+}
+
+#[test]
+fn protected_security_configs_cannot_alias_writable_workspace_files() {
+    for hardlink in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path();
+        fs::create_dir(workspace.join(".vscode")).unwrap();
+        let target = workspace.join("ordinary-file");
+        fs::write(&target, "fake security config").unwrap();
+        let config = workspace.join(".vscode/settings.json");
+        if hardlink {
+            fs::hard_link(&target, &config).unwrap();
+        } else {
+            symlink(&target, &config).unwrap();
+        }
+        assert!(protected_paths(workspace).is_err(), "hardlink={hardlink}");
+    }
+}

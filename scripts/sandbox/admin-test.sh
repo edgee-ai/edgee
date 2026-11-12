@@ -13,8 +13,8 @@ if [[ -e /etc/edgee || -L /etc/edgee || -e /usr/lib/edgee-sandbox-ci || -L /usr/
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-edgee_binary="$(realpath "$repo_root/target/debug/edgee")"
-node_binary="$(realpath "$(command -v node)")"
+built_binary="$(realpath "$repo_root/target/debug/edgee")"
+edgee_binary=/usr/lib/edgee-sandbox-ci/edgee
 fixture="$(mktemp -d)"
 created_policy=0
 created_runtime=0
@@ -29,8 +29,7 @@ sudo mkdir /usr/lib/edgee-sandbox-ci
 created_runtime=1
 sudo mkdir /etc/edgee
 created_policy=1
-sudo cp -a "$repo_root/scripts/sandbox-runtime" /usr/lib/edgee-sandbox-ci/runtime
-sudo install -m 0755 "$node_binary" /usr/lib/edgee-sandbox-ci/node
+sudo install -m 0755 "$built_binary" "$edgee_binary"
 sudo chown -hR root:root /usr/lib/edgee-sandbox-ci /etc/edgee
 sudo chmod -R go-w /usr/lib/edgee-sandbox-ci /etc/edgee
 # Show the trust-chain metadata in CI logs without changing shared parents.
@@ -38,8 +37,6 @@ stat -c "%A %U:%G %n" / /etc /etc/edgee /usr /usr/lib /usr/lib/edgee-sandbox-ci
 cat > "$fixture/policy.toml" <<'POLICY'
 mandatory = true
 allowed_domains = ["api.edgee.ai"]
-node_binary = "/usr/lib/edgee-sandbox-ci/node"
-runtime_root = "/usr/lib/edgee-sandbox-ci/runtime"
 POLICY
 sudo install -m 0644 "$fixture/policy.toml" /etc/edgee/sandbox.toml
 
@@ -76,7 +73,8 @@ cd nested
 expect_refusal "$mandatory_message" launch opencode -- --sandbox=false
 cd ..
 unset EDGEE_SANDBOX EDGEE_SANDBOX_DISABLED
-echo 'PASS mandatory policy, repository override rejection, environment override rejection, alias-shaped launch'
+expect_refusal 'Administrator policy requires sandboxed agent execution' relay claude
+echo 'PASS mandatory policy, repository override rejection, environment override rejection, alias-shaped launch, hidden relay refusal'
 
 sudo chmod 0666 /etc/edgee/sandbox.toml
 expect_refusal 'must be root-owned and not group/world writable' launch opencode
@@ -88,19 +86,14 @@ sudo rm /etc/edgee/sandbox.toml
 sudo mv /etc/edgee/real-policy.toml /etc/edgee/sandbox.toml
 echo 'PASS writable-policy and symlink-policy rejection'
 
-runtime_package=/usr/lib/edgee-sandbox-ci/runtime/node_modules/@anthropic-ai/sandbox-runtime
-sudo chmod o+w "$runtime_package/dist/index.js"
-expect_refusal 'runtime must not be group/world writable' launch opencode
-sudo chmod o-w "$runtime_package/dist/index.js"
-sudo ln -s "$fixture" /usr/lib/edgee-sandbox-ci/runtime/escape
-expect_refusal 'runtime symlink escapes its root' launch opencode
-sudo rm /usr/lib/edgee-sandbox-ci/runtime/escape
-sudo mv /usr/lib/edgee-sandbox-ci/runtime /usr/lib/edgee-sandbox-ci/runtime-missing
-expect_refusal 'Cannot verify ownership of administrator sandbox policy' launch opencode
-sudo mv /usr/lib/edgee-sandbox-ci/runtime-missing /usr/lib/edgee-sandbox-ci/runtime
-sudo mv "$runtime_package/package.json" "$runtime_package/package-missing.json"
-expect_refusal 'Sandbox runtime is missing' launch claude
-sudo mv "$runtime_package/package-missing.json" "$runtime_package/package.json"
+sudo chmod o+w "$edgee_binary"
+expect_refusal 'administrator-installed, root-owned Edgee binary' launch opencode
+sudo chmod o-w "$edgee_binary"
+sudo mv "$edgee_binary" /usr/lib/edgee-sandbox-ci/edgee-native
+sudo ln -s "$built_binary" "$edgee_binary"
+expect_refusal 'administrator-installed, root-owned Edgee binary' launch opencode
+sudo rm "$edgee_binary"
+sudo mv /usr/lib/edgee-sandbox-ci/edgee-native "$edgee_binary"
 expect_refusal "$mandatory_message" launch opencode
-echo 'PASS writable-runtime, escaping-runtime-symlink, missing-runtime and missing-package rejection'
-echo 'PASS administrator policy integration (Linux disposable fixture)'
+echo 'PASS writable-binary and untrusted-binary-target rejection'
+echo 'PASS native administrator policy integration (Linux disposable fixture)'

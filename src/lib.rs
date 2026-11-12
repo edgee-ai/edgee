@@ -38,6 +38,12 @@ pub struct Options {
 pub async fn run() -> Result<()> {
     let opts = Options::parse();
 
+    // The Linux bridge is already inside OS isolation. It must not perform
+    // host authentication, profile discovery or update checks.
+    if matches!(opts.command, commands::Command::SandboxInternal(_)) {
+        return commands::run(opts.command).await;
+    }
+
     // Resolve active profile in precedence order:
     // 1. --profile flag (or EDGEE_PROFILE, propagated to agent subprocesses)
     // 2. active_profile stored in the effective credentials file

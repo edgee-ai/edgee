@@ -1,7 +1,9 @@
 //! Local OS isolation. This path deliberately prepares a fresh agent home rather
 //! than loading host hooks, plugins, MCP credentials or symlinked agent homes.
-pub(super) mod policy;
-mod runtime;
+#[cfg(all(test, feature = "sandbox-runtime-tests", unix))]
+mod native_tests;
+pub(crate) mod policy;
+pub(crate) mod runtime;
 #[cfg(test)]
 mod worktree_tests;
 
@@ -27,14 +29,7 @@ pub(super) async fn run(
         std::env::var_os("HOME")
             .context("HOME is missing; set your home directory before launching a sandbox.")?,
     );
-    let runtime_root = prepared
-        .policy
-        .runtime_root
-        .clone()
-        .unwrap_or_else(|| host_home.join(".local/share/edgee/sandbox-runtime"));
-    let node_binary = prepared.policy.node_binary.clone().or_else(|| util::find_binary("node"))
-        .context("Sandbox requires Node.js >=22.12. Install Node.js and the pinned sandbox runtime; see docs/sandbox.md.")?.canonicalize()?;
-    runtime::preflight(&node_binary, &runtime_root, &prepared.policy.tool_path)?;
+    runtime::preflight(&prepared.policy.tool_path)?;
     let binary = util::find_binary(agent)
         .with_context(|| {
             format!("{agent} is not installed. Install the agent before launching its sandbox.")
@@ -158,17 +153,14 @@ pub(super) async fn run(
         let clone_spec = runtime::RuntimeSpec {
             tool_path: prepared.policy.tool_path.clone(),
             workspace: prepared.workspace.clone(),
-            // Upstream protects Git metadata relative to cwd. Initialize the
-            // new destination from private session space, then apply normal
-            // workspace configuration guards for the agent launch.
+            // Initialize the fresh destination from private session space, then
+            // apply normal configuration guards for the agent launch.
             cwd: session_dir.clone(),
             session_dir: session_dir.clone(),
             read_paths: read_paths.clone(),
             write_paths: vec![],
             deny_write_paths: vec![],
             allowed_domains: prepared.policy.allowed_domains.clone(),
-            runtime_root: runtime_root.clone(),
-            node_binary: node_binary.clone(),
         };
         match runtime::execute(&clone, &clone_spec) {
             Ok(status) if status.success() => {}
@@ -261,10 +253,9 @@ pub(super) async fn run(
         ] { cmd.args(["-c", &setting]); }
     }
     cmd.args(&args);
-    deny_write_paths.extend(protected_paths(&prepared.workspace));
+    deny_write_paths.extend(protected_paths(&prepared.workspace)?);
     deny_write_paths.push(binary.clone());
-    deny_write_paths.push(node_binary.clone());
-    deny_write_paths.push(runtime_root.clone());
+    deny_write_paths.push(std::env::current_exe()?.canonicalize()?);
     let spec = runtime::RuntimeSpec {
         tool_path: prepared.policy.tool_path.clone(),
         workspace: prepared.workspace.clone(),
@@ -273,8 +264,6 @@ pub(super) async fn run(
         read_paths,
         write_paths,
         allowed_domains: prepared.policy.allowed_domains.clone(),
-        runtime_root,
-        node_binary,
         deny_write_paths,
     };
     eprintln!(
@@ -469,16 +458,116 @@ fn system_read_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-fn protected_paths(workspace: &Path) -> Vec<PathBuf> {
-    let mut paths: Vec<_> = [".edgee", ".claude", ".codex"]
+fn protected_paths(workspace: &Path) -> Result<Vec<PathBuf>> {
+    protected_paths_bounded(workspace, 250_000, 4096)
+}
+
+/// Existing nested security configuration receives the same protection as the
+/// workspace root. Never follow directory symlinks or descend into protected
+/// trees. Bounds fail closed instead of silently truncating the policy.
+fn protected_paths_bounded(
+    workspace: &Path,
+    max_entries: usize,
+    max_protected: usize,
+) -> Result<Vec<PathBuf>> {
+    const SECURITY_NAMES: &[&str] = &[
+        ".edgee",
+        ".claude",
+        ".codex",
+        ".vscode",
+        ".idea",
+        ".mcp.json",
+        ".gitconfig",
+        ".gitmodules",
+        ".bashrc",
+        ".bash_profile",
+        ".zshrc",
+        ".zprofile",
+        ".profile",
+        ".ripgreprc",
+    ];
+    let mut paths: std::collections::BTreeSet<PathBuf> = SECURITY_NAMES
         .iter()
         .map(|name| workspace.join(name))
         .collect();
-    if workspace.join(".git").is_file() {
-        paths.push(workspace.join(".git"));
+    if std::fs::symlink_metadata(workspace.join(".git"))
+        .is_ok_and(|metadata| !metadata.file_type().is_dir())
+    {
+        paths.insert(workspace.join(".git"));
+    } else {
+        paths.extend(git_protected_paths(&workspace.join(".git")));
     }
-    paths.extend(git_protected_paths(&workspace.join(".git")));
-    paths
+    let mut directories = vec![workspace.to_path_buf()];
+    let mut inspected = 0_usize;
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory).with_context(|| {
+            format!(
+                "Cannot inspect security configuration in {}; choose a fully readable workspace",
+                directory.display()
+            )
+        })? {
+            let entry = entry.context("Cannot enumerate workspace security configuration")?;
+            inspected += 1;
+            anyhow::ensure!(
+                inspected <= max_entries,
+                "Workspace exceeds sandbox security-scan limits; choose a smaller workspace"
+            );
+            let name = entry.file_name();
+            let kind = entry
+                .file_type()
+                .context("Cannot inspect workspace entry type")?;
+            if SECURITY_NAMES
+                .iter()
+                .any(|protected| name == std::ffi::OsStr::new(protected))
+            {
+                paths.insert(entry.path());
+            } else if name == ".git" {
+                if kind.is_dir() {
+                    paths.extend(git_protected_paths(&entry.path()));
+                } else {
+                    paths.insert(entry.path());
+                }
+            } else if kind.is_dir() {
+                directories.push(entry.path());
+            }
+            anyhow::ensure!(paths.len() <= max_protected,
+                "Workspace contains too many security configuration paths; choose a smaller workspace");
+        }
+    }
+    // A read-only bind/profile path does not freeze aliases outside that path.
+    // Reject symlinks and multiply-linked files in protected trees rather than
+    // accidentally exposing their targets through extra read-only mounts.
+    let mut protected_entries: Vec<_> = paths.iter().cloned().collect();
+    while let Some(path) = protected_entries.pop() {
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).context("Cannot inspect protected security configuration")
+            }
+        };
+        inspected += 1;
+        anyhow::ensure!(
+            inspected <= max_entries,
+            "Workspace exceeds sandbox security-scan limits; choose a smaller workspace"
+        );
+        anyhow::ensure!(!metadata.file_type().is_symlink(),
+            "Protected security configuration contains a symlink at {}; replace it with a regular file/directory before sandboxing", path.display());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            anyhow::ensure!(!metadata.is_file() || metadata.nlink() == 1,
+                "Protected security configuration has hardlink aliases at {}; replace it with an independent file before sandboxing", path.display());
+        }
+        if metadata.is_dir() {
+            for entry in
+                std::fs::read_dir(&path).context("Cannot inspect protected security directory")?
+            {
+                protected_entries.push(entry?.path());
+            }
+        }
+    }
+    Ok(paths.into_iter().collect())
 }
 
 fn git_protected_paths(git: &Path) -> Vec<PathBuf> {
@@ -491,6 +580,7 @@ fn git_protected_paths(git: &Path) -> Vec<PathBuf> {
         "commondir",
         "gitdir",
         "worktrees",
+        "modules",
     ]
     .iter()
     .map(|name| git.join(name))

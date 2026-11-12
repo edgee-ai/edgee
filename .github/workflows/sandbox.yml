@@ -21,40 +21,23 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '22.16.0'
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Install Linux isolation dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes bubblewrap socat ripgrep
-      - name: Install macOS runtime dependency
-        if: runner.os == 'macOS'
-        run: command -v rg || brew install ripgrep
-      - name: Install integrity-pinned sandbox runtime
-        run: npm ci --ignore-scripts --omit=optional --prefix scripts/sandbox-runtime
-      - name: Validate bubblewrap argument adapter
-        run: node scripts/sandbox-runtime/shim-test.mjs
-      - name: Exercise the real OS security boundary
-        # The harness must fail on missing/unsupported isolation, never skip.
-        run: node scripts/sandbox-runtime/test.mjs
-      - name: Exercise real linked-worktree Git isolation
-        run: node scripts/sandbox-runtime/git-test.mjs
-      - name: Exercise real HTTPS repository clone
-        run: node scripts/sandbox-runtime/clone-test.mjs
+        run: sudo apt-get update && sudo apt-get install --yes bubblewrap
+      - name: Build native CLI and helper
+        run: cargo build --bin edgee
       - name: CLI policy and launch regression tests
         run: cargo test --all
-      - name: Exercise Rust supervisor environment and lifecycle
+      - name: Exercise native OS boundary, proxy, Git, clone and lifecycle
+        # These tests execute real kernel isolation. Missing dependencies fail.
         env:
           FAKE_HOST_SECRET: host-only-fake-secret
         run: |
-          export EDGEE_TEST_NODE="$(command -v node)"
-          export EDGEE_TEST_RUNTIME_ROOT="$GITHUB_WORKSPACE/scripts/sandbox-runtime"
-          cargo test --features sandbox-runtime-tests real_runtime_lifecycle -- --nocapture
+          export EDGEE_TEST_BINARY="$GITHUB_WORKSPACE/target/debug/edgee"
+          cargo test --features sandbox-runtime-tests native_sandbox -- --nocapture --test-threads=1
       - name: Exercise root-owned mandatory administrator policy
         if: runner.os == 'Linux'
         env:
           EDGEE_ADMIN_FIXTURE: '1'
-        run: |
-          cargo build --bin edgee
-          bash scripts/sandbox-runtime/admin-test.sh
+        run: bash scripts/sandbox/admin-test.sh
