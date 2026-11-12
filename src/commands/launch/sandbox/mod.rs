@@ -49,6 +49,7 @@ pub(super) async fn run(
     let tmp = session_dir.join("tmp");
     std::fs::create_dir(&home)?;
     std::fs::create_dir(&tmp)?;
+    let (write_paths, mut deny_write_paths) = worktree_access(&prepared)?;
     let mut read_paths = system_read_paths();
     let git_binary = native_git()?;
     let tool_path = if let Some(bin) = git_binary.parent() {
@@ -69,7 +70,31 @@ pub(super) async fn run(
         PathBuf::from("/private/etc/codex"),
     ]);
     read_paths.extend(prepared.policy.read_paths.clone());
-    read_paths.extend(prepared.git_metadata.clone());
+    // Do not mount the common .git directory read-only over the writable
+    // worktree grafts: Linux bind ordering would hide those grafts.
+    read_paths.extend(write_paths.clone());
+    for common in &prepared.git_metadata {
+        if write_paths.contains(common) {
+            continue;
+        }
+        for name in [
+            "config",
+            "HEAD",
+            "packed-refs",
+            "shallow",
+            "description",
+            "info/exclude",
+            "info/attributes",
+        ] {
+            let candidate = common.join(name);
+            if !candidate.exists() {
+                continue;
+            }
+            anyhow::ensure!(candidate.canonicalize()? == candidate && candidate.is_file(),
+                "Git metadata read path is redirected or invalid; repair the repository before sandboxing.");
+            read_paths.push(candidate);
+        }
+    }
     read_paths.push(binary.clone());
     if agent == "codex" {
         if let Some(helper) = binary
@@ -233,7 +258,6 @@ pub(super) async fn run(
         ] { cmd.args(["-c", &setting]); }
     }
     cmd.args(&args);
-    let (write_paths, mut deny_write_paths) = worktree_access(&prepared)?;
     deny_write_paths.extend(protected_paths(&prepared.workspace));
     deny_write_paths.push(binary.clone());
     deny_write_paths.push(node_binary.clone());

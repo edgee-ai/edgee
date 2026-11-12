@@ -103,7 +103,16 @@ pub struct Options {
 
 pub async fn run(opts: Options) -> anyhow::Result<()> {
     if let Some(prepared) = sandbox::policy::prepare(&opts.sandbox)? {
-        return sandbox::run(prepared, opts.command, &opts.reroute).await;
+        let reserved_clone = prepared.clone_url.as_ref().map(|_| prepared.workspace.clone());
+        let result = sandbox::run(prepared, opts.command, &opts.reroute).await;
+        if result.is_err() {
+            if let Some(directory) = reserved_clone {
+                // Remove only an unused reservation. Completed clone contents
+                // remain available if subsequent authentication fails.
+                let _ = std::fs::remove_dir(directory);
+            }
+        }
+        return result;
     }
     if opts.reroute.passthrough_mode && matches!(opts.command, Command::Cursor(_)) {
         anyhow::bail!("Direct Cursor launch has no per-launch session ID. Use `edgee relay --passthrough cursor` or turn on Pass-through mode for the organization.");

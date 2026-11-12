@@ -334,6 +334,9 @@ pub fn prepare(options: &Options) -> Result<Option<Prepared>> {
         }
         return Ok(None);
     }
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
+        bail!("Local sandbox supports macOS and Linux only; use a supported host.");
+    }
     let original = std::env::current_dir()?.canonicalize()?;
     let workspace = if let Some(path) = &options.workspace {
         validate_scope(path)?

@@ -84,7 +84,11 @@ console.log('PASS linked-worktree status/add/commit; shared and current configur
   const input = path.join(base, 'input.json');
   const spec = {
     workspace, cwd: workspace, session_dir: session,
-    read_paths: [...literalPaths.filter(p => fs.existsSync(p)).map(p => fs.realpathSync(p)), node, common],
+    // A read bind of common would shadow its nested writable binds on Linux.
+    // Expose only Git's shared files plus the exact writable data directories.
+    read_paths: [...literalPaths.filter(p => fs.existsSync(p)).map(p => fs.realpathSync(p)), node, ...writePaths,
+      ...['config', 'HEAD', 'packed-refs', 'shallow', 'description', 'info/exclude', 'info/attributes']
+        .map(p => path.join(common, p)).filter(p => fs.existsSync(p))],
     write_paths: writePaths, deny_write_paths: deny, allowed_domains: [],
     runtime_root: process.env.EDGEE_TEST_RUNTIME_ROOT || here,
     node_binary: node, argv: [node, childFile],

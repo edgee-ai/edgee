@@ -33,6 +33,8 @@ jobs:
         run: command -v rg || brew install ripgrep
       - name: Install integrity-pinned sandbox runtime
         run: npm ci --ignore-scripts --omit=optional --prefix scripts/sandbox-runtime
+      - name: Validate bubblewrap argument adapter
+        run: node scripts/sandbox-runtime/shim-test.mjs
       - name: Exercise the real OS security boundary
         # The harness must fail on missing/unsupported isolation, never skip.
         run: node scripts/sandbox-runtime/test.mjs
