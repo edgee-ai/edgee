@@ -108,12 +108,12 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
     if opts.reroute.passthrough_mode && matches!(opts.command, Command::Cursor(_)) {
         anyhow::bail!("Direct Cursor launch has no per-launch session ID. Use `edgee relay --passthrough cursor` or turn on Pass-through mode for the organization.");
     }
-    preflight::check(&opts.command)?;
     if opts.reroute.target.is_some() && matches!(opts.command, Command::Cursor(_)) {
         anyhow::bail!(
             "Cursor launch does not attach a session ID. Choose another launch target to use --reroute."
         );
     }
+    preflight::check(&opts.command)?;
     let reroute = &opts.reroute.resolve().await?;
     match opts.command {
         Command::Claude(o) => claude::run(o, reroute).await,
