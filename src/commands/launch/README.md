@@ -345,12 +345,16 @@ Four details are load-bearing:
   `api = "openai-completions"` with a `/v1` base URL, so OMP appends `/chat/completions`. Gateway
   reroutes still work from either ingress.
 
-Reasoning-capable models are declared with `reasoning: true` and a model-level `thinkingLevelMap`
-generated from the catalog. Unsupported levels are set to `null`, so the picker hides and skips
-them; catalog `none` maps to the `off` slot. On the Anthropic provider,
-`compat.forceAdaptiveThinking` is enabled: OMP sends `thinking.type=adaptive` plus the exact
-effort, and the gateway translates that canonical control for whichever provider ultimately serves
-the request. OMP's Anthropic transport also keeps its own identity (`User-Agent: omp` and the
+Reasoning-capable models use OMP's `thinking` schema (verified with OMP 18.18.6), not
+the obsolete `thinkingLevelMap` or `compat.forceAdaptiveThinking` fields. `thinking.efforts`
+contains only supported catalog efforts, in picker order; catalog `none` is excluded from that
+ladder and sets `thinking.requiresEffort: false`. Without `none`, `requiresEffort: true` keeps
+thinking enabled. A `none`-only catalog entry has `reasoning: false` and no thinking ladder.
+Chat Completions uses `thinking.mode: effort`; Anthropic Messages uses
+`thinking.mode: anthropic-adaptive`, so OMP sends `thinking.type=adaptive` plus the selected
+effort. The gateway translates that canonical control for whichever provider ultimately serves
+the request. Relaunch replaces both managed providers, removing obsolete fields from existing
+configs. OMP's Anthropic transport keeps its own identity (`User-Agent: omp` and the remaining
 `compat` overrides) so the gateway uses the normal Messages path.
 
 ## `deepseek` — DeepSeek Harness (`dsh`)
