@@ -7,14 +7,14 @@ agent-shaped test commands, and actual installed agent sessions.
 |---|---|---|
 | Real OS isolation harness (`test.mjs`) | Passed: Seatbelt | CI configured; result pending |
 | Rust supervisor environment/lifecycle test | Passed: real Seatbelt, inherited fake secret removed, exit 42, ordinary descendant cleanup | CI configured; result pending |
-| `cargo fmt --all`, `cargo clippy --all-targets`, `cargo test --all` | Passed: 451 unit tests + 3 integration tests; zero clippy warnings | CI configured |
+| `cargo fmt --all`, `cargo clippy --all-targets`, `cargo test --all` | Passed: 456 unit tests + 3 integration tests; zero clippy warnings | CI configured |
 | Claude Code 2.1.322 `--version` | Passed | Not run |
 | Claude Code noninteractive gateway response | Passed, exact expected response | Not run |
 | Claude Code interactive TUI gateway response and Ctrl-C exit | Passed | Not run |
 | Codex CLI 0.164.0 `--version` | Passed | Not run |
 | Codex authenticated model response | Passed, exact expected response | Not run |
 | Codex interactive TUI gateway response and Ctrl-C exit | Passed | Not run |
-| Installed mandatory root policy end to end | Not run; policy ownership/ACL/parser unit tests passed | Not run |
+| Installed mandatory root policy end to end | Not run; policy ownership/ACL/parser unit tests passed | Disposable CI fixture added; result pending |
 
 The JS suite uses fake secrets, a controlled HTTP endpoint and Unix socket,
 and an isolated fake macOS Keychain with an outside positive control. It covers
@@ -52,9 +52,17 @@ symlink and backlink substitutions.
 
 Linux is not available locally: the Docker CLI exists but its daemon socket is
 absent. The dedicated GitHub Actions matrix runs actual bubblewrap and Seatbelt
-on Ubuntu 22.04 and macOS 14; missing/degraded isolation fails the job. There are
+on Ubuntu 22.04 and the supported `macos-latest` image; missing/degraded isolation fails the job. There are
 no skipped isolation tests. Two preexisting macro documentation tests are ignored
 by the repository's ordinary Rust suite.
+
+The Linux-only administrator fixture installs root-owned Node/runtime files and
+an `/etc/edgee/sandbox.toml` policy on a disposable CI runner. It checks mandatory
+selection through ordinary launches and aliases, rejected repository/environment
+overrides, writable or symlinked policy rejection, writable or escaping runtime
+files, and missing-runtime refusal. It refuses to replace existing system paths
+and removes only its own fixtures. This fixture has not been run on the developer
+workstation; its CI result remains pending.
 
 Separate sub-agents examined architecture, security bypasses and test validity.
 Their findings drove trusted runtime/helper/ACL checks, narrower macOS IPC,

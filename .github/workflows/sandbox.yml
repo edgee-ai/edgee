@@ -16,7 +16,7 @@ jobs:
       matrix:
         # Ubuntu 22.04 permits the unprivileged user namespaces bubblewrap
         # requires. Never disable sandbox protections to make CI pass.
-        os: [ubuntu-22.04, macos-14]
+        os: [ubuntu-22.04, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -47,3 +47,10 @@ jobs:
           export EDGEE_TEST_NODE="$(command -v node)"
           export EDGEE_TEST_RUNTIME_ROOT="$GITHUB_WORKSPACE/scripts/sandbox-runtime"
           cargo test --features sandbox-runtime-tests real_runtime_lifecycle -- --nocapture
+      - name: Exercise root-owned mandatory administrator policy
+        if: runner.os == 'Linux'
+        env:
+          EDGEE_ADMIN_FIXTURE: '1'
+        run: |
+          cargo build --bin edgee
+          bash scripts/sandbox-runtime/admin-test.sh

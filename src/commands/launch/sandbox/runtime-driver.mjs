@@ -125,8 +125,10 @@ try {
   fs.writeFileSync(path.join(probe, 'secret'), 'edgee-fake-secret', { mode: 0o600 });
   try {
     const command = `/bin/sh -c ${quote('test ! -r "$1" && ! (echo denied > "$2") 2>/dev/null')} edgee-probe ${quote(path.join(probe, 'secret'))} ${quote(path.join(probe, 'write'))}`;
-    const result = await run(command, ['ignore', 'ignore', 'ignore']);
-    if (result.code !== 0 || fs.existsSync(path.join(probe, 'write'))) throw new SetupError('OS sandbox isolation probe failed; agent was not launched.');
+    // This command contains only fake probe paths, never agent argv or keys.
+    // Surface backend mount/seccomp errors so a refused launch is diagnosable.
+    const result = await run(command, ['ignore', 'ignore', 'inherit']);
+    if (result.code !== 0 || fs.existsSync(path.join(probe, 'write'))) throw new SetupError(`OS sandbox isolation probe failed (status ${result.code ?? result.signal}); agent was not launched.`);
   } finally { fs.rmSync(probe, { recursive: true, force: true }); }
   if (interrupted) throw new SetupError('Launch interrupted before the agent started.');
   process.stderr.write(`Edgee sandbox active (${process.platform === 'darwin' ? 'Seatbelt' : 'bubblewrap + seccomp'}); workspace: ${spec.workspace}\n`);
