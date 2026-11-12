@@ -53,6 +53,11 @@ sha2 = "0.10"
 [target.'cfg(windows)'.dependencies]
 which = "8"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+signal-hook = "0.3"
+
 [features]
 default = ["self-update"]
+sandbox-runtime-tests = []
 self-update = ["dep:self_update"]

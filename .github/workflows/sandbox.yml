@@ -1,0 +1,49 @@
+name: Local sandbox isolation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  isolation:
+    name: Real OS isolation (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu 22.04 permits the unprivileged user namespaces bubblewrap
+        # requires. Never disable sandbox protections to make CI pass.
+        os: [ubuntu-22.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.16.0'
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Install Linux isolation dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes bubblewrap socat ripgrep
+      - name: Install macOS runtime dependency
+        if: runner.os == 'macOS'
+        run: command -v rg || brew install ripgrep
+      - name: Install integrity-pinned sandbox runtime
+        run: npm ci --ignore-scripts --omit=optional --prefix scripts/sandbox-runtime
+      - name: Exercise the real OS security boundary
+        # The harness must fail on missing/unsupported isolation, never skip.
+        run: node scripts/sandbox-runtime/test.mjs
+      - name: Exercise real linked-worktree Git isolation
+        run: node scripts/sandbox-runtime/git-test.mjs
+      - name: CLI policy and launch regression tests
+        run: cargo test --all
+      - name: Exercise Rust supervisor environment and lifecycle
+        env:
+          FAKE_HOST_SECRET: host-only-fake-secret
+        run: |
+          export EDGEE_TEST_NODE="$(command -v node)"
+          export EDGEE_TEST_RUNTIME_ROOT="$GITHUB_WORKSPACE/scripts/sandbox-runtime"
+          cargo test --features sandbox-runtime-tests real_runtime_lifecycle -- --nocapture

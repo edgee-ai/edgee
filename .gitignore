@@ -5,3 +5,6 @@
 
 # nix-direnv cache
 .direnv/
+
+# Locally installed, integrity-pinned sandbox runtime dependencies
+/scripts/sandbox-runtime/node_modules/
