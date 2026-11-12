@@ -40,6 +40,8 @@ jobs:
         run: node scripts/sandbox-runtime/test.mjs
       - name: Exercise real linked-worktree Git isolation
         run: node scripts/sandbox-runtime/git-test.mjs
+      - name: Exercise real HTTPS repository clone
+        run: node scripts/sandbox-runtime/clone-test.mjs
       - name: CLI policy and launch regression tests
         run: cargo test --all
       - name: Exercise Rust supervisor environment and lifecycle

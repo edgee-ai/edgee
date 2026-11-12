@@ -57,7 +57,8 @@ on Ubuntu 22.04 and the supported `macos-latest` image; missing/degraded isolati
 no skipped isolation tests. Two preexisting macro documentation tests are ignored
 by the repository's ordinary Rust suite.
 
-The Linux-only administrator fixture installs root-owned Node/runtime files and
+The Linux-only administrator fixture installs root-owned Node/runtime files under
+`/usr/lib/edgee-sandbox-ci` and
 an `/etc/edgee/sandbox.toml` policy on a disposable CI runner. It checks mandatory
 selection through ordinary launches and aliases, rejected repository/environment
 overrides, writable or symlinked policy rejection, writable or escaping runtime

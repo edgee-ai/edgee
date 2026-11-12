@@ -7,8 +7,8 @@ if [[ "${GITHUB_ACTIONS:-}" != true || "${RUNNER_OS:-}" != Linux || "${EDGEE_ADM
   echo 'This test requires an explicitly enabled disposable Linux GitHub Actions runner.' >&2
   exit 1
 fi
-if [[ -e /etc/edgee || -L /etc/edgee || -e /opt/edgee || -L /opt/edgee ]]; then
-  echo 'Refusing to replace existing /etc/edgee or /opt/edgee.' >&2
+if [[ -e /etc/edgee || -L /etc/edgee || -e /usr/lib/edgee-sandbox-ci || -L /usr/lib/edgee-sandbox-ci ]]; then
+  echo 'Refusing to replace existing /etc/edgee or /usr/lib/edgee-sandbox-ci.' >&2
   exit 1
 fi
 
@@ -20,24 +20,26 @@ created_policy=0
 created_runtime=0
 cleanup() {
   if [[ "$created_policy" == 1 ]]; then sudo rm -rf -- /etc/edgee; fi
-  if [[ "$created_runtime" == 1 ]]; then sudo rm -rf -- /opt/edgee; fi
+  if [[ "$created_runtime" == 1 ]]; then sudo rm -rf -- /usr/lib/edgee-sandbox-ci; fi
   rm -rf -- "$fixture"
 }
 trap cleanup EXIT
 
-sudo mkdir /opt/edgee
+sudo mkdir /usr/lib/edgee-sandbox-ci
 created_runtime=1
 sudo mkdir /etc/edgee
 created_policy=1
-sudo cp -a "$repo_root/scripts/sandbox-runtime" /opt/edgee/runtime
-sudo install -m 0755 "$node_binary" /opt/edgee/node
-sudo chown -hR root:root /opt/edgee /etc/edgee
-sudo chmod -R go-w /opt/edgee /etc/edgee
+sudo cp -a "$repo_root/scripts/sandbox-runtime" /usr/lib/edgee-sandbox-ci/runtime
+sudo install -m 0755 "$node_binary" /usr/lib/edgee-sandbox-ci/node
+sudo chown -hR root:root /usr/lib/edgee-sandbox-ci /etc/edgee
+sudo chmod -R go-w /usr/lib/edgee-sandbox-ci /etc/edgee
+# Show the trust-chain metadata in CI logs without changing shared parents.
+stat -c "%A %U:%G %n" / /etc /etc/edgee /usr /usr/lib /usr/lib/edgee-sandbox-ci
 cat > "$fixture/policy.toml" <<'POLICY'
 mandatory = true
 allowed_domains = ["api.edgee.ai"]
-node_binary = "/opt/edgee/node"
-runtime_root = "/opt/edgee/runtime"
+node_binary = "/usr/lib/edgee-sandbox-ci/node"
+runtime_root = "/usr/lib/edgee-sandbox-ci/runtime"
 POLICY
 sudo install -m 0644 "$fixture/policy.toml" /etc/edgee/sandbox.toml
 
@@ -86,16 +88,16 @@ sudo rm /etc/edgee/sandbox.toml
 sudo mv /etc/edgee/real-policy.toml /etc/edgee/sandbox.toml
 echo 'PASS writable-policy and symlink-policy rejection'
 
-runtime_package=/opt/edgee/runtime/node_modules/@anthropic-ai/sandbox-runtime
+runtime_package=/usr/lib/edgee-sandbox-ci/runtime/node_modules/@anthropic-ai/sandbox-runtime
 sudo chmod o+w "$runtime_package/dist/index.js"
 expect_refusal 'runtime must not be group/world writable' launch opencode
 sudo chmod o-w "$runtime_package/dist/index.js"
-sudo ln -s "$fixture" /opt/edgee/runtime/escape
+sudo ln -s "$fixture" /usr/lib/edgee-sandbox-ci/runtime/escape
 expect_refusal 'runtime symlink escapes its root' launch opencode
-sudo rm /opt/edgee/runtime/escape
-sudo mv /opt/edgee/runtime /opt/edgee/runtime-missing
+sudo rm /usr/lib/edgee-sandbox-ci/runtime/escape
+sudo mv /usr/lib/edgee-sandbox-ci/runtime /usr/lib/edgee-sandbox-ci/runtime-missing
 expect_refusal 'Cannot verify ownership of administrator sandbox policy' launch opencode
-sudo mv /opt/edgee/runtime-missing /opt/edgee/runtime
+sudo mv /usr/lib/edgee-sandbox-ci/runtime-missing /usr/lib/edgee-sandbox-ci/runtime
 sudo mv "$runtime_package/package.json" "$runtime_package/package-missing.json"
 expect_refusal 'Sandbox runtime is missing' launch claude
 sudo mv "$runtime_package/package-missing.json" "$runtime_package/package.json"

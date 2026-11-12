@@ -158,7 +158,10 @@ pub(super) async fn run(
         let clone_spec = runtime::RuntimeSpec {
             tool_path: prepared.policy.tool_path.clone(),
             workspace: prepared.workspace.clone(),
-            cwd: prepared.cwd.clone(),
+            // Upstream protects Git metadata relative to cwd. Initialize the
+            // new destination from private session space, then apply normal
+            // workspace configuration guards for the agent launch.
+            cwd: session_dir.clone(),
             session_dir: session_dir.clone(),
             read_paths: read_paths.clone(),
             write_paths: vec![],
