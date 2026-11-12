@@ -115,6 +115,7 @@ Do **not** alias a reserved bare CLI name (`copilot`) to a suffixed surface.
 | `android-studio` | GitHub Copilot in Android Studio | `copilot` | Same relay and lifecycle as IntelliJ; live-session validation pending |
 | `copilot-vscode` | GitHub Copilot in VS Code | `copilot` | Relays `code`; aliases: `vscode-copilot`, `vscode`, `code` |
 | `copilot-desktop` | GitHub Copilot app (macOS, local sessions) | `copilot` | Direct app-bundle launch; proxy env + dedicated system-trusted Copilot CA |
+| `copilot-xcode` | GitHub Copilot in Xcode's coding assistant (macOS, Xcode 27.3+) | `copilot` | Same transport and lifecycle as `copilot-desktop`; alias: `xcode-copilot` |
 | `copilot-cli` | GitHub Copilot CLI | `copilot` | Relays the `copilot` binary directly (TUI, no `--wait`) — deliberately not env-injected; see below |
 | `claude-desktop` | Claude Desktop (**Claude Code only**) | `claude_desktop` | Launches the Claude app bundle behind the relay; dedicated agent (own key + Claude compression flavor), **not** shared with `claude` (Claude Code). Routes `api.anthropic.com/v1/messages`; the app's own chat goes to `claude.ai` and is not covered — see below |
 | `codex-desktop` | ChatGPT desktop app (**Codex tab only**) | `codex` | **No relay.** Its backend is a bundled `codex app-server` reading `$CODEX_HOME/config.toml`; the Edgee provider is written there, the app is launched, and the file is restored when the app quits. See below. |
@@ -607,6 +608,32 @@ the app before stopping the relay. Quit an existing app first to avoid singleton
 Remote/cloud runtimes do not inherit local proxy settings. Plugin delivery remains
 unverified for all four component kinds and is reported as unsupported. Windows/Linux
 app paths and transport remain unverified; this launch target currently supports macOS only.
+
+## `copilot-xcode` — Copilot in Xcode's coding assistant
+
+Named like `copilot-vscode`, not bare `xcode`: Xcode also hosts Claude Agent and Codex,
+which this target does not route, and `claude-xcode` / `codex-xcode` stay free.
+
+Xcode 27.3 beta (27C5020n) downloads Copilot CLI into
+`~/Library/Developer/Xcode/CodingAssistant/Agents/` and spawns it as its own child:
+`copilot --acp --disable-client-telemetry --plugin-dir …/xcode-integration`, with
+`COPILOT_HOME` under `CodingAssistant/copilot/`. ACP is the stdio protocol between Xcode
+and that child, not the network path — the child calls `githubcopilot.com` with the
+user's GitHub token like `copilot-cli` does. So the transport is `copilot-cli`'s, for the
+same reason: `COPILOT_PROVIDER_*` is BYOK and drops the subscription. Edgee launches
+`Xcode-beta.app/Contents/MacOS/Xcode` directly (not `open -a`, which can reuse an instance
+started without the env); the child inherits proxy env, `NODE_EXTRA_CA_CERTS` and
+`COPILOT_CLI_DISABLE_WEBSOCKET_RESPONSES=true`. Verified on 2026-11-12 with bundled Copilot
+CLI 1.0.100: the env reached both `copilot --acp` children, and a chat turn's
+`POST api.business.githubcopilot.com/v1/messages` was rerouted to the gateway (200, SSE),
+with `user-agent: … client/Xcode`. `/models` and `/mcp/readonly` pass through unchanged.
+A file-read turn completed a `tool_use` → `tool_result` → answer round trip through the
+gateway. Xcode exposes its tools over MCP (`mcpbridge`) as `xcode-tools-Xcode*`
+(`XcodeRead`, `XcodeWrite`, `XcodeLS`, …), names no gateway trimming strategy knows yet.
+
+Default port 42200. Xcode exit stops the relay; Ctrl-C closes Xcode first. The beta bundle
+is preferred over `Xcode.app`; `EDGEE_XCODE_BINARY` overrides. Plugin delivery is
+structurally unsupported — Xcode owns the child's argv and `COPILOT_HOME`.
 
 ## `intellij` — GitHub Copilot in IntelliJ IDEA
 

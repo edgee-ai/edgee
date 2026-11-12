@@ -22,6 +22,7 @@ pub enum Target {
     Omp,
     CopilotCli,
     CopilotDesktop,
+    CopilotXcode,
 }
 
 impl Target {
@@ -36,6 +37,7 @@ impl Target {
             Target::Omp => "omp",
             Target::CopilotCli => "copilot-cli",
             Target::CopilotDesktop => "copilot-desktop",
+            Target::CopilotXcode => "copilot-xcode",
         }
     }
 
@@ -54,11 +56,12 @@ impl Target {
             | Target::Opencode
             | Target::Crush
             | Target::Pi
-            | Target::CopilotDesktop => Layout::Flat,
+            | Target::CopilotDesktop
+            | Target::CopilotXcode => Layout::Flat,
         }
     }
 
-    pub const ALL: [Target; 9] = [
+    pub const ALL: [Target; 10] = [
         Target::Claude,
         Target::Codex,
         Target::Opencode,
@@ -68,6 +71,7 @@ impl Target {
         Target::Omp,
         Target::CopilotCli,
         Target::CopilotDesktop,
+        Target::CopilotXcode,
     ];
 }
 
@@ -177,6 +181,13 @@ pub fn delivery(target: Target, kind: Kind) -> Delivery {
     match target {
         Target::Claude => PLUGIN_DIR,
         Target::CopilotDesktop => UNVERIFIED,
+
+        // Xcode spawns Copilot CLI itself with its own `--plugin-dir` and
+        // `COPILOT_HOME` (Xcode 27.3 beta, 27C5020n), so no Edgee-owned path can
+        // reach it. Structural, not merely unverified.
+        Target::CopilotXcode => Delivery::Unsupported {
+            reason: "Xcode launches Copilot with its own arguments and config root",
+        },
 
         // OpenCode's config schema has `skills.paths`, `agent` and `mcp`, but no
         // `hooks` key anywhere — its event extensibility is the JS `plugin`

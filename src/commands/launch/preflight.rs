@@ -62,6 +62,7 @@ pub(super) fn check(command: &Command) -> Result<()> {
         }
         Command::CodexDesktop(_) => return super::codex_desktop::binary().map(|_| ()),
         Command::CopilotDesktop(_) => return super::copilot_desktop::binary().map(|_| ()),
+        Command::CopilotXcode(_) => return super::copilot_xcode::binary().map(|_| ()),
         Command::Intellij(_) => return super::intellij::binary().map(|_| ()),
         Command::Phpstorm(_) => return super::phpstorm::binary().map(|_| ()),
         Command::AndroidStudio(_) => return super::android_studio::binary().map(|_| ()),
