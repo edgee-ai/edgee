@@ -276,10 +276,9 @@ pub(super) fn command(
     reads.insert(executable.clone());
     // Shared object loader configuration is public runtime data. System read
     // roots already include the actual libraries used by the Edgee helper.
-    for path in ["/etc/ld.so.cache"] {
-        if Path::new(path).is_file() {
-            reads.insert(PathBuf::from(path));
-        }
+    let loader_cache = PathBuf::from("/etc/ld.so.cache");
+    if loader_cache.is_file() {
+        reads.insert(loader_cache);
     }
     for source in reads {
         if source.starts_with("/dev") || source.starts_with("/proc") {
@@ -452,14 +451,16 @@ fn verify_namespace() -> Result<()> {
         "Internal sandbox helper requires a private loopback-only network namespace"
     );
     let status = fs::read_to_string("/proc/self/status")?;
-    let capabilities = status
-        .lines()
-        .find_map(|line| line.strip_prefix("CapEff:"))
-        .and_then(|value| u64::from_str_radix(value.trim(), 16).ok());
-    anyhow::ensure!(
-        capabilities == Some(0),
-        "Internal sandbox helper must have no effective capabilities"
-    );
+    for field in ["CapEff:", "CapPrm:", "CapInh:", "CapAmb:"] {
+        let capabilities = status
+            .lines()
+            .find_map(|line| line.strip_prefix(field))
+            .and_then(|value| u64::from_str_radix(value.trim(), 16).ok());
+        anyhow::ensure!(
+            capabilities == Some(0),
+            "Internal sandbox helper must have no retained capabilities"
+        );
+    }
     Ok(())
 }
 

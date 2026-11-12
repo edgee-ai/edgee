@@ -208,3 +208,19 @@ fn protected_security_configs_cannot_alias_writable_workspace_files() {
         assert!(protected_paths(workspace).is_err(), "hardlink={hardlink}");
     }
 }
+
+#[test]
+fn external_worktree_security_configs_reject_writable_aliases() {
+    for hardlink in [false, true] {
+        let fixture = Fixture::new();
+        let ordinary = fixture.gitdir.join("ordinary-file");
+        fs::write(&ordinary, "fake configuration").unwrap();
+        let protected = fixture.gitdir.join("config.worktree");
+        if hardlink {
+            fs::hard_link(&ordinary, &protected).unwrap();
+        } else {
+            symlink(&ordinary, &protected).unwrap();
+        }
+        assert!(worktree_access(&fixture.prepared).is_err(), "hardlink={hardlink}");
+    }
+}

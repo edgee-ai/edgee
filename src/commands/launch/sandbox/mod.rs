@@ -318,6 +318,7 @@ fn worktree_access(prepared: &policy::Prepared) -> Result<(Vec<PathBuf>, Vec<Pat
         }
         denies.push(common.join("objects/info"));
     }
+    validate_protected_paths(&denies, 250_000)?;
     Ok((writes, denies))
 }
 
@@ -534,10 +535,17 @@ fn protected_paths_bounded(
                 "Workspace contains too many security configuration paths; choose a smaller workspace");
         }
     }
+    let paths: Vec<_> = paths.into_iter().collect();
+    validate_protected_paths(&paths, max_entries.saturating_sub(inspected))?;
+    Ok(paths)
+}
+
+fn validate_protected_paths(paths: &[PathBuf], max_entries: usize) -> Result<()> {
+    let mut inspected = 0_usize;
     // A read-only bind/profile path does not freeze aliases outside that path.
     // Reject symlinks and multiply-linked files in protected trees rather than
     // accidentally exposing their targets through extra read-only mounts.
-    let mut protected_entries: Vec<_> = paths.iter().cloned().collect();
+    let mut protected_entries = paths.to_vec();
     while let Some(path) = protected_entries.pop() {
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
@@ -567,7 +575,7 @@ fn protected_paths_bounded(
             }
         }
     }
-    Ok(paths.into_iter().collect())
+    Ok(())
 }
 
 fn git_protected_paths(git: &Path) -> Vec<PathBuf> {

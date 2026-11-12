@@ -187,6 +187,12 @@ fn native_sandbox_files_network_secrets_and_local_mcp() {
     );
     let fixture = Fixture::new();
     std::fs::write(fixture.base.join("secret"), "fake-file-secret").unwrap();
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let secret = std::fs::File::open(fixture.base.join("secret")).unwrap();
+    // F_DUPFD deliberately leaves CLOEXEC unset. Keep ownership through launch.
+    let raw_fd = unsafe { libc::fcntl(secret.as_raw_fd(), libc::F_DUPFD, 200) };
+    assert!(raw_fd >= 200);
+    let inherited = unsafe { OwnedFd::from_raw_fd(raw_fd) };
     std::fs::create_dir(fixture.workspace.join(".git")).unwrap();
     std::fs::write(fixture.workspace.join(".git/config"), "# protected\n").unwrap();
     for name in ["nested/.git", "nested/.vscode", ".git/modules/subrepo"] {
@@ -217,6 +223,7 @@ fn native_sandbox_files_network_secrets_and_local_mcp() {
         .env("EDGEE_TEST_BASE", &fixture.base)
         .env("EDGEE_TEST_ENDPOINT", server.address.to_string())
         .env("EDGEE_TEST_SOCKET", &socket)
+        .env("EDGEE_TEST_INHERITED_FD", inherited.as_raw_fd().to_string())
         .env("EXPLICIT_TEST_VALUE", "allowed-fake-value");
     #[cfg(target_os = "macos")]
     command.env("EDGEE_TEST_KEYCHAIN", &keychain.0);
@@ -243,6 +250,10 @@ fn native_sandbox_agent_probe() {
         return;
     }
     assert!(std::env::var_os("FAKE_HOST_SECRET").is_none());
+    let inherited_fd: i32 = std::env::var("EDGEE_TEST_INHERITED_FD").unwrap().parse().unwrap();
+    let mut secret_byte = [0_u8];
+    assert_eq!(unsafe { libc::read(inherited_fd, secret_byte.as_mut_ptr().cast(), 1) }, -1);
+    assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
     assert_eq!(
         std::env::var("EXPLICIT_TEST_VALUE").unwrap(),
         "allowed-fake-value"
