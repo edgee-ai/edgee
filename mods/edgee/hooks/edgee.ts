@@ -40,6 +40,7 @@ const picker = { plugin: "edgee", key: "picker" } as const; // the selector's fi
 const minimized = { plugin: "edgee", key: "minimized" } as const; // the pane folded into a line above the prompt
 const savings = { plugin: "edgee", key: "savings" } as const;
 let refreshingSavings = false;
+let restoringPane = false; // a /clear's pane reopen is under way
 let savingsPending = false; // a refresh was asked for while one ran: run once more after it
 let savingsRound = 0; // bumped by each turn: an older turn's scheduled refreshes skip
 // Usage reaches the analytics store in batches, after the request: refresh a
@@ -57,14 +58,6 @@ export function register(on: On) {
       argumentHint: "[list [filter] | <model> [minutes] | off | panel | minimize]",
     });
     await restoreView($);
-    return result;
-  });
-
-  // /clear (and /new, /resume) go on under a new session id with fresh state,
-  // and no `session.start` fires for it: restore the band or pane here.
-  on("classic.SessionStart", async ($, e, next) => {
-    const result = await next(e);
-    if (e.source === "clear" || e.source === "resume") await restoreView($);
     return result;
   });
 
@@ -154,7 +147,7 @@ export function register(on: On) {
   });
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
-    if (e.props.hasSurvey || !(await $.state.get(minimized)).value) return next(e);
+    if (e.props.hasSurvey || !(await isMinimized($))) return next(e);
     // The band is shared: draw what the plugins beneath draw, then our line right above the prompt.
     const below = await next(e);
     const elements = $.ui.resolve(e);
@@ -314,6 +307,21 @@ async function restoreView($: $): Promise<void> {
   if (await $.env.get("EDGEE_CLI_PATH")) {
     void refreshSavings($).catch(() => {}); // the host may unload during a refresh
   }
+}
+
+// /clear, /new and /resume go on under a new session with empty state and no
+// `session.start`, and other plugins may not pass `classic.SessionStart` on:
+// fall back to the stored preference, and reopen the pane left expanded.
+async function isMinimized($: $): Promise<boolean> {
+  const { value } = await $.state.get(minimized);
+  if (value !== undefined) return value;
+  const folded = (await storedMinimized($)) !== false;
+  if (!folded && !restoringPane) {
+    // Drawing is pure: reopen from a timer, outside the render. Its write ends the fallback.
+    restoringPane = true;
+    $.clock.after(0, () => openPane($, { focus: false }).catch(() => {}).finally(() => (restoringPane = false)));
+  }
+  return folded;
 }
 
 async function minimize($: $): Promise<void> {
