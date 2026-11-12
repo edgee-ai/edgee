@@ -1,13 +1,17 @@
 # Sandbox validation record
 
 Validation performed on 2026-11-12. This record distinguishes OS enforcement,
-agent-shaped test commands, and actual installed agent sessions.
+agent-shaped test commands, and actual installed agent sessions. The complete
+macOS/Linux isolation matrix passed on code revision `f3ec01e`:
+[GitHub Actions evidence](https://github.com/edgee-ai/edgee/actions/runs/43204441870).
+Native authenticated agent tests remain macOS-only; no production credentials
+were installed in CI.
 
 | Check | macOS ARM64 | Linux |
 |---|---|---|
-| Real OS isolation harness (`test.mjs`) | Passed: Seatbelt | CI configured; result pending |
-| Rust supervisor environment/lifecycle test | Passed: real Seatbelt, inherited fake secret removed, exit 42, ordinary descendant cleanup | CI configured; result pending |
-| `cargo fmt --all`, `cargo clippy --all-targets`, `cargo test --all` | Passed: 456 unit tests + 3 integration tests; zero clippy warnings | CI configured |
+| Real OS isolation harness (`test.mjs`) | Passed: Seatbelt | Passed in CI |
+| Rust supervisor environment/lifecycle test | Passed: real Seatbelt, inherited fake secret removed, exit 42, ordinary descendant cleanup and direct-parent SIGTERM forwarding | Passed in CI |
+| `cargo fmt --all`, `cargo clippy --all-targets`, `cargo test --all` | Passed: 456 unit tests + 3 integration tests; zero clippy warnings | Passed in CI |
 | Claude Code 2.1.322 `--version` | Passed | Not run |
 | Claude Code noninteractive gateway response | Passed, exact expected response | Not run |
 | Claude Code interactive TUI gateway response and Ctrl-C exit | Passed | Not run |
@@ -15,7 +19,9 @@ agent-shaped test commands, and actual installed agent sessions.
 | Codex authenticated model response | Passed, exact expected response | Not run |
 | Codex interactive TUI gateway response and Ctrl-C exit | Passed | Not run |
 | Native agent file write + shell test | Passed for both agents (Claude with explicit Bash permission) | Not run |
-| Installed mandatory root policy end to end | Not run; policy ownership/ACL/parser unit tests passed | Disposable CI fixture added; result pending |
+| Linked-worktree status/add/commit and metadata protection | Passed | Passed in CI |
+| Public HTTPS clone inside sandbox | Passed | Passed in CI |
+| Installed mandatory root policy end to end | Not run; policy ownership/ACL/parser unit tests passed | Passed: installed root-owned policy/runtime fixture |
 
 The JS suite uses fake secrets, a controlled HTTP endpoint and Unix socket,
 and an isolated fake macOS Keychain with an outside positive control. It covers
@@ -30,6 +36,9 @@ The feature-gated Rust test is explicitly run in CI, not ignored or skipped:
 ```sh
 npm ci --ignore-scripts --omit=optional --prefix scripts/sandbox-runtime
 node scripts/sandbox-runtime/test.mjs
+node scripts/sandbox-runtime/git-test.mjs
+node scripts/sandbox-runtime/clone-test.mjs
+node scripts/sandbox-runtime/shim-test.mjs
 EDGEE_TEST_NODE="$(command -v node)" \
 EDGEE_TEST_RUNTIME_ROOT="$PWD/scripts/sandbox-runtime" \
 FAKE_HOST_SECRET=host-only-fake-secret \
@@ -53,7 +62,8 @@ symlink and backlink substitutions.
 
 Linux is not available locally: the Docker CLI exists but its daemon socket is
 absent. The dedicated GitHub Actions matrix runs actual bubblewrap and Seatbelt
-on Ubuntu 22.04 and the supported `macos-latest` image; missing/degraded isolation fails the job. There are
+on Ubuntu 22.04 and the supported `macos-latest` image; missing/degraded
+isolation fails the job. There are
 no skipped isolation tests. Two preexisting macro documentation tests are ignored
 by the repository's ordinary Rust suite.
 
@@ -64,7 +74,7 @@ selection through ordinary launches and aliases, rejected repository/environment
 overrides, writable or symlinked policy rejection, writable or escaping runtime
 files, and missing-runtime refusal. It refuses to replace existing system paths
 and removes only its own fixtures. This fixture has not been run on the developer
-workstation; its CI result remains pending.
+workstation; it passed on the disposable Linux runner.
 
 Separate sub-agents examined architecture, security bypasses and test validity.
 Their findings drove trusted runtime/helper/ACL checks, narrower macOS IPC,

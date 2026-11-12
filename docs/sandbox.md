@@ -17,7 +17,7 @@ cp scripts/sandbox-runtime/package*.json "$HOME/.local/share/edgee/sandbox-runti
 npm ci --prefix "$HOME/.local/share/edgee/sandbox-runtime" --ignore-scripts --omit=optional
 ```
 
-macOS also needs ripgrep (`brew install ripgrep`). Linux needs bubblewrap,
+macOS also needs Git/Xcode Command Line Tools and ripgrep (`brew install ripgrep`). Linux needs bubblewrap,
 socat and ripgrep (`sudo apt-get install bubblewrap socat ripgrep`), working user
 namespaces, and the runtime's seccomp support. Missing or degraded isolation
 fails closed. Windows and nested environments that cannot supply these
@@ -136,8 +136,9 @@ No Edgee console user token or host agent configuration is injected. Codex
 ChatGPT app connectors default to disabled; native agent options can enable
 them within the same network allowlist. Automatic
 Edgee MCP, mods and organization plugin delivery are not enabled in this path.
-Configure a local MCP through the agent's native options and a configuration
-inside the workspace. It inherits the same OS restrictions. Remote MCP hosts
+Configure a local stdio MCP through the agent's native options and a configuration
+inside the workspace. It inherits the same OS restrictions. Local HTTP listeners
+and Unix-socket MCP transports are blocked by the default policy. Remote MCP hosts
 must be explicitly allowed and have their own credentials. Preexisting services
 are not retroactively sandboxed; host localhost and Unix sockets are blocked.
 
