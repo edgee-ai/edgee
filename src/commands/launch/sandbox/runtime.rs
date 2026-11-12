@@ -4,14 +4,18 @@ use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{Command, ExitStatus};
 #[cfg(unix)]
 use std::process::Stdio;
+use std::process::{Command, ExitStatus};
 
-use anyhow::{bail, Result};
 #[cfg(unix)]
 use anyhow::Context;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+#[path = "git_excludes.rs"]
+mod git_excludes;
 
 #[cfg(target_os = "linux")]
 #[path = "linux.rs"]
@@ -84,7 +88,7 @@ fn execute_unix(command: &Command, spec: &RuntimeSpec) -> Result<ExitStatus> {
     #[cfg(target_os = "linux")]
     let _bridge = linux::HostBridge::start(&control_path.join("proxy.sock"), proxy.port)?;
     #[cfg(target_os = "linux")]
-    let _stubs = linux::DenyStubs::prepare(spec)?;
+    let stubs = linux::DenyStubs::prepare(spec)?;
     let utf8 = |s: &std::ffi::OsStr| -> Result<String> {
         Ok(s.to_str()
             .context("Sandbox arguments and environment must be UTF-8")?
@@ -123,6 +127,23 @@ fn execute_unix(command: &Command, spec: &RuntimeSpec) -> Result<ExitStatus> {
         "GIT_CONFIG_VALUE_0".into(),
         spec.workspace.to_string_lossy().into_owned(),
     );
+    #[cfg(target_os = "linux")]
+    let excludes = git_excludes::write(
+        spec,
+        &stubs.created_paths(),
+        &env.get("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| spec.session_dir.clone()),
+    )?;
+    #[cfg(target_os = "linux")]
+    if let Some(file) = &excludes {
+        env.insert("GIT_CONFIG_COUNT".into(), "2".into());
+        env.insert("GIT_CONFIG_KEY_1".into(), "core.excludesfile".into());
+        env.insert(
+            "GIT_CONFIG_VALUE_1".into(),
+            file.path().to_string_lossy().into_owned(),
+        );
+    }
     let payload = Payload {
         argv,
         env,

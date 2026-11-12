@@ -123,6 +123,13 @@ pub(super) struct DenyStubs {
     created: Vec<Stub>,
 }
 impl DenyStubs {
+    pub(super) fn created_paths(&self) -> Vec<(PathBuf, bool)> {
+        self.created
+            .iter()
+            .map(|stub| (stub.path.clone(), stub.directory))
+            .collect()
+    }
+
     pub(super) fn prepare(spec: &RuntimeSpec) -> Result<Self> {
         let mut guard = Self {
             created: Vec::new(),
@@ -165,6 +172,8 @@ impl DenyStubs {
         // self-reference preserves its existing meaning while denying changes.
         let contents = if path.file_name().is_some_and(|name| name == "commondir") {
             b".\n".to_vec()
+        } else if path.file_name().is_some_and(|name| name == ".mcp.json") {
+            b"{\"mcpServers\":{}}\n".to_vec()
         } else {
             Vec::new()
         };
@@ -542,5 +551,71 @@ mod tests {
         );
         assert!(DenyStubs::prepare(&spec).is_err());
         assert!(!outside.join("settings.json").exists());
+    }
+
+    #[test]
+    fn git_add_omits_real_guard_placeholders_and_cleanup_restores_absence() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("repo");
+        let session = root.path().join("session");
+        fs::create_dir(&workspace).unwrap();
+        fs::create_dir(&session).unwrap();
+        let git = || {
+            let mut command = Command::new("/usr/bin/git");
+            command
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .arg("-C")
+                .arg(&workspace);
+            command
+        };
+        assert!(git().args(["init", "--quiet"]).status().unwrap().success());
+        fs::write(workspace.join("actual.txt"), "real project change").unwrap();
+        let absent: Vec<_> = [".mcp.json", ".gitmodules", ".bashrc"]
+            .iter()
+            .map(|name| workspace.join(name))
+            .collect();
+        let spec = spec(workspace.clone(), session.clone(), absent.clone());
+        let guard = DenyStubs::prepare(&spec).unwrap();
+        let excludes = super::super::git_excludes::write(&spec, &guard.created_paths(), &session)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(
+                &fs::read(workspace.join(".mcp.json")).unwrap()
+            )
+            .unwrap(),
+            serde_json::json!({"mcpServers": {}})
+        );
+        let configured = || {
+            let mut command = git();
+            command
+                .env("GIT_CONFIG_COUNT", "2")
+                .env("GIT_CONFIG_KEY_0", "safe.directory")
+                .env("GIT_CONFIG_VALUE_0", &workspace)
+                .env("GIT_CONFIG_KEY_1", "core.excludesfile")
+                .env("GIT_CONFIG_VALUE_1", excludes.path());
+            command
+        };
+        let status = configured()
+            .args(["status", "--porcelain"])
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        assert_eq!(String::from_utf8(status.stdout).unwrap(), "?? actual.txt\n");
+        assert!(configured().args(["add", "."]).status().unwrap().success());
+        let staged = configured()
+            .args(["diff", "--cached", "--name-only"])
+            .output()
+            .unwrap();
+        assert!(staged.status.success());
+        assert_eq!(String::from_utf8(staged.stdout).unwrap(), "actual.txt\n");
+        drop(guard);
+        for path in absent {
+            assert!(!path.exists());
+        }
+        assert!(workspace.join("actual.txt").is_file());
     }
 }

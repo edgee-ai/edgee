@@ -30,7 +30,7 @@ production credentials are never installed on CI runners.
 | Check | macOS ARM64 | Linux |
 |---|---|---|
 | Native OS filesystem, network, fake-secret, local MCP, Keychain/socket boundary | Passed locally | Passed in CI |
-| Inherited non-CLOEXEC descriptor closure | Passed locally | Included in follow-up CI |
+| Inherited non-CLOEXEC descriptor closure | Passed locally | Passed in CI |
 | Authenticated HTTP and binary CONNECT tunnel; malformed/pipelined requests denied | Passed | Passed in CI |
 | Linked-worktree commit and protected configuration | Passed | Passed in CI |
 | HTTPS clone through authenticated proxy | Passed | Passed in CI |
@@ -40,10 +40,10 @@ production credentials are never installed on CI runners.
 | Authenticated model response, file creation and shell command | Passed for both agents | Not run |
 | Interactive TUI response and Ctrl-C exit | Passed for both agents | Not run |
 
-The local quality gate passes with 469 unit tests and 3 integration tests,
+The local quality gate passes with 473 unit tests and 3 integration tests,
 including strict Clippy (`-D warnings`). The real native macOS suite also passes
 without skipped isolation tests. Linux enforcement and administrator fixtures
-passed in [the native implementation CI run](https://github.com/edgee-ai/edgee/actions/runs/43229509876).
+passed in [the native implementation CI run](https://github.com/edgee-ai/edgee/actions/runs/43230100692).
 Final follow-up CI status is tracked on the PR.
 
 Actual-agent tests used empty temporary workspaces and an invocation-local

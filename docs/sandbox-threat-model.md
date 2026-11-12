@@ -30,7 +30,10 @@ pseudo-filesystem exceptions, not access to host temporary files or processes.
 The macOS profile is generated from a default-deny policy, without grants to
 Keychain/SecurityServer, host preferences or POSIX shared memory/semaphores.
 Only the authenticated proxy's exact loopback TCP endpoint is permitted.
-Each session uses its own private home and temporary directory.
+Each session uses its own private home and temporary directory. The macOS dynamic
+loader receives a read of the root directory entry itself (not its descendants)
+and metadata for permitted-path ancestors; this does not expose home or `/etc`
+file contents.
 
 The policy is read from a fixed administrator location, not the workspace.
 Mandatory mode requires a trusted installed Edgee executable and OS helpers;

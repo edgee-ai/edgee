@@ -12,7 +12,8 @@ compiled into the Edgee Rust binary. No Node.js, npm package or downloaded
 sandbox runtime is required.
 
 macOS uses the system Seatbelt facility and needs Git/Xcode Command Line Tools
-for Git operations. Linux uses bubblewrap and a Rust-generated seccomp filter;
+for Git operations. Linux requires kernel 5.11 or newer ([descriptor isolation](https://man7.org/linux/man-pages/man2/close_range.2.html)),
+bubblewrap and a Rust-generated seccomp filter;
 install bubblewrap with your distribution package manager. Working unprivileged
 user namespaces are required. Missing or degraded isolation fails closed.
 Windows and nested environments that cannot supply these restrictions are
@@ -86,6 +87,18 @@ Mandatory policy applies through existing aliases without reinstalling them.
 Unsupported launch targets and Claude's legacy `--relay` path are refused;
 they cannot bypass mandatory sandboxing.
 
+On Linux, missing protected configuration paths receive temporary placeholders
+so the filesystem sandbox can make them read-only. Unchanged placeholders are
+removed when the session exits. Git commands inside the sandbox use a private,
+session-only excludes file for newly created placeholders, so `git status` and
+`git add .` do not include them. Existing project files, `.gitignore`, Git
+configuration and `.git/info/exclude` are not rewritten. Git processes started
+outside the sandbox do not receive these session-only excludes. An existing
+project `core.excludesfile` is preserved in that private file when its canonical
+path is already readable under the sandbox policy; otherwise launch fails with
+instructions to relocate or authorize it. Synthetic `.mcp.json` files contain
+an empty MCP server configuration, rather than invalid empty JSON.
+
 ## Files, authentication and MCP
 
 The workspace is readable/writable, with Git configuration/hooks and Edgee,
@@ -137,7 +150,10 @@ are not retroactively sandboxed; host localhost and Unix sockets are blocked.
 The Rust sandbox supervisor's restricted local network transport is separate from the
 existing Edgee MITM relay. `--relay` is rejected because that relay's broad
 passthrough is not a suitable security boundary. Model HTTPS/streaming traffic
-uses the allowed Edgee gateway through the authenticated Rust proxy.
+uses the allowed Edgee gateway through the authenticated Rust proxy. HTTPS
+CONNECT preserves TLS end to end and supports streaming. Plain HTTP requests
+use explicit body framing; chunked HTTP uploads are refused (HTTPS uploads
+remain supported).
 
 ## Diagnostics and limits
 
