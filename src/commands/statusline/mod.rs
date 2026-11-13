@@ -2,10 +2,11 @@
 //!
 //! Bare, it renders the line (what Copilot's `statusLine.command` runs). With
 //! `--wrap` it renders next to a statusLine of the user's own. `copilot`
-//! installs or removes it from Copilot's settings. Claude Code does not use
-//! this: its inline UI is the Edgee mod (`mods/edgee/`).
+//! installs or removes it from Copilot's settings, `kimi` from Kimi Code's. Claude
+//! Code does not use this: its inline UI is the Edgee mod (`mods/edgee/`).
 
 pub mod copilot;
+pub mod kimi;
 pub mod render;
 pub mod wrap;
 
@@ -26,11 +27,14 @@ pub struct Options {
 enum Command {
     /// Install or remove the statusline in GitHub Copilot CLI's settings
     Copilot(copilot::Options),
+    /// Manage the Kimi Code statusline integration
+    Kimi(kimi::Options),
 }
 
 pub async fn run(opts: Options) -> Result<()> {
     match (opts.command, opts.wrap) {
         (Some(Command::Copilot(o)), _) => copilot::run(o)?,
+        (Some(Command::Kimi(o)), _) => kimi::run(o).await?,
         (None, Some(command)) => wrap::run(&command).await,
         (None, None) => render::run().await,
     }
@@ -74,5 +78,16 @@ mod tests {
     #[test]
     fn wrap_and_subcommand_conflict() {
         assert!(parse(&["--wrap", "x", "copilot", "uninstall"]).is_err());
+    }
+
+    #[test]
+    fn parses_kimi_subtree() {
+        let opts = parse(&["kimi", "install"]).unwrap();
+        assert!(matches!(
+            opts.command,
+            Some(Command::Kimi(kimi::Options {
+                command: kimi::Command::Install(_),
+            }))
+        ));
     }
 }

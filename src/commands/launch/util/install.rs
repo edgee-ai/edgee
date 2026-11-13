@@ -1,6 +1,36 @@
+use std::fs;
 use std::time::Duration;
 
 use crate::{api::ApiClient, config::Credentials};
+
+/// Installs the Kimi Code statusline integration once per machine, on the
+/// first `edgee launch kimi`. Honors its own disable marker.
+pub async fn ensure_kimi_first_run_installed() {
+    use crate::commands::statusline::kimi::{install, toggle};
+
+    if toggle::is_disabled() {
+        return;
+    }
+
+    let marker = toggle::installed_marker_path();
+    if marker.is_file() {
+        return;
+    }
+
+    let opts = install::Options { implicit: true };
+    if let Err(e) = install::run(opts).await {
+        eprintln!(
+            "  {} edgee: skipped first-run kimi statusline install: {e}",
+            console::style("⚠").yellow()
+        );
+        return;
+    }
+
+    if let Some(parent) = marker.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&marker, b"");
+}
 
 /// Register the session before the agent can open its model picker. Registration
 /// failures must not prevent otherwise usable gateway credentials from launching.
