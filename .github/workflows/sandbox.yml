@@ -1,0 +1,43 @@
+name: Local sandbox isolation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  isolation:
+    name: Real OS isolation (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu 22.04 permits the unprivileged user namespaces bubblewrap
+        # requires. Never disable sandbox protections to make CI pass.
+        os: [ubuntu-22.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Install Linux isolation dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes bubblewrap
+      - name: Build native CLI and helper
+        run: cargo build --bin edgee
+      - name: CLI policy and launch regression tests
+        run: cargo test --all
+      - name: Exercise native OS boundary, proxy, Git, clone and lifecycle
+        # These tests execute real kernel isolation. Missing dependencies fail.
+        env:
+          FAKE_HOST_SECRET: host-only-fake-secret
+        run: |
+          export EDGEE_TEST_BINARY="$GITHUB_WORKSPACE/target/debug/edgee"
+          cargo test --features sandbox-runtime-tests native_sandbox -- --nocapture --test-threads=1
+      - name: Exercise root-owned mandatory administrator policy
+        if: runner.os == 'Linux'
+        env:
+          EDGEE_ADMIN_FIXTURE: '1'
+        run: bash scripts/sandbox/admin-test.sh

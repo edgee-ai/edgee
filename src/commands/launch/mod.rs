@@ -13,6 +13,7 @@ pub mod codex;
 mod codex_catalog;
 mod codex_config;
 mod preflight;
+pub(crate) mod sandbox;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;
@@ -97,21 +98,35 @@ enum Command {
 #[derive(Debug, clap::Parser)]
 pub struct Options {
     #[command(flatten)]
+    sandbox: sandbox::policy::Options,
+    #[command(flatten)]
     reroute: reroute::Options,
     #[command(subcommand)]
     command: Command,
 }
 
 pub async fn run(opts: Options) -> anyhow::Result<()> {
+    if let Some(prepared) = sandbox::policy::prepare(&opts.sandbox)? {
+        let reserved_clone = prepared.clone_url.as_ref().map(|_| prepared.workspace.clone());
+        let result = sandbox::run(prepared, opts.command, &opts.reroute).await;
+        if result.is_err() {
+            if let Some(directory) = reserved_clone {
+                // Remove only an unused reservation. Completed clone contents
+                // remain available if subsequent authentication fails.
+                let _ = std::fs::remove_dir(directory);
+            }
+        }
+        return result;
+    }
     if opts.reroute.passthrough_mode && matches!(opts.command, Command::Cursor(_)) {
         anyhow::bail!("Direct Cursor launch has no per-launch session ID. Use `edgee relay --passthrough cursor` or turn on Pass-through mode for the organization.");
     }
-    preflight::check(&opts.command)?;
     if opts.reroute.target.is_some() && matches!(opts.command, Command::Cursor(_)) {
         anyhow::bail!(
             "Cursor launch does not attach a session ID. Choose another launch target to use --reroute."
         );
     }
+    preflight::check(&opts.command)?;
     let reroute = &opts.reroute.resolve().await?;
     match opts.command {
         Command::Claude(o) => claude::run(o, reroute).await,

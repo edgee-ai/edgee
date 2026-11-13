@@ -331,6 +331,20 @@ edgee stats
 
 ## Features
 
+### Local agent sandbox
+
+Run Claude Code or Codex with OS-enforced filesystem and network restrictions:
+
+```bash
+edgee launch --sandbox claude
+edgee launch --sandbox --workspace ~/projects/my-app codex
+```
+
+Implemented in Rust using native OS isolation, without Node/npm. Linux requires
+bubblewrap. Existing workspace edits persist. Administrators can require sandboxing through existing aliases.
+See [installation, policy and limitations](docs/sandbox.md) and the
+[validation record](docs/sandbox-validation.md).
+
 ### Routing: fallbacks and reroutes
 
 Configure a coding-agent key in the [Edgee console](https://www.edgee.ai) to use another model
