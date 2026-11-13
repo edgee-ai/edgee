@@ -52,6 +52,8 @@
 //! OpenCode's, which is why the gateway needs no new trimming strategy and the
 //! `kilo` key is provisioned with the OpenCode compression flavor.
 
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use serde_json::Value;
 
@@ -182,6 +184,38 @@ fn build_config_content(edgee_provider: Value) -> Value {
     })
 }
 
+/// The `mcp.edgee` entry registering Edgee's own session-tracking MCP server,
+/// same shape Kilo's docs confirm for a remote MCP server (byte-for-byte the
+/// same as OpenCode's `opencode_mcp` shape, per the fork relationship).
+fn build_edgee_mcp(token: &str) -> Value {
+    serde_json::json!({
+        "edgee": {
+            "type": "remote",
+            "url": crate::config::mcp_base_url(),
+            "enabled": true,
+            "headers": {
+                "Authorization": format!("Bearer {token}")
+            }
+        }
+    })
+}
+
+/// Layers the `mcp` and `instructions` keys onto an already-built config
+/// value. Kept a separate step (rather than a `build_config_content`
+/// parameter) so the no-MCP path's output, and its existing test, are
+/// untouched.
+fn with_edgee_mcp(mut content: Value, token: &str, instructions_path: &Path) -> Value {
+    content["mcp"] = build_edgee_mcp(token);
+    content["instructions"] = serde_json::json!([instructions_path.to_string_lossy()]);
+    content
+}
+
+fn write_instructions_file(session_id: &str, text: &str) -> Result<PathBuf> {
+    let path = std::env::temp_dir().join(format!("edgee-kilo-instructions-{session_id}.md"));
+    std::fs::write(&path, text)?;
+    Ok(path)
+}
+
 pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
     let mut creds = crate::config::read()?;
 
@@ -216,11 +250,22 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     }
 
     // Step 4: build the inline config carrying the Edgee provider
+    // Fetch the org once and derive both the gateway URL and the MCP gate from
+    // it, rather than issue a second request later — the same reuse
+    // `resolve_gateway_base_url`'s own doc comment recommends for callers that
+    // need both. Done before borrowing `creds.kilo` below since a positive
+    // gate re-reads `creds`.
+    let org = super::fetch_active_org(&creds).await;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
+    let mcp_disabled = super::mcp_injection_disabled_with_org(org.as_ref());
+    if !mcp_disabled {
+        crate::commands::auth::login::ensure_mcp_preference().await?;
+        creds = crate::config::read()?;
+    }
+
     let kilo = creds.kilo.as_ref().unwrap();
     let api_key = &kilo.api_key;
-    let gateway_url = super::resolve_gateway_base_url(&creds).await;
     let session_id = reroute.create_session(&creds, "kilo").await?;
-
 
 
     let (models, catalog) = tokio::join!(
@@ -237,8 +282,31 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         &catalog,
         debug_log_headers,
     );
-    
-    let config_content = serde_json::to_string(&build_config_content(edgee_provider))?;
+
+    let use_mcp = creds.enable_mcp.unwrap_or(false) && !mcp_disabled;
+    let mut instructions_path: Option<PathBuf> = None;
+    let mut config_content_value = build_config_content(edgee_provider);
+    if use_mcp {
+        let repo_origin = crate::git::detect_origin();
+        let session_url = match creds.org_slug.as_deref() {
+            Some(slug) if !slug.is_empty() => {
+                format!(
+                    "{}/sessions/{slug}/{session_id}",
+                    crate::config::console_base_url()
+                )
+            }
+            _ => format!(
+                "{}/sessions/{session_id}",
+                crate::config::console_base_url()
+            ),
+        };
+        let text = super::mcp::session_instructions(&session_id, repo_origin.as_deref(), &session_url);
+        let path = write_instructions_file(&session_id, &text)?;
+        let token = creds.user_token.as_deref().unwrap_or("");
+        config_content_value = with_edgee_mcp(config_content_value, token, &path);
+        instructions_path = Some(path);
+    }
+    let config_content = serde_json::to_string(&config_content_value)?;
 
     // Step 5: launch kilo with the correct env vars
     let mut cmd = std::process::Command::new(util::resolve_binary("kilo"));
@@ -256,6 +324,10 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
             anyhow::anyhow!(e)
         }
     })?;
+
+    if let Some(path) = instructions_path {
+        let _ = std::fs::remove_file(path);
+    }
 
     super::print_session_stats(&creds, &session_id, "Kilo Code").await;
 
@@ -514,4 +586,32 @@ mod tests {
         let providers = config["provider"].as_object().unwrap();
         assert_eq!(providers.keys().collect::<Vec<_>>(), vec!["edgee"]);
     }
+
+    #[test]
+    fn edgee_mcp_entry_is_a_remote_http_server() {
+        let mcp = build_edgee_mcp("tok");
+        assert_eq!(mcp["edgee"]["type"], serde_json::json!("remote"));
+        assert_eq!(mcp["edgee"]["enabled"], serde_json::json!(true));
+        assert_eq!(
+            mcp["edgee"]["headers"]["Authorization"],
+            serde_json::json!("Bearer tok")
+        );
+    }
+
+    #[test]
+    fn with_edgee_mcp_adds_mcp_and_instructions_without_touching_provider() {
+        let base = build_config_content(provider_with(&["openai/gpt-5"], &[]));
+        let with_mcp = with_edgee_mcp(base, "tok", Path::new("/tmp/edgee-instructions.md"));
+
+        assert_eq!(with_mcp["mcp"]["edgee"]["type"], serde_json::json!("remote"));
+        assert_eq!(
+            with_mcp["instructions"],
+            serde_json::json!(["/tmp/edgee-instructions.md"])
+        );
+        assert_eq!(
+            with_mcp["provider"]["edgee"]["models"]["openai/gpt-5"]["name"],
+            serde_json::json!("openai/gpt-5")
+        );
+    }
 }
+
