@@ -12,7 +12,7 @@ use console::style;
 
 use desktop::{
     AppSpec, ALL_APPS, CLAUDE_DESKTOP_APP, CODEX_DESKTOP_APP, COPILOT_DESKTOP_APP,
-    COPILOT_VSCODE_APP, CURSOR_APP, INTELLIJ_APP, PHPSTORM_APP, ANDROID_STUDIO_APP,
+    COPILOT_VSCODE_APP, COPILOT_XCODE_APP, CURSOR_APP, INTELLIJ_APP, PHPSTORM_APP, ANDROID_STUDIO_APP,
 };
 
 const MARKER_START: &str = "# >>> edgee launch aliases >>>";
@@ -93,6 +93,9 @@ pub enum Agent {
     CodexDesktop,
     #[value(name = "copilot-desktop")]
     CopilotDesktop,
+    /// GitHub Copilot in Xcode desktop wrapper (requires Xcode 27.3+)
+    #[value(name = "copilot-xcode")]
+    CopilotXcode,
     /// GitHub Copilot in IntelliJ IDEA desktop wrapper
     #[value(name = "intellij")]
     Intellij,
@@ -125,6 +128,7 @@ impl Agent {
             | Self::ClaudeDesktop
             | Self::CodexDesktop
             | Self::CopilotDesktop
+            | Self::CopilotXcode
             | Self::Intellij
             | Self::Phpstorm
             | Self::AndroidStudio => &[],
@@ -143,6 +147,7 @@ impl Agent {
             Self::Phpstorm => std::slice::from_ref(&PHPSTORM_APP),
             Self::AndroidStudio => std::slice::from_ref(&ANDROID_STUDIO_APP),
             Self::CopilotDesktop => std::slice::from_ref(&COPILOT_DESKTOP_APP),
+            Self::CopilotXcode => std::slice::from_ref(&COPILOT_XCODE_APP),
             Self::All => ALL_APPS,
             _ => &[],
         }

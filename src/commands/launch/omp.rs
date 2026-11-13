@@ -48,32 +48,25 @@ const ANTHROPIC_PROVIDER_KEY: &str = "edgee-anthropic";
 const API_KEY_ENV: &str = "EDGEE_API_KEY";
 const SESSION_ID_ENV: &str = "EDGEE_SESSION_ID";
 
-/// OMP's picker uses fixed slot names. The catalog's `none` effort maps to the
-/// disabled `off` slot.
-const THINKING_LEVELS: [(&str, &str); 7] = [
-    ("off", "none"),
-    ("minimal", "minimal"),
-    ("low", "low"),
-    ("medium", "medium"),
-    ("high", "high"),
-    ("xhigh", "xhigh"),
-    ("max", "max"),
-];
+/// Canonical effort order; `none` makes thinking optional.
+const THINKING_EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
-fn thinking_level_map(efforts: &[String]) -> Value {
-    Value::Object(
-        THINKING_LEVELS
-            .into_iter()
-            .map(|(level, catalog_effort)| {
-                let value = if efforts.iter().any(|effort| effort == catalog_effort) {
-                    Value::String(catalog_effort.to_string())
-                } else {
-                    Value::Null
-                };
-                (level.to_string(), value)
-            })
-            .collect(),
-    )
+fn thinking_config(efforts: &[String], transport: Transport) -> Option<Value> {
+    let levels: Vec<&str> = THINKING_EFFORTS
+        .into_iter()
+        .filter(|level| efforts.iter().any(|effort| effort == level))
+        .collect();
+    if levels.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "mode": match transport {
+            Transport::ChatCompletions => "effort",
+            Transport::AnthropicMessages => "anthropic-adaptive",
+        },
+        "efforts": levels,
+        "requiresEffort": !efforts.iter().any(|effort| effort == "none"),
+    }))
 }
 
 /// Output cap declared for every model. The gateway catalog carries a context
@@ -269,14 +262,11 @@ fn build_provider(
                     .map(|m| m.reasoning_efforts.as_slice())
                     .filter(|efforts| !efforts.is_empty())
                 {
-                    entry["reasoning"] = Value::Bool(true);
-                    entry["thinkingLevelMap"] = thinking_level_map(efforts);
-                    if matches!(transport, Transport::AnthropicMessages) {
-                        // The gateway accepts the adaptive control and maps it
-                        // to the ultimately selected Claude provider.
-                        entry["compat"] = serde_json::json!({
-                            "forceAdaptiveThinking": true,
-                        });
+                    let thinking = thinking_config(efforts, transport);
+                    entry["reasoning"] = Value::Bool(thinking.is_some());
+                    if let Some(thinking) = thinking {
+                        // Gateway translates thinking controls for the serving provider.
+                        entry["thinking"] = thinking;
                     }
                 }
                 if matches!(transport, Transport::AnthropicMessages) {
@@ -363,10 +353,9 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
 
     let pi = creds.pi.as_ref().unwrap();
     let api_key = &pi.api_key;
-    let session_id = reroute.create_session(&creds, "pi").await?;
-    util::report_cli_session(&creds, &session_id, "pi").await;
-
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let session_id = reroute.create_session(&creds, "pi").await?;
+
 
     let (models, catalog) = tokio::join!(
         util::fetch_gateway_models(&gateway_url, api_key),
@@ -607,28 +596,12 @@ mod tests {
         let model = &provider["models"][0];
 
         assert_eq!(model["reasoning"], serde_json::json!(true));
-        assert_eq!(model["thinkingLevelMap"]["off"], "none");
-        assert_eq!(model["thinkingLevelMap"]["minimal"], Value::Null);
-        for effort in ["low", "medium", "high", "xhigh", "max"] {
-            assert_eq!(model["thinkingLevelMap"][effort], effort);
-        }
-        assert!(model.get("compat").is_none());
-    }
-
-    #[test]
-    fn anthropic_reasoning_uses_adaptive_thinking() {
-        let models = vec!["anthropic/claude-sonnet-5".to_string()];
-        let catalog = catalog_with_efforts(
-            "anthropic/claude-sonnet-5",
-            Some(1_000_000),
-            &["none", "low", "medium", "high", "xhigh", "max"],
-        );
-        let provider = build_anthropic_provider("https://api.edgee.ai", &models, &catalog, None);
-
         assert_eq!(
-            provider["models"][0]["compat"]["forceAdaptiveThinking"],
-            true
+            model["thinking"]["efforts"],
+            serde_json::json!(["low", "medium", "high", "xhigh", "max"])
         );
+        assert_eq!(model["thinking"]["requiresEffort"], false);
+        assert!(model.get("compat").is_none());
     }
 
     #[test]
@@ -665,15 +638,21 @@ mod tests {
         );
 
         let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
-        let levels = &provider["models"][0]["thinkingLevelMap"];
+        let thinking = &provider["models"][0]["thinking"];
 
-        assert_eq!(levels["off"], Value::Null);
-        assert_eq!(levels["minimal"], Value::Null);
-        assert_eq!(levels["low"], "low");
-        assert_eq!(levels["medium"], Value::Null);
-        assert_eq!(levels["high"], "high");
-        assert_eq!(levels["xhigh"], Value::Null);
-        assert_eq!(levels["max"], "max");
+        assert_eq!(thinking["efforts"], serde_json::json!(["low", "high", "max"]));
+        assert_eq!(thinking["requiresEffort"], true);
+    }
+
+    #[test]
+    fn none_only_effort_does_not_enable_thinking() {
+        let models = vec!["anthropic/claude-sonnet-5".to_string()];
+        let catalog = catalog_with_efforts("anthropic/claude-sonnet-5", None, &["none"]);
+
+        let provider = build_anthropic_provider("https://api.edgee.ai", &models, &catalog, None);
+        let model = &provider["models"][0];
+        assert_eq!(model["reasoning"], false);
+        assert!(model.get("thinking").is_none());
     }
 
     #[test]
@@ -684,7 +663,7 @@ mod tests {
         let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
         let model = &provider["models"][0];
         assert!(model.get("reasoning").is_none());
-        assert!(model.get("thinkingLevelMap").is_none());
+        assert!(model.get("thinking").is_none());
         assert!(model.get("compat").is_none());
     }
 

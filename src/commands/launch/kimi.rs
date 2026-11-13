@@ -204,6 +204,13 @@ fn install_plugin(kimi_home: &Path, mcp_url: &str, system_prompt: &str, now: &st
 }
 
 pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    if reroute.is_active() {
+        let output = std::process::Command::new(util::resolve_binary("kimi"))
+            .arg("--version").output()
+            .map_err(|error| anyhow::anyhow!("Cannot verify Kimi custom-header support: {error}. Upgrade Kimi Code to 0.20.2 or newer before setting a session override."))?;
+        anyhow::ensure!(output.status.success() && supports_session_headers(&String::from_utf8_lossy(&output.stdout)),
+            "Session overrides require Kimi Code 0.20.2 or newer, which supports KIMI_CODE_CUSTOM_HEADERS. Upgrade Kimi Code or use organization pass-through mode.");
+    }
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -255,8 +262,6 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     // First-run: install Kimi's own statusline integration exactly once
     // (honors its own disable marker).
     util::ensure_kimi_first_run_installed().await;
-
-    util::report_cli_session(&creds, &session_id, "kimi").await;
 
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
@@ -360,9 +365,26 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     Ok(())
 }
 
+fn supports_session_headers(version: &str) -> bool {
+    version.split_whitespace().filter_map(|part| {
+        let mut parts = part.trim_matches(|c: char| !c.is_ascii_digit() && c != '.').split('.');
+        let version = (parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?);
+        parts.next().is_none().then_some(version)
+    }).any(|version| version >= (0, 20, 2))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_overrides_require_custom_header_support() {
+        assert!(!supports_session_headers("kimi, version 0.20.1"));
+        assert!(!supports_session_headers("unknown"));
+        assert!(supports_session_headers("kimi, version 0.20.2"));
+        assert!(supports_session_headers("kimi 1.0.0"));
+    }
 
     #[test]
     fn falls_back_to_the_default_model() {

@@ -732,12 +732,16 @@ pub struct ToolCompressionStat {
 #[derive(Debug, Serialize)]
 pub struct SessionRerouteRequest<'a> {
     pub api_key_id: &'a str,
-    pub source_model: &'a str,
-    pub target_model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_model: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_provider: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passthrough_mode: Option<bool>,
     pub expires_at: &'a str,
 }
 
@@ -1451,10 +1455,11 @@ mod tests {
             client.base_url = format!("http://{address}");
             let request = super::SessionRerouteRequest {
                 api_key_id: "key",
-                source_model: "*",
-                target_model: "openai/gpt-5",
+                source_model: Some("*"),
+                target_model: Some("openai/gpt-5"),
                 target_provider: None,
                 effort: None,
+                passthrough_mode: None,
                 expires_at: "2026-10-02T12:00:00Z",
             };
             let result = client
