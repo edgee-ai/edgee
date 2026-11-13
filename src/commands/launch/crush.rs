@@ -291,7 +291,6 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let crush = creds.crush.as_ref().unwrap();
     let api_key = &crush.api_key;
     let session_id = reroute.create_session(&creds, "crush").await?;
-    util::report_cli_session(&creds, &session_id, "crush").await;
 
 
     let mut config = find_global_config().unwrap_or_else(|| {
@@ -314,6 +313,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         &catalog,
         debug_log_headers,
     );
+    
     insert_edgee_provider(&mut config, edgee_provider);
 
     // Org plugins. Crush's own schema carries `options.skills_paths`, a top-level

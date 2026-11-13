@@ -16,6 +16,7 @@ mod preflight;
 pub mod codex_desktop;
 pub mod copilot_cli;
 pub mod copilot_desktop;
+pub mod copilot_xcode;
 pub mod android_studio;
 pub mod intellij;
 pub mod phpstorm;
@@ -82,6 +83,9 @@ enum Command {
     /// GitHub Copilot desktop app (macOS)
     #[command(name = "copilot-desktop")]
     CopilotDesktop(copilot_desktop::Options),
+    /// GitHub Copilot in Xcode (macOS, Xcode 27.3+)
+    #[command(name = "copilot-xcode", alias = "xcode-copilot")]
+    CopilotXcode(copilot_xcode::Options),
     /// Claude Desktop app
     #[command(name = "claude-desktop")]
     ClaudeDesktop(claude_desktop::Options),
@@ -99,6 +103,9 @@ pub struct Options {
 }
 
 pub async fn run(opts: Options) -> anyhow::Result<()> {
+    if opts.reroute.passthrough_mode && matches!(opts.command, Command::Cursor(_)) {
+        anyhow::bail!("Direct Cursor launch has no per-launch session ID. Use `edgee relay --passthrough cursor` or turn on Pass-through mode for the organization.");
+    }
     preflight::check(&opts.command)?;
     if opts.reroute.target.is_some() && matches!(opts.command, Command::Cursor(_)) {
         anyhow::bail!(
@@ -122,6 +129,7 @@ pub async fn run(opts: Options) -> anyhow::Result<()> {
         Command::Phpstorm(o) => phpstorm::run(o, reroute).await,
         Command::AndroidStudio(o) => android_studio::run(o, reroute).await,
         Command::CopilotDesktop(o) => copilot_desktop::run(o, reroute).await,
+        Command::CopilotXcode(o) => copilot_xcode::run(o, reroute).await,
         Command::Cursor(o) => cursor::run(o).await,
         Command::CopilotVscode(o) => copilot_vscode::run(o, reroute).await,
         Command::ClaudeDesktop(o) => claude_desktop::run(o, reroute).await,
@@ -305,6 +313,44 @@ mod tests {
     use clap::Parser;
 
     use super::*;
+
+    #[tokio::test]
+    async fn unsupported_passthrough_direct_launches_fail_before_preflight_or_authentication() {
+        for target in ["cursor"] {
+            let opts = crate::Options::try_parse_from(["edgee", "launch", "--passthrough", target]).unwrap();
+            let crate::commands::Command::Launch(launch) = opts.command else { panic!("wrong command") };
+            let error = run(launch).await.unwrap_err().to_string();
+            assert!(error.contains(&format!("edgee relay --passthrough {target}")));
+        }
+    }
+
+    #[test]
+    fn passthrough_flags_are_launch_scoped_and_preserve_agent_arguments() {
+        let opts = crate::Options::try_parse_from([
+            "edgee", "launch", "--passthrough", "--passthrough-duration", "1440",
+            "claude", "-p", "hello",
+        ]).unwrap();
+        let crate::commands::Command::Launch(launch) = opts.command else { panic!("wrong command") };
+        assert!(launch.reroute.passthrough_mode);
+        assert_eq!(launch.reroute.passthrough_duration, Some(1440));
+        let Command::Claude(agent) = launch.command else { panic!("wrong target") };
+        assert_eq!(agent.args, ["-p", "hello"]);
+        assert_eq!(claude_args(&["edgee", "launch", "claude", "--passthrough", "--passthrough-duration", "17"]),
+            ["--passthrough", "--passthrough-duration", "17"]);
+    }
+
+    #[test]
+    fn passthrough_rejects_invalid_duration_missing_flag_and_reroute_combination() {
+        for duration in ["0", "1441", "invalid"] {
+            assert!(crate::Options::try_parse_from([
+                "edgee", "launch", "--passthrough", "--passthrough-duration", duration, "claude",
+            ]).is_err());
+        }
+        assert!(crate::Options::try_parse_from(["edgee", "launch", "--passthrough-duration", "60", "claude"]).is_err());
+        assert!(crate::Options::try_parse_from(["edgee", "launch", "--passthrough", "--reroute", "openai/gpt-5", "claude"]).is_err());
+        assert!(crate::Options::try_parse_from(["edgee", "relay", "--passthrough-duration", "60", "claude"]).is_err());
+        assert!(crate::Options::try_parse_from(["edgee", "relay", "--passthrough", "--passthrough-duration", "60", "cursor"]).is_ok());
+    }
 
     #[test]
     fn reroute_flags_stay_before_the_target() {
@@ -612,6 +658,20 @@ mod tests {
         match opts.command {
             crate::commands::Command::Launch(launch) => match launch.command {
                 Command::CopilotDesktop(c) => assert_eq!(c.args, ["-p", "project", "--help"]),
+                other => panic!("wrong target: {other:?}"),
+            },
+            other => panic!("wrong command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn copilot_xcode_preserves_project_arguments() {
+        let opts = crate::Options::try_parse_from([
+            "edgee", "launch", "copilot-xcode", "MyApp.xcodeproj", "-h",
+        ]).expect("parses");
+        match opts.command {
+            crate::commands::Command::Launch(launch) => match launch.command {
+                Command::CopilotXcode(c) => assert_eq!(c.args, ["MyApp.xcodeproj", "-h"]),
                 other => panic!("wrong target: {other:?}"),
             },
             other => panic!("wrong command: {other:?}"),

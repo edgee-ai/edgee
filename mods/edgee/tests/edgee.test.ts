@@ -145,6 +145,20 @@ describe("edgee", () => {
     // The pane and the band show the reroute: no status line under the prompt too.
     expect(statuses).toEqual([]);
 
+    // An effort between the model and the minutes pins the target's reasoning effort.
+    // The harness wants a full command event; the mod reads only command and args.
+    const run = (args: string) => $.command.run({ command: "edgee", args } as unknown as Parameters<typeof $.command.run>[0]);
+    const pinned = await run("coder HIGH 30");
+    expect(pinned.text).toMatch(/rerouted to qwen\/qwen3-coder-next at high effort for 30 min/);
+    expect(calls.at(-1)).toEqual({
+      tool: "setSessionReroute",
+      args: { sessionId: "sess-1", targetModel: "qwen/qwen3-coder-next", durationMinutes: 30, effort: "high" },
+    });
+    expect((await run("")).text).toMatch(/Rerouted to qwen\/qwen3-coder-next \(high effort\)/);
+    const callsBefore = calls.length;
+    expect((await run("coder turbo 30")).text).toMatch(/Invalid effort "turbo"/);
+    expect(calls.slice(callsBefore).map((c) => c.tool)).toEqual(["listSessionModels"]);
+
     // Past expiry, the reroute is gone.
     now += 31 * 60_000;
     await $.turn.complete({ reason: "answer", answer: "ok", durationMs: 1 } as any);
@@ -440,5 +454,46 @@ describe("edgee", () => {
     expect(await band.find({ type: "Text", text: /Edgee/ })).toBeUndefined();
     await pane.unmount();
     await band.unmount();
+  });
+  test("a /clear keeps the line, or reopens the pane, from the stored choice", async ($, on) => {
+    const opens: { id: string; focus?: true }[] = [];
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("command.register", ($, e) => ({ value: { command: e.name } }));
+    on("env.get", ($, e) => ({ value: e.name === "EDGEE_SESSION_ID" ? "sess-1" : undefined }));
+    const clock = mock.clock(on);
+    on("ui.status", () => ({ value: undefined }));
+    on("mcp.call", () => text({ models: MODELS }));
+    on("ui.open", ($, e) => {
+      opens.push({ id: e.id, focus: e.focus });
+      return { value: { isPlaced: true } };
+    });
+    on("ui.close", () => ({ value: undefined }));
+    on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Box({ children: [] }));
+    mock.store(on);
+    // A /clear goes on under a new session with empty state and no session.start.
+    let cleared = false;
+    on("state.get", { plugin: "edgee", key: "minimized" } as any, ($, e, next) => (cleared ? { value: { value: undefined, version: 0 } } : next(e)));
+    on("state.set", { plugin: "edgee", key: "minimized" } as any, ($, e, next) => ((cleared = false), next(e)));
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const band = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS, viewport: FULLSCREEN });
+    expect(await band.find({ type: "Text", text: /● direct/ })).toBeDefined();
+
+    cleared = true;
+    const after = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS, viewport: FULLSCREEN });
+    expect(await after.find({ type: "Text", text: /● direct/ })).toBeDefined();
+    expect(opens).toEqual([]);
+
+    // Left expanded, the pane comes back once, without taking the keyboard.
+    await $.command.run({ command: "edgee", args: "panel" } as any);
+    cleared = true;
+    const expanded = await $.ui.mount({ plugin: "edgee", surface: "terminal", component: "AbovePrompt", props: BAND_PROPS, viewport: FULLSCREEN });
+    await clock.advance(0);
+    expect(opens).toEqual([{ id: "edgee-requests", focus: true }, { id: "edgee-requests", focus: undefined }]);
+    expect(await expanded.find({ type: "Text", text: /Edgee/ })).toBeUndefined();
+    expect(cleared).toBe(false);
+    await band.unmount();
+    await after.unmount();
+    await expanded.unmount();
   });
 });

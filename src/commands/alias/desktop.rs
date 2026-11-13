@@ -70,6 +70,14 @@ pub const COPILOT_DESKTOP_APP: AppSpec = AppSpec {
     legacy_display_names: &[],
 };
 
+pub const COPILOT_XCODE_APP: AppSpec = AppSpec {
+    id: "copilot-xcode",
+    display_name: "Xcode Copilot (Edgee)",
+    host_label: "Xcode",
+    launch_target: "copilot-xcode",
+    legacy_display_names: &[],
+};
+
 pub const INTELLIJ_APP: AppSpec = AppSpec {
     id: "intellij",
     display_name: "IntelliJ IDEA Copilot (Edgee)",
@@ -103,6 +111,7 @@ pub const ALL_APPS: &[AppSpec] = &[
     CLAUDE_DESKTOP_APP,
     CODEX_DESKTOP_APP,
     COPILOT_DESKTOP_APP,
+    COPILOT_XCODE_APP,
 ];
 
 #[derive(Clone, Copy)]
@@ -282,6 +291,7 @@ pub fn target_app_installed(app: &AppSpec) -> bool {
         "intellij" => crate::commands::launch::intellij::binary().is_ok(),
         "android-studio" => crate::commands::launch::android_studio::binary().is_ok(),
         "copilot-desktop" => crate::commands::launch::copilot_desktop::binary().is_ok(),
+        "copilot-xcode" => crate::commands::launch::copilot_xcode::binary().is_ok(),
         "codex-desktop" => crate::commands::launch::codex_desktop::binary().is_ok(),
         _ => false,
     }
@@ -549,6 +559,7 @@ fn macos_source_icns(app: &AppSpec) -> Option<PathBuf> {
     // ChatGPT.app's own icon is `electron.icns`; its `app.icns` is another image.
     let preferred: &[&str] = match app.id {
         "codex-desktop" => &["electron.icns"],
+        "copilot-xcode" => &["XcodeBeta.icns", "Xcode.icns"],
         _ => &[],
     };
     let bundle = match app.id {
@@ -557,6 +568,7 @@ fn macos_source_icns(app: &AppSpec) -> Option<PathBuf> {
             .or_else(|| find_macos_app("Code - Insiders.app"))?,
         "claude-desktop" => find_macos_app("Claude.app")?,
         "copilot-desktop" => find_macos_app("GitHub Copilot.app")?,
+        "copilot-xcode" => find_macos_app("Xcode-beta.app").or_else(|| find_macos_app("Xcode.app"))?,
         "codex-desktop" => find_macos_app("ChatGPT.app")?,
         _ => return None,
     };
