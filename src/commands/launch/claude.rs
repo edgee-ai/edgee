@@ -69,16 +69,16 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     // Step 4: launch claude with the correct env vars
     let claude = creds.claude.as_ref().unwrap();
     let api_key = &claude.api_key;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
     let session_id = reroute.create_session(&creds, "claude").await?;
+    
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
         .as_ref()
         .map(|url| format!("\nx-edgee-repo: {url}"))
         .unwrap_or_default();
 
-    util::report_cli_session(&creds, &session_id, "claude").await;
 
-    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
     let debug_log_header = util::resolve_debug_log_keypair()?
         .map(|keypair| {
             let headers = keypair.header_values();
@@ -101,9 +101,16 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
             ),
         );
 
-    // Set up the environment for the claude CLI to use 1M context window instead of the default 200k on Claude models.
-    cmd.env("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5-5[1m]")
-        .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5-5[1m]");
+    // On a plan connection the gateway forwards the user's own Anthropic subscription, so tell
+    // Claude Code to treat Edgee's base URL as Anthropic's API. Behind any other host, Claude
+    // Code skips its model catalog and `/model` falls back to a row Anthropic's server sends,
+    // which can lag a release (it kept offering Fable 5.1 after Fable 5.2 shipped).
+    // A value the user set themselves wins.
+    if claude.connection.as_deref() == Some("plan")
+        && std::env::var_os("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL").is_none()
+    {
+        cmd.env("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "1");
+    }
 
     // Step 4b: list the org's models in Claude Code's `/model` picker.
     // Best-effort: on any failure the picker keeps its built-in rows.

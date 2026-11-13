@@ -155,6 +155,7 @@ edgee launch android-studio # GitHub Copilot in Android Studio
 # GitHub Copilot CLI
 edgee launch copilot-cli
 edgee launch copilot-desktop  # GitHub Copilot app (macOS)
+edgee launch copilot-xcode    # GitHub Copilot in Xcode (macOS, Xcode 27.3+)
 
 # Claude Desktop (app)
 edgee launch claude-desktop
@@ -232,6 +233,43 @@ edgee launch opencode -c                   # continue the last OpenCode session
 edgee launch codebuddy --resume <id>       # resume a CodeBuddy session
 ```
 
+### Pass-through mode without bypassing Edgee
+
+```bash
+edgee launch --passthrough claude
+edgee launch --passthrough --passthrough-duration 120 codex
+edgee relay --passthrough --passthrough-duration 60 cursor
+```
+
+Place these options **before the agent name**. Pass-through mode is On for 60 minutes by default;
+`--passthrough-duration` accepts 1–1440 minutes, with no automatic renewal. It cannot be
+combined with `--reroute`.
+
+With Pass-through mode On, traffic stays through Edgee, but compression, brevity injection,
+tool-surface reduction, model reroutes and alternate-provider fallback stop. Authentication,
+security, budgets and usage accounting remain active. Existing bounded retries
+to the same destination remain possible. Stored settings and reroutes are retained
+and take effect again after expiry or when Pass-through mode is turned off.
+
+The CLI creates a normal launch session and saves Pass-through mode as an option
+on its existing session reroute override for each installed key before starting the agent.
+An API authentication, validation or write error
+prevents launch. Success confirms persistence, not acknowledgement from every gateway;
+no special request headers or gateway capability negotiation are required.
+Direct Cursor launch has no per-launch session ID: use its relay mode or organization
+Pass-through mode.
+Session overrides require Kimi Code 0.20.2 or newer for session-header support.
+OpenCode must start standalone: attaching to an existing server cannot install the
+new launch's session identity.
+
+Organization admins can also use **Settings → Gateway → Pass-through mode**.
+Choose **Turn on** to set it to **On**; it persists until an admin chooses **Turn off**
+to set it to **Off**. Organization settings override session controls.
+The session page provides a switch under session rerouting with a 24-hour expiry;
+its status shows saved configuration, not acknowledgement from every gateway. Turning session
+Pass-through mode Off does not override organization On or delete stored reroutes.
+Local MCP integrations, plugins and mods are not disabled.
+
 ### Reroute a session at launch
 
 Put Edgee reroute options **before the agent name**:
@@ -267,6 +305,7 @@ edgee alias intellij        # IntelliJ IDEA Copilot wrapper (requires the IDE in
 edgee alias phpstorm        # PHPStorm Copilot wrapper (requires the IDE installed)
 edgee alias android-studio  # Android Studio Copilot wrapper (requires the IDE installed)
 edgee alias copilot-desktop # GitHub Copilot app wrapper (macOS)
+edgee alias copilot-xcode   # Xcode Copilot wrapper (macOS)
 edgee alias claude-desktop  # Claude Desktop wrapper (skipped if Claude Desktop is not installed)
 edgee alias codex-desktop   # ChatGPT desktop app wrapper (skipped if the app is not installed)
 edgee alias remove          # undo
@@ -275,7 +314,7 @@ edgee alias remove          # undo
 This covers two kinds of targets:
 
 1. **CLI agents** (`claude`, `codebuddy`, `codex`, `opencode`, `crush`, `pi`, `omp`, `deepseek`, `kimi`, `kilo`) — shell aliases plus `~/.edgee/bin` PATH shims (Unix), so interactive and non-interactive shells route through Edgee. Reopen your terminal (or `exec $SHELL -l`) once after install.
-2. **Apps** (`cursor`, `copilot-vscode`, `copilot-desktop`, `claude-desktop`, `codex-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
+2. **Apps** (`cursor`, `copilot-vscode`, `copilot-desktop`, `copilot-xcode`, `claude-desktop`, `codex-desktop`) — desktop launchers only when the host app is already installed: `~/Applications/* (Edgee).app` on macOS, `.desktop` files on Linux, Start Menu shortcuts on Windows. They run `edgee launch …` under the hood.
 
 All CLI aliases are installed, including for agents you may install later. The
 command output only lists agents whose real executable is available on your
@@ -407,6 +446,7 @@ back your own command if `--wrap` had merged the two.
 | GitHub Copilot in PHPStorm | `edgee launch phpstorm` | Experimental; live validation pending |
 | GitHub Copilot in Android Studio | `edgee launch android-studio` | Experimental; live validation pending |
 | GitHub Copilot app (macOS, local sessions) | `edgee launch copilot-desktop` | ✅ Supported |
+| GitHub Copilot in Xcode (macOS, Xcode 27.3+) | `edgee launch copilot-xcode` | Experimental |
 | GitHub Copilot CLI | `edgee launch copilot-cli` | ✅ Supported |
 | Claude Desktop (Claude Code) | `edgee launch claude-desktop` | ✅ Supported |
 | ChatGPT desktop app (Codex tab) | `edgee launch codex-desktop` | ✅ Supported |
@@ -509,3 +549,16 @@ sharing `edgee settings copilot` with the CLI and VS Code. Remote/cloud sessions
 covered. Edgee plugin delivery and Windows/Linux desktop launch are not yet supported.
 Install the app from https://github.com/features/ai/github-app into `/Applications` or
 `~/Applications`. Verified with app 1.1.20, including a tool call and follow-up response.
+
+### GitHub Copilot in Xcode
+
+Quit Xcode completely, then run `edgee launch copilot-xcode` on macOS (Xcode 27.3 beta or
+later). Set up Copilot in **Xcode > Settings > Intelligence**. Xcode runs Copilot as a child
+process that inherits the connection Edgee configures, so your Copilot subscription is kept
+and usage is metered under **Copilot**. Ctrl-C closes Xcode before stopping the connection.
+`edgee alias copilot-xcode` installs an **Xcode Copilot (Edgee)** desktop wrapper.
+
+`Xcode-beta.app` is preferred over `Xcode.app` in `/Applications` or `~/Applications`; set
+`EDGEE_XCODE_BINARY` to `<bundle>/Contents/MacOS/Xcode` for any other location. Other coding
+assistant providers in Xcode (Claude Agent, Codex) are not routed by this target, and Edgee
+plugin delivery is not supported because Xcode chooses Copilot's arguments itself.
