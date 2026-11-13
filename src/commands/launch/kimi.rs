@@ -259,6 +259,9 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let api_key = &kimi.api_key;
     let session_id = reroute.create_session(&creds, "kimi").await?;
 
+    // First-run: install Kimi's own statusline integration exactly once
+    // (honors its own disable marker).
+    util::ensure_kimi_first_run_installed().await;
 
     let repo_origin = crate::git::detect_origin();
     let repo_header = repo_origin
