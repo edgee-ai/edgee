@@ -218,11 +218,10 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     // Step 4: build the inline config carrying the Edgee provider
     let kilo = creds.kilo.as_ref().unwrap();
     let api_key = &kilo.api_key;
-    let session_id = reroute.create_session(&creds, "kilo").await?;
-    util::report_cli_session(&creds, &session_id, "kilo").await;
-
-
     let gateway_url = super::resolve_gateway_base_url(&creds).await;
+    let session_id = reroute.create_session(&creds, "kilo").await?;
+
+
 
     let (models, catalog) = tokio::join!(
         util::fetch_gateway_models(&gateway_url, api_key),
@@ -238,6 +237,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         &catalog,
         debug_log_headers,
     );
+    
     let config_content = serde_json::to_string(&build_config_content(edgee_provider))?;
 
     // Step 5: launch kilo with the correct env vars

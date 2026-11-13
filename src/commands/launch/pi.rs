@@ -43,7 +43,7 @@ use crate::commands::util::plugins;
 
 /// npm release of `pi-edgee` that implements [`CONTRACT_VERSION`]. A CLI
 /// release must not pin a version that is not published yet.
-const PI_EDGEE_SPEC: &str = "npm:pi-edgee@0.2.1";
+const PI_EDGEE_SPEC: &str = "npm:pi-edgee@0.3.0";
 
 /// Local checkout or alternative spec to load instead of [`PI_EDGEE_SPEC`].
 const EXTENSION_OVERRIDE_ENV: &str = "EDGEE_PI_EXTENSION";
@@ -404,7 +404,6 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     }
 
     let session_id = reroute.create_session(&creds, "pi").await?;
-    util::report_cli_session(&creds, &session_id, "pi").await;
 
     let org = super::fetch_active_org(&creds).await;
     let gateway_url = super::gateway_base_url_with_org(org.as_ref());

@@ -47,12 +47,13 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     // Step 4: launch codebuddy with the correct env vars
     let codebuddy = creds.codebuddy.as_ref().unwrap();
     let api_key = &codebuddy.api_key;
+    let gateway_url = super::resolve_gateway_base_url(&creds).await;
     let session_id = reroute.create_session(&creds, "codebuddy").await?;
+    
 
-    util::report_cli_session(&creds, &session_id, "codebuddy").await;
 
     let repo_entry = crate::git::detect_origin()
-        .map(|url| format!(",\"x-edgee-repo\"=\"{url}\""))
+        .map(|url| format!("\nx-edgee-repo: {url}"))
         .unwrap_or_default();
     let debug_log_header = util::resolve_debug_log_keypair()?
         .map(|keypair| {
@@ -60,7 +61,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
             format!("\nx-edgee-debug-pubkey: {}\nx-edgee-debug-salt: {}", headers.pubkey, headers.salt)
         })
         .unwrap_or_default();
-    let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
+    let base_url = format!("{gateway_url}/v1");
     let mut cmd = std::process::Command::new(util::resolve_binary("codebuddy"));
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());

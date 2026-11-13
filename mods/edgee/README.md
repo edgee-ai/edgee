@@ -5,17 +5,22 @@ Edgee gateway. It calls the session reroute tools of the Edgee MCP server that
 `edgee launch claude` injects, with the session id from `EDGEE_SESSION_ID`.
 
 ```
-/edgee                    show the active reroute
-/edgee list [filter]      models this session's API key can use
-/edgee <model> [minutes]  reroute the session (default 60, max 1440)
-/edgee off                route normally again
-/edgee panel              open and focus the side pane
-/edgee minimize           fold the pane into one line above the prompt
+/edgee                             show the active reroute
+/edgee list [filter]               models this session's API key can use
+/edgee <model> [effort] [minutes]  reroute the session (default 60, max 1440)
+/edgee off                         route normally again
+/edgee panel                       open and focus the side pane
+/edgee minimize                    fold the pane into one line above the prompt
 ```
 
 `<model>` matches an exact id (`qwen/qwen3-coder-next`), a bare name
-(`qwen3-coder-next`) or a unique substring (`coder-next`). While a reroute is
-active, the pane's header and the minimized band show `⇄ <model> until HH:MM`.
+(`qwen3-coder-next`) or a unique substring (`coder-next`). `[effort]` pins the
+reasoning effort the target model is dispatched with: `none`, `minimal`,
+`low`, `medium`, `high`, `xhigh` or `max` (`/edgee glm-5 high 90`). Omitted,
+the request's own reasoning controls pass through. The gateway rejects an
+effort the target model does not support. While a reroute is active, the
+pane's header and the minimized band show `⇄ <model> until HH:MM`, with the
+pinned effort when there is one.
 
 ## Requests pane
 

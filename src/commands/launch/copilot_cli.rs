@@ -52,6 +52,12 @@ pub(crate) async fn prepare(
     let mut creds = crate::config::read()?;
     let mut extras = AgentExtras::default();
 
+    // The gateway relay is HTTP-only; disable native WebSocket Responses.
+    extras.env.push((
+        "COPILOT_CLI_DISABLE_WEBSOCKET_RESPONSES",
+        OsString::from("true"),
+    ));
+
     // The statusline Copilot runs is this very binary, not whichever `edgee`
     // (possibly an older release) is first on its PATH.
     if let Ok(exe) = std::env::current_exe() {

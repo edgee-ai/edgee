@@ -101,9 +101,10 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     // Step 3: launch codex with the correct env vars
     let codex = creds.codex.as_ref().unwrap();
     let api_key = &codex.api_key;
+    let gateway_url = super::gateway_base_url_with_org(org.as_ref());
     let session_id = reroute.create_session(&creds, "codex").await?;
+    
 
-    util::report_cli_session(&creds, &session_id, "codex").await;
 
     let repo_origin = crate::git::detect_origin();
     let repo_entry = repo_origin.as_ref()
@@ -115,7 +116,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
             format!(",\"x-edgee-debug-pubkey\"=\"{}\",\"x-edgee-debug-salt\"=\"{}\"", headers.pubkey, headers.salt)
         })
         .unwrap_or_default();
-    let base_url = format!("{}/v1", super::gateway_base_url_with_org(org.as_ref()));
+    let base_url = format!("{gateway_url}/v1");
     let codex_bin = util::resolve_binary("codex");
     let mut cmd = std::process::Command::new(&codex_bin);
     cmd.env("EDGEE_SESSION_ID", &session_id);
@@ -194,6 +195,7 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     Ok(())
 }
 
+
 /// Also run when removing the alias, to repair threads from older Edgee versions.
 pub(crate) fn ensure_saved_thread_provider() -> Result<()> {
     super::codex_config::ensure_fallback(&plugins::codex_home_source().join("config.toml"))
@@ -202,6 +204,7 @@ pub(crate) fn ensure_saved_thread_provider() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
 
     #[test]
     fn developer_instructions_round_trip_session_metadata() {
