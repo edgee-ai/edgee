@@ -719,8 +719,6 @@ dependencies = [
  "time",
  "tokio",
  "toml",
- "tracing",
- "tracing-subscriber",
  "uuid",
  "which",
  "x25519-dalek",
