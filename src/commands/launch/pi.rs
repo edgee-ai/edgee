@@ -43,7 +43,7 @@ use crate::commands::util::plugins;
 
 /// npm release of `pi-edgee` that implements [`CONTRACT_VERSION`]. A CLI
 /// release must not pin a version that is not published yet.
-const PI_EDGEE_SPEC: &str = "npm:pi-edgee@0.3.0";
+const PI_EDGEE_SPEC: &str = "npm:pi-edgee@0.3.1";
 
 /// Local checkout or alternative spec to load instead of [`PI_EDGEE_SPEC`].
 const EXTENSION_OVERRIDE_ENV: &str = "EDGEE_PI_EXTENSION";

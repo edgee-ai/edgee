@@ -69,11 +69,11 @@ const ANTHROPIC_PROVIDER_KEY: &str = "edgee-anthropic";
 const API_KEY_ENV: &str = "EDGEE_API_KEY";
 const SESSION_ID_ENV: &str = "EDGEE_SESSION_ID";
 
-/// npm package and release of the companion extension. `0.3.0` is the first
+/// npm package and release of the companion extension. `0.3.1` is the first
 /// release with `agent: "omp"` support; a CLI release must not pin a version
 /// that is not published yet.
 const EXTENSION_PACKAGE: &str = "pi-edgee";
-const EXTENSION_VERSION: &str = "0.3.0";
+const EXTENSION_VERSION: &str = "0.3.1";
 
 /// Local checkout of the extension to load instead of the pinned release.
 const EXTENSION_OVERRIDE_ENV: &str = "EDGEE_PI_EXTENSION";
