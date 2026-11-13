@@ -266,7 +266,6 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let kilo = creds.kilo.as_ref().unwrap();
     let api_key = &kilo.api_key;
     let session_id = reroute.create_session(&creds, "kilo").await?;
-    util::report_cli_session(&creds, &session_id, "kilo").await;
 
 
     let (models, catalog) = tokio::join!(

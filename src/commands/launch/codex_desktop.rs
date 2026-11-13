@@ -83,11 +83,11 @@ pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()
         .ok_or_else(|| {
             anyhow::anyhow!("no Edgee API key for 'codex_desktop'; run `edgee auth login`")
         })?;
+    let gateway_url = super::resolve_gateway_base_url(&creds).await;
     let session_id = reroute.create_session(&creds, "codex_desktop").await?;
 
-    util::report_cli_session(&creds, &session_id, "codex_desktop").await;
 
-    let base_url = format!("{}/v1", super::resolve_gateway_base_url(&creds).await);
+    let base_url = format!("{gateway_url}/v1");
     let debug_headers = util::resolve_debug_log_keypair()?.map(|k| k.header_values());
     // The app is always signed in to ChatGPT, so its Codex fetches the catalog itself
     // with no feature flag. Only wired once the gateway is seen serving it: a catalog
@@ -95,14 +95,12 @@ pub async fn run(_opts: Options, reroute: &super::reroute::Reroute) -> Result<()
     let catalog_url = super::codex_catalog::is_served(&base_url, &api_key)
         .await
         .then(|| super::codex_catalog::catalog_url(&base_url));
-    let block = render_provider_block(
-        &base_url,
-        &api_key,
-        &session_id,
-        crate::git::detect_origin().as_deref(),
-        debug_headers.as_ref(),
-        catalog_url.as_deref(),
-    );
+    let block = render_provider_block(&base_url,
+    &api_key,
+    &session_id,
+    crate::git::detect_origin().as_deref(),
+    debug_headers.as_ref(),
+    catalog_url.as_deref());
 
     let binary = binary()?;
     let config_path = codex_config_path()?;
@@ -600,19 +598,18 @@ mod tests {
     use super::*;
 
     fn block() -> ProviderBlock {
-        render_provider_block(
-            "https://edgee.io/v1",
-            "sk-edgee-test",
-            "session-123",
-            None,
-            None,
-            None,
-        )
+        render_provider_block("https://edgee.io/v1",
+        "sk-edgee-test",
+        "session-123",
+        None,
+        None,
+        None)
     }
 
     fn parse(text: &str) -> toml::Table {
         text.parse::<toml::Table>().expect("patched config parses")
     }
+
 
     #[test]
     fn patch_registers_the_edgee_provider() {
@@ -703,14 +700,12 @@ mod tests {
 
     #[test]
     fn optional_headers_are_included_when_present() {
-        let b = render_provider_block(
-            "https://edgee.io/v1",
-            "k",
-            "s",
-            Some("git@github.com:edgee-ai/edgee.git"),
-            None,
-            None,
-        );
+        let b = render_provider_block("https://edgee.io/v1",
+        "k",
+        "s",
+        Some("git@github.com:edgee-ai/edgee.git"),
+        None,
+        None);
         let doc = parse(&patch_config_text("", &b).unwrap());
         assert_eq!(
             doc["model_providers"][PROVIDER_ID]["http_headers"]["x-edgee-repo"].as_str(),
@@ -736,14 +731,12 @@ mod tests {
             .get("model_catalog_url")
             .is_none());
 
-        let b = render_provider_block(
-            "https://edgee.io/v1",
-            "k",
-            "s",
-            None,
-            None,
-            Some("https://edgee.io/v1/models?catalog=edgee"),
-        );
+        let b = render_provider_block("https://edgee.io/v1",
+        "k",
+        "s",
+        None,
+        None,
+        Some("https://edgee.io/v1/models?catalog=edgee"));
         let out = patch_config_text("model = \"gpt-5.5\"\n", &b).unwrap();
         let doc = parse(&out);
         assert_eq!(

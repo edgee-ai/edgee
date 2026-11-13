@@ -460,7 +460,24 @@ fn standalone_args(args: &[String]) -> Vec<String> {
     out
 }
 
+
+fn reject_session_override_server_attachment(args: &[String]) -> Result<()> {
+    anyhow::ensure!(
+        args.first().is_none_or(|arg| arg != "attach")
+            && !args.iter().take_while(|arg| arg.as_str() != "--").any(|arg| {
+                matches!(arg.as_str(), "--server" | "--attach")
+                    || arg.starts_with("--server=")
+                    || arg.starts_with("--attach=")
+            }),
+        "OpenCode server attachment cannot install this launch's session identity. Start a standalone session without --server/--attach, or use organization pass-through mode."
+    );
+    Ok(())
+}
+
 pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()> {
+    if reroute.is_active() {
+        reject_session_override_server_attachment(&opts.args)?;
+    }
     let mut creds = crate::config::read()?;
 
     // Step 1: ensure we are authenticated
@@ -508,7 +525,6 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let opencode = creds.opencode.as_ref().unwrap();
     let api_key = &opencode.api_key;
     let session_id = reroute.create_session(&creds, "opencode").await?;
-    util::report_cli_session(&creds, &session_id, "opencode").await;
 
 
     let mut config = find_user_config().unwrap_or_else(|| {
@@ -647,6 +663,20 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_overrides_reject_existing_server_attachment() {
+        for args in [
+            vec!["--server", "http://existing"],
+            vec!["run", "--server=http://existing"],
+            vec!["attach", "http://existing"],
+            vec!["run", "--attach", "http://existing"],
+        ] {
+            assert!(reject_session_override_server_attachment(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
+        }
+        assert!(reject_session_override_server_attachment(&["run".into(), "--".into(), "--server".into()]).is_ok());
+    }
+
 
     fn provider_with(models: &[&str], limits: &[(&str, u64)]) -> Value {
         let models: Vec<String> = models.iter().map(|m| m.to_string()).collect();
