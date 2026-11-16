@@ -139,7 +139,7 @@ fn emit(out: &mut Vec<PlannedFile>, plugin: &Plugin, dir: &str, kind: Kind, targ
                 }
                 out.push(PlannedFile {
                     path: skill_path(dir, &skill.name, target),
-                    contents: skill_md(skill),
+                    contents: skill_md(&plugin.id, skill),
                 });
             }
         }
@@ -215,9 +215,30 @@ fn manifest_json(plugin: &Plugin) -> String {
     pretty(&value)
 }
 
+/// The marker the gateway looks for to count a skill use. Every assistant loads
+/// a skill by putting its body into the conversation (a `Skill` tool result, a
+/// slash-command expansion, or a plain file read), so a marker in the body is
+/// seen on the next request whatever the assistant. It carries ids rather than
+/// names: names collide across plugins and change on rename.
+///
+/// Must stay in sync with the gateway's parser (`skill_usage` module).
+fn usage_marker(plugin_id: &str, skill_id: &str) -> Option<String> {
+    let valid = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 64
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    (valid(plugin_id) && valid(skill_id))
+        .then(|| format!("<!-- edgee:skill {plugin_id}/{skill_id} -->"))
+}
+
 /// SKILL.md frontmatter has no field for "when to use", so it is folded into the
 /// description — which is the text the assistant matches a task against anyway.
-fn skill_md(skill: &PluginSkill) -> String {
+///
+/// The usage marker goes first in the body, not last: an assistant that
+/// truncates a long skill keeps the start.
+fn skill_md(plugin_id: &str, skill: &PluginSkill) -> String {
     let mut description = skill.description.clone();
     if !skill.when_to_use.trim().is_empty() {
         if !description.is_empty() && !description.ends_with(['.', '!', '?']) {
@@ -230,8 +251,12 @@ fn skill_md(skill: &PluginSkill) -> String {
         description.push_str(skill.when_to_use.trim());
     }
 
+    let marker = usage_marker(plugin_id, &skill.id)
+        .map(|m| format!("{m}\n\n"))
+        .unwrap_or_default();
+
     format!(
-        "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+        "---\nname: {}\ndescription: {}\n---\n\n{marker}{}\n",
         skill.name,
         yaml_quote(&description),
         skill.body.trim_end()
@@ -514,6 +539,7 @@ mod tests {
             description: "How this team writes commits".into(),
             when_to_use: "Writing or amending a commit".into(),
             body: "Imperative mood.".into(),
+            ..Default::default()
         }];
 
         let md = find(&plan_tree(&[p], Target::Claude), "SKILL.md");
@@ -521,6 +547,43 @@ mod tests {
         assert!(md.contains("name: commit-style"));
         assert!(md.contains("Use when: Writing or amending a commit"));
         assert!(md.trim_end().ends_with("Imperative mood."));
+    }
+
+    #[test]
+    fn skill_body_starts_with_usage_marker() {
+        let mut p = plugin("house", true);
+        p.id = "6f1c2a4e-0b7d-4c1e-9a55-1f2e3d4c5b6a".into();
+        p.skills = vec![PluginSkill {
+            id: "sk-1".into(),
+            name: "commit-style".into(),
+            description: "How this team writes commits".into(),
+            body: "Imperative mood.".into(),
+            ..Default::default()
+        }];
+
+        let md = find(&plan_tree(&[p], Target::Claude), "SKILL.md");
+        let body = md.split("---\n").nth(2).expect("body after frontmatter");
+
+        assert!(body.trim_start().starts_with(
+            "<!-- edgee:skill 6f1c2a4e-0b7d-4c1e-9a55-1f2e3d4c5b6a/sk-1 -->\n\nImperative mood."
+        ));
+    }
+
+    /// An id that is missing or could break out of the comment is not rendered.
+    #[test]
+    fn usage_marker_requires_safe_ids() {
+        assert!(usage_marker("p", "").is_none());
+        assert!(usage_marker("", "s").is_none());
+        assert!(usage_marker("p", "s --> hi").is_none());
+        assert_eq!(
+            usage_marker("p", "s").as_deref(),
+            Some("<!-- edgee:skill p/s -->")
+        );
+        // Global plugins carry a `glb_` id.
+        assert_eq!(
+            usage_marker("glb_abc", "s-1").as_deref(),
+            Some("<!-- edgee:skill glb_abc/s-1 -->")
+        );
     }
 
     /// Broken frontmatter makes the assistant drop the skill without saying so,

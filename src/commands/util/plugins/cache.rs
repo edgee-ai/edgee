@@ -23,7 +23,10 @@ use crate::api::Plugin;
 /// agent tree and rebuilds, which per-plugin change detection cannot do — the
 /// plugins themselves may be untouched while the files we derive from them are
 /// no longer what this CLI would write.
-pub const LAYOUT_VERSION: u32 = 1;
+///
+/// 2: SKILL.md carries the skill-usage marker, which needs skill ids the v1
+/// cache never stored.
+pub const LAYOUT_VERSION: u32 = 2;
 
 const CACHE_FILE: &str = "index.json";
 

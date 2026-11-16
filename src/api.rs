@@ -457,6 +457,10 @@ pub struct KeySettings {
 /// A skill: markdown instructions the assistant loads when the task matches.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct PluginSkill {
+    /// Stable server-side id. Rendered into the usage marker so the gateway can
+    /// attribute a skill load even after the skill is renamed.
+    #[serde(default)]
+    pub id: String,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
