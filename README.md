@@ -523,6 +523,14 @@ cargo build
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide and [LICENSE](LICENSE) for the license
 text. For bigger changes, open an issue first so we can align before you build.
 
+### Dependency security
+
+[Dependabot](.github/dependabot.yml) is configured for security-only Cargo dependency
+PRs; routine version bumps are disabled. Keep the dependency graph, Dependabot
+alerts, and security updates enabled in GitHub repository settings. The config
+must be merged into the default branch (`main`) to apply.
+See [GitHub's setup guide](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-security-updates).
+
 ---
 
 ## Community
