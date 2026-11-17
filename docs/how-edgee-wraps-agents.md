@@ -442,10 +442,15 @@ target now does so automatically. For remaining migration paths, see
 
 ### What it is
 
-A `hudsucker`-based HTTP proxy bound to **127.0.0.1** on a fixed per-agent port (41100–41400). It is
+A `hudsucker`-based HTTP proxy bound to **127.0.0.1** on an OS-assigned available port. It is
 started by the launch command and runs in the foreground for that command's lifetime. For the GUI
 editors it keeps serving after the editor window is handed off, until the user presses Ctrl-C. It is
 never installed, never registered as a service, and never survives the terminal.
+
+Every relay reserves its listener before starting the client. Proxy-only mode also
+chooses an available port and prints its address; use `edgee relay <target> --no-launch
+--port <port>` for clients that need a stable address. Explicit `--port` values override
+automatic selection.
 
 The child app is pointed at it using conventional, documented plumbing:
 
@@ -756,13 +761,13 @@ public API, so integrations can be swapped underneath without breaking user alia
 ### GitHub Copilot app (`edgee launch copilot-desktop`)
 
 [Launch module](../src/commands/launch/copilot_desktop.rs). macOS local sessions only.
-The app binary is launched directly with:
+The app binary is launched directly with (`<port>` is the relay's assigned port):
 
 ```text
-HTTPS_PROXY=http://127.0.0.1:41600
-HTTP_PROXY=http://127.0.0.1:41600
-https_proxy=http://127.0.0.1:41600
-http_proxy=http://127.0.0.1:41600
+HTTPS_PROXY=http://127.0.0.1:<port>
+HTTP_PROXY=http://127.0.0.1:<port>
+https_proxy=http://127.0.0.1:<port>
+http_proxy=http://127.0.0.1:<port>
 NO_PROXY=localhost,127.0.0.1,::1 (plus existing exclusions)
 no_proxy=<same exclusions>
 NODE_EXTRA_CA_CERTS=~/.local/share/edgee/ca/edgee-copilot-ca.pem
@@ -790,13 +795,13 @@ Remote/cloud sessions and Windows/Linux desktop launching remain outside this in
 ### GitHub Copilot in Xcode (`edgee launch copilot-xcode`)
 
 [Launch module](../src/commands/launch/copilot_xcode.rs). macOS, Xcode 27.3 beta or later.
-The Xcode executable is launched directly with:
+The Xcode executable is launched directly with (`<port>` is the relay's assigned port):
 
 ```text
-HTTPS_PROXY=http://127.0.0.1:42200
-HTTP_PROXY=http://127.0.0.1:42200
-https_proxy=http://127.0.0.1:42200
-http_proxy=http://127.0.0.1:42200
+HTTPS_PROXY=http://127.0.0.1:<port>
+HTTP_PROXY=http://127.0.0.1:<port>
+https_proxy=http://127.0.0.1:<port>
+http_proxy=http://127.0.0.1:<port>
 NO_PROXY=localhost,127.0.0.1,::1 (plus existing exclusions)
 no_proxy=<same exclusions>
 NODE_EXTRA_CA_CERTS=~/.local/share/edgee/ca/edgee-copilot-ca.pem
