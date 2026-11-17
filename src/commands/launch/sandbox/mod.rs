@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn gateway_must_match_exact_https_origin() {
         let domains = policy::Policy::default().allowed_domains;
-        for host in ["edgee.io", "eu.edgee.io", "us.edgee.io", "apac.edgee.io"] {
+        for host in ["edgee.io", "eu.edgee.io", "us.edgee.io", "apac.edgee.io", "eu-static.edgee.io", "us-static.edgee.io"] {
             assert!(validate_gateway(&format!("https://{host}"), &domains).is_ok());
         }
         assert!(validate_gateway(crate::config::DEFAULT_GATEWAY_URL, &domains).is_ok());
@@ -655,6 +655,7 @@ mod tests {
         let policy: policy::Policy = toml::from_str("allowed_domains = ['eu.edgee.io']").unwrap();
         assert!(validate_gateway("https://eu.edgee.io", &policy.allowed_domains).is_ok());
         assert!(validate_gateway("https://us.edgee.io", &policy.allowed_domains).is_err());
+        assert!(validate_gateway("https://eu-static.edgee.io", &policy.allowed_domains).is_err());
     }
     #[test]
     fn workspace_credentials_are_rejected() {

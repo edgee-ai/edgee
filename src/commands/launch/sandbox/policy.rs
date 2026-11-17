@@ -42,6 +42,8 @@ impl Default for Policy {
                 "eu.edgee.io".into(),
                 "us.edgee.io".into(),
                 "apac.edgee.io".into(),
+                "eu-static.edgee.io".into(),
+                "us-static.edgee.io".into(),
                 "chatgpt.com".into(),
             ],
             read_paths: Vec::new(),

@@ -80,3 +80,10 @@ Seatbelt active. This check validates launch and policy selection, not a new
 model response against each regional gateway. Rejected gateways now report
 only their scheme/host/port and the allowlist, without URL credentials or query
 parameters.
+
+The default allowlist also includes `eu-static.edgee.io` and `us-static.edgee.io`.
+On November 17, `cargo run -- launch --sandbox codex --version` passed from
+this linked worktree with `EDGEE_API_URL` explicitly absent and Seatbelt active,
+using the configured static EU gateway. Both static domains are covered by
+origin validation tests; explicit administrator lists remain restrictive.
+The full local gate still passes (474 unit tests, 3 integration tests).
