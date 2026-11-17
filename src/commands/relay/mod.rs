@@ -218,10 +218,7 @@ setup_command! {
     /// Don't spawn the agent; just run the proxy (for external clients, e.g. Claude Desktop).
     #[arg(long)]
     pub no_launch: bool,
-    /// Port the proxy listens on. Copilot CLI launches use an OS-assigned port.
-    /// Otherwise defaults per agent (claude 41100, codex 41200, cursor 41300,
-    /// claude-desktop 41400, opencode 41500, copilot-desktop 41600, intellij 41700,
-    /// phpstorm 41800, pi 41900, omp 42000, android-studio 42100, copilot-xcode 42200).
+    /// Port the proxy listens on. Defaults to an OS-assigned available port.
     #[arg(long)]
     pub port: Option<u16>,
     /// Write relayed-traffic logs to this file (appended). If unset, logging is off.
@@ -371,7 +368,7 @@ async fn run_with_reroute(
         ensure_ca()?
     };
     let ca = build_ca(&cert_pem, &key_pem)?;
-    let listener = bind_listener(&agent, opts.port, !opts.no_launch).await?;
+    let listener = bind_listener(&agent, opts.port).await?;
     let addr = listener.local_addr().context("reading relay listen address")?;
     let port = addr.port();
 
@@ -645,40 +642,13 @@ impl AgentExtras {
     }
 }
 
-/// Reserve the listener before spawning the agent and hand that same socket to
-/// the proxy. Copilot CLI sessions need independent ports and gateway sessions.
-async fn bind_listener(
-    agent: &str,
-    port: Option<u16>,
-    launch: bool,
-) -> Result<tokio::net::TcpListener> {
-    let port = port.unwrap_or_else(|| match agent {
-        "copilot-cli" if launch => 0,
-        "copilot-desktop" => 41600,
-        "intellij" => 41700,
-        "phpstorm" => 41800,
-        "omp" => 42000,
-        "android-studio" => 42100,
-        "copilot-xcode" => 42200,
-        _ => default_port(key_provider(agent)),
-    });
+/// Keep the port reserved from selection through proxy startup.
+async fn bind_listener(agent: &str, port: Option<u16>) -> Result<tokio::net::TcpListener> {
+    let port = port.unwrap_or(0);
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     tokio::net::TcpListener::bind(addr).await.with_context(|| {
         format!("could not listen on {addr} for `edgee relay {agent}`. If the port is in use, stop the other listener or run `edgee relay {agent} --port 0`.")
     })
-}
-
-/// Default listen port per agent, picked from an uncommon range so two relays
-/// (`relay claude` + `relay codex`) don't collide out of the box.
-fn default_port(provider: &str) -> u16 {
-    match provider {
-        "codex" => 41200,
-        "cursor" => 41300,
-        "claude_desktop" => 41400,
-        "opencode" => 41500,
-        "pi" => 41900,
-        _ => 41100, // claude / copilot / proxy-only
-    }
 }
 
 /// Parse the resolved gateway URL into a reroute target.
@@ -1871,11 +1841,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_copilot_launches_have_isolated_listeners() {
+    async fn concurrent_relays_have_isolated_listeners() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let first = bind_listener("copilot-cli", None, true).await.unwrap();
-        let second = bind_listener("copilot-cli", None, true).await.unwrap();
+        let first = bind_listener("claude", None).await.unwrap();
+        let second = bind_listener("claude", None).await.unwrap();
         let first_addr = first.local_addr().unwrap();
         let second_addr = second.local_addr().unwrap();
         assert_ne!(first_addr, second_addr);
@@ -1900,10 +1870,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_copilot_port_stays_reserved_until_listener_drops() {
-        let first = bind_listener("copilot-cli", Some(0), true).await.unwrap();
+    async fn explicit_port_stays_reserved_until_listener_drops() {
+        let first = bind_listener("claude", Some(0)).await.unwrap();
         let addr = first.local_addr().unwrap();
-        let error = bind_listener("copilot-cli", Some(addr.port()), true)
+        let error = bind_listener("codex", Some(addr.port()))
             .await
             .unwrap_err();
         assert_eq!(
@@ -1911,7 +1881,7 @@ mod tests {
             std::io::ErrorKind::AddrInUse,
         );
         drop(first);
-        let next = bind_listener("copilot-cli", Some(addr.port()), true)
+        let next = bind_listener("codex", Some(addr.port()))
             .await
             .unwrap();
         assert_eq!(next.local_addr().unwrap(), addr);
@@ -2066,15 +2036,6 @@ mod tests {
     #[test]
     fn cursor_reroute_uses_cursor_key() {
         assert_eq!(key_provider("cursor"), "cursor");
-    }
-
-    #[test]
-    fn default_ports_are_distinct_per_agent() {
-        assert_eq!(default_port("claude"), 41100);
-        assert_eq!(default_port("codex"), 41200);
-        assert_eq!(default_port("cursor"), 41300);
-        assert_eq!(default_port("claude_desktop"), 41400);
-        assert_eq!(default_port("opencode"), 41500);
     }
 
     #[test]

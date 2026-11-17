@@ -549,11 +549,12 @@ real Copilot-billed traffic to `githubcopilot.com` reroutes through the
 gateway, preserving the user's actual GitHub Copilot subscription, which the
 BYOK lever cannot do.
 
-Each launch reserves its own OS-assigned loopback port, so multiple Copilot CLI
-sessions can run concurrently without sharing a relay or session attribution.
-The relay stops when its Copilot process exits. For external clients,
-`edgee relay copilot-cli --no-launch` keeps the fixed default port (`41100`);
-an explicit `edgee relay copilot-cli --port <port>` still takes precedence.
+Every relay reserves its own OS-assigned loopback port, so concurrent sessions
+do not share a relay or session attribution. The Copilot CLI relay stops when
+its Copilot process exits. Proxy-only mode also chooses an available port and
+prints the address for external clients; use `edgee relay <target> --no-launch
+--port <port>` when a client needs a stable address. Explicit `--port` values
+always take precedence.
 
 Launch sets `COPILOT_CLI_DISABLE_WEBSOCKET_RESPONSES=true` because the gateway
 relay supports HTTP Responses, not WebSocket upgrades. Model catalogs pass
@@ -630,8 +631,8 @@ Copilot CA in the macOS system keychain.
 
 This surface shares the established `copilot` key, settings and metering, as do
 `copilot-cli` and `copilot-vscode`. No new backend slug or gateway strategy is needed
-for this launcher. Its default port is 41600. App exit stops the relay; Ctrl-C closes
-the app before stopping the relay. Quit an existing app first to avoid singleton handoff.
+for this launcher. App exit stops the relay; Ctrl-C closes the app before stopping
+the relay. Quit an existing app first to avoid singleton handoff.
 
 Remote/cloud runtimes do not inherit local proxy settings. Plugin delivery remains
 unverified for all four component kinds and is reported as unsupported. Windows/Linux
@@ -659,20 +660,19 @@ A file-read turn completed a `tool_use` → `tool_result` → answer round trip 
 gateway. Xcode exposes its tools over MCP (`mcpbridge`) as `xcode-tools-Xcode*`
 (`XcodeRead`, `XcodeWrite`, `XcodeLS`, …), names no gateway trimming strategy knows yet.
 
-Default port 42200. Xcode exit stops the relay; Ctrl-C closes Xcode first. The beta bundle
+Xcode exit stops the relay; Ctrl-C closes Xcode first. The beta bundle
 is preferred over `Xcode.app`; `EDGEE_XCODE_BINARY` overrides. Plugin delivery is
 structurally unsupported — Xcode owns the child's argv and `COPILOT_HOME`.
 
-The relay now refuses to start when its port is already bound: the proxy runs in a
-detached task whose bind error was dropped, so a second launch used to open the app
-pointed at a dead proxy.
+The relay reserves an available port before launching Xcode and passes that same
+listener to the proxy, avoiding collisions with other relays.
 
 ## `intellij` — GitHub Copilot in IntelliJ IDEA
 
 Quit IntelliJ IDEA completely, then run `edgee launch intellij /path/to/project`.
 The GitHub Copilot plugin must be installed and signed in. The launch shares
 Copilot credentials, settings and usage attribution with the other Copilot targets.
-It uses a separate local port (41700) so it can run alongside them.
+It reserves an available local port so it can run alongside them.
 
 The IDE executable inherits proxy environment variables and `NODE_EXTRA_CA_CERTS`,
 which [GitHub documents for Copilot](https://docs.github.com/en/copilot/concepts/network-settings).
@@ -710,7 +710,7 @@ Keep the terminal running until the IDE quits. Live Copilot validation is pendin
 
 Quit Android Studio completely, then run `edgee launch android-studio /path/to/project`.
 Android Studio is built on the IntelliJ Platform, so it uses the same Copilot relay,
-proxy environment, Node CA and editor lifecycle as IntelliJ, on local port 42100.
+proxy environment, Node CA and editor lifecycle as IntelliJ, on an OS-assigned local port.
 Install and sign in to the GitHub Copilot plugin, and use **No proxy** in the IDE's
 HTTP Proxy settings so the launch environment applies. Only the GitHub Copilot
 plugin is routed; Gemini in Android Studio is out of scope.
@@ -730,8 +730,8 @@ Copilot. Both use the `pi` Edgee key for passthrough and intercept the Copilot h
 to the standard inference hosts. They do not inject Pi's Edgee extension or
 write OMP provider blocks. Select and sign in to GitHub Copilot in the agent.
 
-Pi defaults to port 41900 and OMP to 42000; `--port` overrides either.
-`--no-launch` runs just the proxy for an externally started client.
+Pi and OMP each reserve an available port; `--port` overrides either.
+`--no-launch` runs just the proxy and prints its address for an externally started client.
 Pi enables `NODE_USE_ENV_PROXY`; use a Node runtime that supports this flag for
 native fetch traffic. OMP receives `PI_PROXY` and `PI_PROXY_GITHUB_COPILOT`
 ([upstream proxy documentation](https://github.com/can1357/oh-my-pi/blob/main/docs/environment-variables.md)).
