@@ -65,3 +65,18 @@ existing system paths, and cleans up its own policy/install files.
 The repository's two preexisting ignored macro doctests are unrelated to
 sandbox isolation. See the [threat model](sandbox-threat-model.md) for residual
 limits. Passing an isolation test does not validate every native-agent workflow.
+
+## Gateway defaults correction (2026-11-17)
+
+The default sandbox allowlist now includes `edgee.io`, `eu.edgee.io`,
+`us.edgee.io` and `apac.edgee.io`, plus `chatgpt.com` for Codex discovery.
+The CLI gateway fallback is `https://edgee.io`. The legacy API URL in the
+November 12 test record above is historical, not the recommended setup.
+Unit tests cover all four origins, HTTPS/port restrictions, lookalike hostnames
+and explicit administrator policies that replace the defaults. Formatting,
+strict Clippy, 474 unit tests and 3 integration tests passed locally.
+A real macOS `codex --version` launch through `https://eu.edgee.io` passed with
+Seatbelt active. This check validates launch and policy selection, not a new
+model response against each regional gateway. Rejected gateways now report
+only their scheme/host/port and the allowlist, without URL credentials or query
+parameters.

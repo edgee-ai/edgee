@@ -358,7 +358,9 @@ fn validate_gateway(gateway: &str, domains: &[String]) -> Result<()> {
     anyhow::ensure!(url.scheme() == "https" && url.username().is_empty() && url.password().is_none()
         && url.port_or_known_default() == Some(443)
         && url.host_str().is_some_and(|host| domains.iter().any(|domain| domain == host)),
-        "Gateway must use HTTPS port 443 and an exact domain allowed by /etc/edgee/sandbox.toml. Ask your administrator to update the sandbox policy.");
+        "Gateway {}://{}:{} is not allowed by the sandbox. Use HTTPS port 443 and one of [{}], or ask your administrator to update /etc/edgee/sandbox.toml. URL credentials are not permitted.",
+        url.scheme(), url.host_str().unwrap_or("(missing host)"), url.port_or_known_default().unwrap_or(0), domains.join(", "));
+
     Ok(())
 }
 
@@ -633,17 +635,26 @@ mod tests {
     use super::*;
     #[test]
     fn gateway_must_match_exact_https_origin() {
-        let domains = vec!["api.edgee.ai".to_owned()];
-        assert!(validate_gateway("https://api.edgee.ai", &domains).is_ok());
+        let domains = policy::Policy::default().allowed_domains;
+        for host in ["edgee.io", "eu.edgee.io", "us.edgee.io", "apac.edgee.io"] {
+            assert!(validate_gateway(&format!("https://{host}"), &domains).is_ok());
+        }
+        assert!(validate_gateway(crate::config::DEFAULT_GATEWAY_URL, &domains).is_ok());
         for url in [
-            "http://api.edgee.ai",
-            "https://api.edgee.ai.evil.test",
+            "http://edgee.io",
+            "https://edgee.io.evil.test",
             "https://127.0.0.1",
-            "https://api.edgee.ai:8443",
+            "https://edgee.io:8443",
             "https://user@api.edgee.ai",
         ] {
             assert!(validate_gateway(url, &domains).is_err(), "{url}");
         }
+    }
+    #[test]
+    fn explicit_administrator_allowlist_is_not_extended_with_defaults() {
+        let policy: policy::Policy = toml::from_str("allowed_domains = ['eu.edgee.io']").unwrap();
+        assert!(validate_gateway("https://eu.edgee.io", &policy.allowed_domains).is_ok());
+        assert!(validate_gateway("https://us.edgee.io", &policy.allowed_domains).is_err());
     }
     #[test]
     fn workspace_credentials_are_rejected() {

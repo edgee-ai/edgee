@@ -36,7 +36,7 @@ sudo chmod -R go-w /usr/lib/edgee-sandbox-ci /etc/edgee
 stat -c "%A %U:%G %n" / /etc /etc/edgee /usr /usr/lib /usr/lib/edgee-sandbox-ci
 cat > "$fixture/policy.toml" <<'POLICY'
 mandatory = true
-allowed_domains = ["api.edgee.ai"]
+allowed_domains = ["edgee.io"]
 POLICY
 sudo install -m 0644 "$fixture/policy.toml" /etc/edgee/sandbox.toml
 

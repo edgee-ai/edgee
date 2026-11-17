@@ -371,7 +371,7 @@ pub fn console_api_base_url() -> String {
 
 /// Built-in fallback gateway used when neither a local override nor an
 /// org-configured gateway URL is available.
-pub const DEFAULT_GATEWAY_URL: &str = "https://api.edgee.ai";
+pub const DEFAULT_GATEWAY_URL: &str = "https://edgee.io";
 
 /// The `EDGEE_API_URL` env-var gateway override, if set and non-empty. This is
 /// the explicit escape hatch (e.g. pointing at `http://localhost:5000` for local

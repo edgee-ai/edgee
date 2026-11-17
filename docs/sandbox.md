@@ -62,12 +62,16 @@ Example (paths must exist):
 
 ```toml
 mandatory = true
-allowed_domains = ["api.edgee.ai", "chatgpt.com", "github.com", "registry.npmjs.org"]
+allowed_domains = ["edgee.io", "eu.edgee.io", "us.edgee.io", "apac.edgee.io", "chatgpt.com", "github.com", "registry.npmjs.org"]
 read_paths = ["/opt/edgee/toolchains"]
 ```
 
-The defaults are optional sandboxing, network access only to `api.edgee.ai` and `chatgpt.com` (Codex account/workspace discovery), and
-no additional readable toolchains. Exact DNS names only: no wildcards, localhost,
+The defaults are optional sandboxing, network access to `edgee.io`, `eu.edgee.io`,
+`us.edgee.io`, `apac.edgee.io` and `chatgpt.com` (Codex account/workspace discovery), and
+no additional readable toolchains. The built-in gateway fallback is `https://edgee.io`;
+profile/environment/organization gateway selection retains its existing precedence.
+An explicit administrator `allowed_domains` list replaces these defaults.
+Exact DNS names only: no wildcards, localhost,
 IP addresses, URLs or private-network names. DNS-resolved local/private addresses
 are rejected by the runtime proxy. The gateway must be HTTPS on port 443 and
 match an allowed domain. HTTPS redirects do not grant new allowed destinations.

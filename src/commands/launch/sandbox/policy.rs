@@ -37,7 +37,13 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             mandatory: false,
-            allowed_domains: vec!["api.edgee.ai".into(), "chatgpt.com".into()],
+            allowed_domains: vec![
+                "edgee.io".into(),
+                "eu.edgee.io".into(),
+                "us.edgee.io".into(),
+                "apac.edgee.io".into(),
+                "chatgpt.com".into(),
+            ],
             read_paths: Vec::new(),
             tool_path: TOOL_PATH.into(),
         }
@@ -540,7 +546,7 @@ mod tests {
         ] {
             assert!(!valid_domain(bad), "{bad}");
         }
-        assert!(valid_domain("api.edgee.ai"));
+        assert!(valid_domain("edgee.io"));
         assert!(valid_domain("registry.npmjs.org"));
     }
 
