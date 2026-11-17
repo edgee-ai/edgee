@@ -549,6 +549,12 @@ real Copilot-billed traffic to `githubcopilot.com` reroutes through the
 gateway, preserving the user's actual GitHub Copilot subscription, which the
 BYOK lever cannot do.
 
+Each launch reserves its own OS-assigned loopback port, so multiple Copilot CLI
+sessions can run concurrently without sharing a relay or session attribution.
+The relay stops when its Copilot process exits. For external clients,
+`edgee relay copilot-cli --no-launch` keeps the fixed default port (`41100`);
+an explicit `edgee relay copilot-cli --port <port>` still takes precedence.
+
 Launch sets `COPILOT_CLI_DISABLE_WEBSOCKET_RESPONSES=true` because the gateway
 relay supports HTTP Responses, not WebSocket upgrades. Model catalogs pass
 through unchanged; GitHub subscription credentials remain intact.
