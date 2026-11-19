@@ -133,6 +133,12 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         // because no upstream credential arrived. Harmless when the user isn't
         // logged in to codex — the header is simply omitted.
         "-c", "model_providers.edgee-cli.requires_openai_auth=true",
+        // Codex 0.167+ gates Daybreak (Cyber access programs) on this provider
+        // capability and refuses to start a Daybreak thread on any provider that
+        // doesn't declare it. The gateway forwards the user's ChatGPT/OpenAI
+        // credential upstream, so OpenAI still decides whether the account has
+        // access — we only stop the client from refusing before asking.
+        "-c", "model_providers.edgee-cli.capabilities.cyber_access_programs=true",
     ]);
     // Edgee model catalog for Codex's picker and model metadata; see `codex_catalog`.
     for arg in super::codex_catalog::cli_args(&codex_bin, "edgee-cli", &base_url, api_key).await {
