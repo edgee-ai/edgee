@@ -8,26 +8,40 @@ pub(super) const PROVIDER_ID: &str = "edgee-cli";
 const BEGIN: &str = "# >>> edgee saved-thread compatibility";
 const END: &str = "# <<< edgee saved-thread compatibility";
 
+const FALLBACK_PROVIDER: &str = "name = \"OpenAI\"\n\
+     wire_api = \"responses\"\n\
+     requires_openai_auth = true\n\
+     # Codex refuses Daybreak on providers that don't declare it.\n\
+     capabilities = { cyber_access_programs = true }\n";
+
+/// What Edgee wrote before declaring Daybreak support; upgraded in place.
+const LEGACY_FALLBACK_PROVIDER: &str =
+    "name = \"OpenAI\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n";
+
 /// No base URL: Codex chooses its normal endpoint from the OpenAI auth mode.
 /// No Edgee headers or selector: bare Codex must not keep routing through Edgee.
 pub(super) fn with_fallback(text: &str) -> Result<String> {
     let mut config: toml::Table = text
         .parse()
         .context("Invalid Codex config.toml; fix it and retry")?;
-    if config
-        .get("model_providers")
-        .and_then(|v| v.get(PROVIDER_ID))
-        .is_some()
-    {
-        return Ok(text.to_owned());
+    let mut text = text.to_owned();
+    if let Some(existing) = config.get("model_providers").and_then(|v| v.get(PROVIDER_ID)) {
+        // A provider the user defined themselves is never touched.
+        if existing.as_table() != Some(&LEGACY_FALLBACK_PROVIDER.parse::<toml::Table>()?) {
+            return Ok(text);
+        }
+        if text.lines().any(|line| line.trim() == BEGIN) {
+            text = strip_fallback(&text);
+            config = text
+                .parse()
+                .context("Invalid Codex config.toml; fix it and retry")?;
+        }
     }
     let appended = format!(
         "{text}\n{BEGIN}\n\
          # Saved Edgee threads use normal OpenAI authentication outside Edgee.\n\
          [model_providers.{PROVIDER_ID}]\n\
-         name = \"OpenAI\"\n\
-         wire_api = \"responses\"\n\
-         requires_openai_auth = true\n\
+         {FALLBACK_PROVIDER}\
          {END}\n"
     );
     if appended.parse::<toml::Table>().is_ok() {
@@ -41,8 +55,7 @@ pub(super) fn with_fallback(text: &str) -> Result<String> {
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .context("Invalid Codex model_providers; use a TOML table and retry")?;
-    let provider: toml::Table =
-        "name = 'OpenAI'\nwire_api = 'responses'\nrequires_openai_auth = true\n".parse()?;
+    let provider: toml::Table = FALLBACK_PROVIDER.parse()?;
     providers.insert(PROVIDER_ID.to_owned(), toml::Value::Table(provider));
     let updated = toml::to_string(&config).context("Serialize Codex compatibility config")?;
     updated
@@ -99,9 +112,43 @@ mod tests {
         let config: toml::Table = text.parse().unwrap();
         assert_eq!(config["model_provider"].as_str(), Some("openai"));
         let provider = config["model_providers"][PROVIDER_ID].as_table().unwrap();
-        assert_eq!(provider.len(), 3);
+        assert_eq!(provider.len(), 4);
         assert_eq!(provider["requires_openai_auth"].as_bool(), Some(true));
+        assert_eq!(
+            provider["capabilities"]["cyber_access_programs"].as_bool(),
+            Some(true)
+        );
         assert_eq!(with_fallback(&text).unwrap(), text);
+    }
+
+    #[test]
+    fn legacy_fallback_block_gains_daybreak_capability() {
+        let legacy = format!(
+            "model = 'x'\n\n{BEGIN}\n[model_providers.{PROVIDER_ID}]\n{LEGACY_FALLBACK_PROVIDER}{END}\n\
+             [projects.\"/tmp\"]\ntrust_level = 'trusted'\n"
+        );
+        let updated = with_fallback(&legacy).unwrap();
+        let config: toml::Table = updated.parse().unwrap();
+        let provider = &config["model_providers"][PROVIDER_ID];
+        assert_eq!(
+            provider["capabilities"]["cyber_access_programs"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(config["projects"]["/tmp"]["trust_level"].as_str(), Some("trusted"));
+        assert_eq!(updated.matches(BEGIN).count(), 1);
+        assert_eq!(with_fallback(&updated).unwrap(), updated);
+    }
+
+    #[test]
+    fn legacy_structural_fallback_gains_daybreak_capability() {
+        let legacy = "model_providers = { edgee-cli = { name = 'OpenAI', wire_api = 'responses', requires_openai_auth = true } }\n";
+        let updated = with_fallback(legacy).unwrap();
+        let config: toml::Table = updated.parse().unwrap();
+        assert_eq!(
+            config["model_providers"][PROVIDER_ID]["capabilities"]["cyber_access_programs"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(with_fallback(&updated).unwrap(), updated);
     }
 
     #[test]
