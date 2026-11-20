@@ -118,6 +118,8 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         .unwrap_or_default();
     let base_url = format!("{gateway_url}/v1");
     let codex_bin = util::resolve_binary("codex");
+    // Gateway auth is `x-edgee-api-key`; no ChatGPT login needed.
+    let requires_openai_auth = !crate::config::skip_agent_login_env();
     let mut cmd = std::process::Command::new(&codex_bin);
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
@@ -132,7 +134,8 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
         // flipped it, and every plan-connection request started 401ing gateway-side
         // because no upstream credential arrived. Harmless when the user isn't
         // logged in to codex — the header is simply omitted.
-        "-c", "model_providers.edgee-cli.requires_openai_auth=true",
+        // Off under `EDGEE_SKIP_AGENT_LOGIN=1`, where Codex must not ask for a login.
+        "-c", &format!("model_providers.edgee-cli.requires_openai_auth={requires_openai_auth}"),
         // Codex 0.167+ gates Daybreak (Cyber access programs) on this provider
         // capability and refuses to start a Daybreak thread on any provider that
         // doesn't declare it. The gateway forwards the user's ChatGPT/OpenAI

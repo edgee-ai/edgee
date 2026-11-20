@@ -101,6 +101,13 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
             ),
         );
 
+    // Opt-in: the Edgee key as bearer skips Claude's login and key prompt, but outranks
+    // the user's subscription. A user `ANTHROPIC_API_KEY` would outrank it, so drop it.
+    if crate::config::skip_agent_login_env() {
+        cmd.env("ANTHROPIC_AUTH_TOKEN", api_key)
+            .env_remove("ANTHROPIC_API_KEY");
+    }
+
     // On a plan connection the gateway forwards the user's own Anthropic subscription, so tell
     // Claude Code to treat Edgee's base URL as Anthropic's API. Behind any other host, Claude
     // Code skips its model catalog and `/model` falls back to a row Anthropic's server sends,
