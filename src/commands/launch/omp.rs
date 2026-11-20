@@ -73,7 +73,7 @@ const SESSION_ID_ENV: &str = "EDGEE_SESSION_ID";
 /// release with `agent: "omp"` support; a CLI release must not pin a version
 /// that is not published yet.
 const EXTENSION_PACKAGE: &str = "pi-edgee";
-const EXTENSION_VERSION: &str = "0.3.1";
+const EXTENSION_VERSION: &str = "0.3.2";
 
 /// Local checkout of the extension to load instead of the pinned release.
 const EXTENSION_OVERRIDE_ENV: &str = "EDGEE_PI_EXTENSION";
