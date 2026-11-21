@@ -4,6 +4,26 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// The console rejected the stored user token (HTTP 401): the login has
+/// expired. A distinct type rather than a message, so callers can tell "log in
+/// again" apart from a network failure (see `ensure_valid_provider_key`).
+/// Survives `.context()`; test for it with [`is_auth_expired`].
+#[derive(Debug)]
+pub struct AuthExpired;
+
+impl std::fmt::Display for AuthExpired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Authentication expired. Please run `edgee auth login` again.")
+    }
+}
+
+impl std::error::Error for AuthExpired {}
+
+/// Whether `err`, or any error it wraps, is an [`AuthExpired`].
+pub fn is_auth_expired(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<AuthExpired>().is_some()
+}
+
 pub struct ApiClient {
     http: reqwest::Client,
     base_url: String,
@@ -1054,9 +1074,7 @@ impl ApiClient {
             .ok()
             .and_then(|e| e.describe());
         match (status.as_u16(), server_msg) {
-            (401, _) => {
-                anyhow::bail!("Authentication expired. Please run `edgee auth login` again.")
-            }
+            (401, _) => Err(AuthExpired.into()),
             (_, Some(msg)) => anyhow::bail!("{msg}"),
             (s, None) => anyhow::bail!("Failed to get or create API key: HTTP {s}"),
         }
@@ -1093,9 +1111,7 @@ impl ApiClient {
             .and_then(|e| e.message)
             .filter(|m| !m.is_empty());
         match (status.as_u16(), server_msg) {
-            (401, _) => {
-                anyhow::bail!("Authentication expired. Please run `edgee auth login` again.")
-            }
+            (401, _) => Err(AuthExpired.into()),
             (_, Some(msg)) => anyhow::bail!("{msg}"),
             _ => anyhow::bail!("Failed to update key settings: HTTP {status}"),
         }
@@ -1292,7 +1308,7 @@ fn check_status(resp: &reqwest::Response, action: &str) -> Result<()> {
         return Ok(());
     }
     match status.as_u16() {
-        401 => anyhow::bail!("Authentication expired. Please run `edgee auth login` again."),
+        401 => Err(AuthExpired.into()),
         403 => anyhow::bail!(
             "Permission denied: you don't have access to {action} on this organization."
         ),
@@ -1565,6 +1581,65 @@ mod tests {
     }
 
     use super::*;
+
+    /// Serves one canned `status` response to whatever request arrives.
+    async fn one_shot_server(status: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let mut buf = [0; 1024];
+                let count = stream.read(&mut buf).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buf[..count]);
+            }
+            let body = "{}";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        (base, server)
+    }
+
+    #[tokio::test]
+    async fn rejected_token_is_auth_expired_through_context() {
+        let (base, server) = one_shot_server("401 Unauthorized").await;
+        let client = ApiClient::with_base_url("dead", &base).unwrap();
+        let err = client
+            .get_key_by_id("org", "key")
+            .await
+            .context("validating key")
+            .err()
+            .expect("a 401 must fail");
+        assert!(is_auth_expired(&err));
+        // The user-facing message is unchanged.
+        assert!(format!("{:#}", err).contains("run `edgee auth login` again"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn server_errors_are_not_auth_expired() {
+        let (base, server) = one_shot_server("500 Internal Server Error").await;
+        let client = ApiClient::with_base_url("token", &base).unwrap();
+        let err = client
+            .get_key_by_id("org", "key")
+            .await
+            .err()
+            .expect("a 500 must fail");
+        assert!(!is_auth_expired(&err));
+        server.await.unwrap();
+    }
 
     fn catalog_model(json: &str) -> GatewayModel {
         serde_json::from_str(json).unwrap()
