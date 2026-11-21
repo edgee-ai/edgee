@@ -406,7 +406,113 @@ pub struct ProviderKeyStatus {
 /// server was unreachable). A cached key is validated by id; only a
 /// definitive not-found or expiry triggers re-provisioning. Transient errors
 /// keep the existing key so a network blip never wipes a valid setup.
+///
+/// A rejected login (HTTP 401) is not transient. The agent's LLM traffic rides
+/// the cached key and would keep working, but the stored user token also
+/// authenticates the session MCP server the launch wires into the agent, so a
+/// dead token silently drops session names, repo/PR attribution and session
+/// reroutes. Every launch target funnels through here, which makes it the place
+/// to catch that: re-login in a terminal, warn without one (see
+/// [`expired_login_action`]).
 pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStatus> {
+    let err = match check_provider_key(provider).await {
+        Err(err) if crate::api::is_auth_expired(&err) => err,
+        other => return other,
+    };
+
+    // dialoguer and the browser flow need both ends of a terminal.
+    let tty = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    let has_cached_key = crate::config::read()?
+        .provider(provider)
+        .is_some_and(|c| !c.api_key.is_empty());
+
+    match expired_login_action(tty, has_cached_key) {
+        ExpiredLoginAction::Relogin => {
+            println!();
+            println!(
+                "  {}",
+                style("Your Edgee login has expired. Log in again to continue.").yellow()
+            );
+            refresh_expired_login().await?;
+            check_provider_key(provider).await
+        }
+        ExpiredLoginAction::KeepCachedKey => {
+            eprintln!(
+                "{} your Edgee login has expired. Requests still go through, but session \
+                 names, repo and PR attribution, and session reroutes are off until you run \
+                 `edgee auth login`.",
+                style("warning:").yellow().bold()
+            );
+            Ok(ProviderKeyStatus {
+                created: false,
+                compression: None,
+            })
+        }
+        ExpiredLoginAction::Fail => Err(err),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ExpiredLoginAction {
+    /// Run the browser login, then validate again.
+    Relogin,
+    /// No terminal to log in from: launch on the cached key and say what is off.
+    KeepCachedKey,
+    /// No terminal and no key to fall back on: surface the 401.
+    Fail,
+}
+
+/// What a launch does once the console has rejected the stored user token.
+/// Without a terminal (desktop relay, scripted runs) a login prompt would hang
+/// or fail, so a launch that still has a cached key proceeds rather than
+/// breaking requests that would otherwise work.
+fn expired_login_action(tty: bool, has_cached_key: bool) -> ExpiredLoginAction {
+    match (tty, has_cached_key) {
+        (true, _) => ExpiredLoginAction::Relogin,
+        (false, true) => ExpiredLoginAction::KeepCachedKey,
+        (false, false) => ExpiredLoginAction::Fail,
+    }
+}
+
+/// Re-authenticates after the console rejected the stored token, replacing
+/// only the token. Unlike [`perform_login`], which starts the profile over,
+/// this keeps the selected org, cached agent keys and connection choices, so
+/// the launch carries on where it was. Only the same account may refresh in
+/// place: another account must not inherit this profile's org and keys.
+async fn refresh_expired_login() -> Result<()> {
+    let (user_token, email, user_id) = browser_auth(true, false).await?;
+    let mut creds = crate::config::read()?;
+    if !same_account(&creds, user_id.as_deref(), email.as_deref()) {
+        anyhow::bail!(
+            "You logged in with a different account than this profile uses. \
+             Run `edgee auth login` to switch accounts."
+        );
+    }
+    creds.user_token = Some(user_token);
+    if email.is_some() {
+        creds.email = email;
+    }
+    if user_id.is_some() {
+        creds.user_id = user_id;
+    }
+    crate::config::write(&creds)?;
+    println!("  {}", style("Authenticated!").green().bold());
+    Ok(())
+}
+
+/// Whether a fresh login belongs to the account stored in `creds`. Compares
+/// user ids, else emails; a profile that recorded neither cannot be checked
+/// and is accepted.
+fn same_account(creds: &crate::config::Credentials, user_id: Option<&str>, email: Option<&str>) -> bool {
+    let known = |v: &Option<String>| v.as_deref().filter(|s| !s.is_empty()).map(str::to_owned);
+    match (known(&creds.user_id), user_id, known(&creds.email), email) {
+        (Some(stored), Some(fresh), _, _) => stored == fresh,
+        (_, _, Some(stored), Some(fresh)) => stored.eq_ignore_ascii_case(fresh),
+        _ => true,
+    }
+}
+
+async fn check_provider_key(provider: &str) -> Result<ProviderKeyStatus> {
     // Reject an unknown provider up front — otherwise a bad key falls through to
     // `fetch_provider_key`, which hits the server before failing on store.
     coding_assistant_name(provider)?;
@@ -464,6 +570,8 @@ pub async fn ensure_valid_provider_key(provider: &str) -> Result<ProviderKeyStat
             created: false,
             compression: key_item.compression,
         }),
+        // Login rejected → the caller decides how to recover.
+        Err(err) if crate::api::is_auth_expired(&err) => Err(err),
         // Server was unreachable → keep the cached key; compression unknown.
         Err(_) => Ok(ProviderKeyStatus {
             created: false,
@@ -831,5 +939,37 @@ mod tests {
     fn key_is_expired_false_for_no_expiry_sentinel() {
         use time::macros::datetime;
         assert!(!key_is_expired(datetime!(0001-01-01 00:00:00 UTC)));
+    }
+
+    #[test]
+    fn expired_login_relogs_in_a_terminal() {
+        assert_eq!(expired_login_action(true, true), ExpiredLoginAction::Relogin);
+        assert_eq!(expired_login_action(true, false), ExpiredLoginAction::Relogin);
+    }
+
+    #[test]
+    fn expired_login_without_terminal_keeps_a_cached_key_or_fails() {
+        assert_eq!(expired_login_action(false, true), ExpiredLoginAction::KeepCachedKey);
+        assert_eq!(expired_login_action(false, false), ExpiredLoginAction::Fail);
+    }
+
+    #[test]
+    fn refresh_accepts_only_the_profile_account() {
+        let creds = crate::config::Credentials {
+            user_id: Some("u1".into()),
+            email: Some("Dev@Example.com".into()),
+            ..Default::default()
+        };
+        assert!(same_account(&creds, Some("u1"), None));
+        assert!(!same_account(&creds, Some("u2"), Some("dev@example.com")));
+        // No fresh user id: fall back to a case-insensitive email match.
+        assert!(same_account(&creds, None, Some("dev@example.com")));
+        assert!(!same_account(&creds, None, Some("other@example.com")));
+    }
+
+    #[test]
+    fn refresh_accepts_a_profile_that_recorded_no_identity() {
+        let creds = crate::config::Credentials::default();
+        assert!(same_account(&creds, Some("u1"), Some("dev@example.com")));
     }
 }
