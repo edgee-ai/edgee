@@ -398,6 +398,9 @@ there is no Edgee inline display; an older Claude Code gets a hint to run `claud
 See [mod commands and limits](mods/edgee/README.md). Set `EDGEE_MODS_DISABLED=1`
 to disable the mod, or `EDGEE_NO_UPDATE_CHECK=1` to skip CLI update checks.
 
+Set `EDGEE_SKIP_AGENT_LOGIN=1` to run Claude Code and Codex on your Edgee key
+alone, with no Claude or ChatGPT login. Your own subscription is then not used.
+
 ---
 
 ## GitHub Copilot CLI statusline
