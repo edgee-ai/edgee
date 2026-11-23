@@ -103,7 +103,8 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
 
     // Opt-in: the Edgee key as bearer skips Claude's login and key prompt, but outranks
     // the user's subscription. A user `ANTHROPIC_API_KEY` would outrank it, so drop it.
-    if crate::config::skip_agent_login_env() {
+    let skip_login = crate::config::skip_agent_login_env();
+    if skip_login {
         cmd.env("ANTHROPIC_AUTH_TOKEN", api_key)
             .env_remove("ANTHROPIC_API_KEY");
     }
@@ -112,8 +113,9 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     // Claude Code to treat Edgee's base URL as Anthropic's API. Behind any other host, Claude
     // Code skips its model catalog and `/model` falls back to a row Anthropic's server sends,
     // which can lag a release (it kept offering Fable 5.1 after Fable 5.2 shipped).
-    // A value the user set themselves wins.
-    if claude.connection.as_deref() == Some("plan")
+    // A value the user set themselves wins. Without a login there is no subscription to forward.
+    if !skip_login
+        && claude.connection.as_deref() == Some("plan")
         && std::env::var_os("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL").is_none()
     {
         cmd.env("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "1");
@@ -121,7 +123,9 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
 
     // Step 4b: list the org's models in Claude Code's `/model` picker.
     // Best-effort: on any failure the picker keeps its built-in rows.
-    if let Some(arg) = model_picker_settings_arg(&opts.args, &creds, &gateway_url, api_key).await {
+    if let Some(arg) =
+        model_picker_settings_arg(&opts.args, &creds, &gateway_url, api_key, skip_login).await
+    {
         cmd.arg(arg);
     }
 
@@ -269,6 +273,7 @@ async fn model_picker_settings_arg(
     creds: &crate::config::Credentials,
     gateway_url: &str,
     api_key: &str,
+    skip_login: bool,
 ) -> Option<OsString> {
     if user_passes_settings(user_args) {
         return None;
@@ -289,7 +294,7 @@ async fn model_picker_settings_arg(
     )
     .await
     .ok()?;
-    let settings = model_picker_settings(&available.ok()?, &served)?;
+    let settings = model_picker_settings(&available.ok()?, &served, skip_login)?;
     let path = write_settings_file(&settings).ok()?;
     let mut arg = OsString::from("--settings=");
     arg.push(path);
@@ -316,9 +321,15 @@ const ONE_M_WINDOW: u64 = 1_000_000;
 /// listing (`served`; empty = fetch failed, no narrowing). Claude Code assumes
 /// 200K for unknown ids, so 1M+ windows get `[1m]` and sub-200K windows an
 /// earlier `autoCompactWindow`.
+///
+/// `no_claude` (no Claude login, so no subscription behind Claude Code's
+/// built-in rows) hides those rows, lists Claude models by their Edgee catalog
+/// id, and makes the first row the default so the session doesn't start on a
+/// built-in one.
 fn model_picker_settings(
     available: &[crate::api::GatewayModel],
     served: &[String],
+    no_claude: bool,
 ) -> Option<serde_json::Value> {
     let mut options = Vec::new();
     let mut model_settings = serde_json::Map::new();
@@ -335,8 +346,9 @@ fn model_picker_settings(
             continue;
         }
         // Claude models go by their bare id: the Claude plan upstream rejects
-        // `anthropic/…`, and Claude Code recognizes the bare id natively.
-        let base = if m.author_id == "anthropic" {
+        // `anthropic/…`, and Claude Code recognizes the bare id natively. With no
+        // Claude login there is no plan, so they keep the Edgee catalog id.
+        let base = if m.author_id == "anthropic" && !no_claude {
             m.model_id.clone()
         } else {
             id.clone()
@@ -367,7 +379,12 @@ fn model_picker_settings(
     if options.is_empty() {
         return None;
     }
+    let default_model = options[0]["model"].clone();
     let mut settings = serde_json::json!({ "modelPicker": { "options": options } });
+    if no_claude {
+        settings["modelPicker"]["replaceBuiltInOptions"] = serde_json::Value::Bool(true);
+        settings["model"] = default_model;
+    }
     if !model_settings.is_empty() {
         settings["modelSettings"] = serde_json::Value::Object(model_settings);
     }
@@ -478,7 +495,7 @@ mod tests {
             model(r#"{"model_id":"composer-2","author_id":"cursor","active":true,"providers":{"cursor":{"context_max_size":256000}}}"#),
             model(r#"{"model_id":"old","author_id":"acme","active":false,"providers":{"acme":{"context_max_size":256000}}}"#),
         ];
-        let settings = model_picker_settings(&available, &[]).unwrap();
+        let settings = model_picker_settings(&available, &[], false).unwrap();
         assert_eq!(
             picker_models(&settings),
             ["claude-opus-5-5", "moonshotai/kimi-k3"]
@@ -495,7 +512,7 @@ mod tests {
             model(r#"{"model_id":"a","author_id":"x","active":true,"providers":{"x":{}}}"#),
             model(r#"{"model_id":"b","author_id":"x","active":true,"providers":{"x":{}}}"#),
         ];
-        let settings = model_picker_settings(&available, &["x/b".to_string()]).unwrap();
+        let settings = model_picker_settings(&available, &["x/b".to_string()], false).unwrap();
         assert_eq!(picker_models(&settings), ["x/b"]);
     }
 
@@ -506,14 +523,33 @@ mod tests {
             model(r#"{"model_id":"small","author_id":"x","active":true,"providers":{"x":{"context_max_size":128000}}}"#),
             model(r#"{"model_id":"tiny","author_id":"x","active":true,"providers":{"x":{"context_max_size":32000}}}"#),
         ];
-        let settings = model_picker_settings(&available, &[]).unwrap();
+        let settings = model_picker_settings(&available, &[], false).unwrap();
         assert_eq!(picker_models(&settings), ["x/big[1m]", "x/small"]);
         assert_eq!(settings["modelSettings"]["x/small"]["autoCompactWindow"], 128000);
     }
 
     #[test]
     fn model_picker_is_omitted_when_nothing_to_add() {
-        assert!(model_picker_settings(&[], &[]).is_none());
+        assert!(model_picker_settings(&[], &[], false).is_none());
+    }
+
+    #[test]
+    fn model_picker_replaces_built_in_rows_without_a_claude_login() {
+        let available = [
+            model(r#"{"model_id":"claude-opus-5-5","author_id":"anthropic","active":true,"providers":{"anthropic":{"context_max_size":200000}}}"#),
+            model(r#"{"model_id":"kimi-k3","author_id":"moonshotai","display_name":"Kimi K3","active":true,"providers":{"moonshotai":{"context_max_size":256000}}}"#),
+        ];
+        let settings = model_picker_settings(&available, &[], true).unwrap();
+        assert_eq!(
+            picker_models(&settings),
+            ["anthropic/claude-opus-5-5", "moonshotai/kimi-k3"]
+        );
+        assert_eq!(settings["modelPicker"]["replaceBuiltInOptions"], true);
+        assert_eq!(settings["model"], "anthropic/claude-opus-5-5");
+
+        let with_login = model_picker_settings(&available, &[], false).unwrap();
+        assert!(with_login["modelPicker"].get("replaceBuiltInOptions").is_none());
+        assert!(with_login.get("model").is_none());
     }
 
     #[test]
