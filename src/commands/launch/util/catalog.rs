@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::api::GatewayModelCost;
+use crate::api::{GatewayLongContextCost, GatewayModelCost};
 
 /// What the console catalog knows about one model, beyond its id.
 #[derive(Debug, Clone, Default)]
@@ -9,6 +9,8 @@ pub struct ModelMetadata {
     pub context: Option<u64>,
     /// Per-million-token rates, in US dollars.
     pub cost: Option<GatewayModelCost>,
+    /// Rates above a prompt-size threshold, when the model has a premium tier.
+    pub long_context: Option<GatewayLongContextCost>,
     /// Gateway-normalized reasoning effort values accepted by the model.
     pub reasoning_efforts: Vec<String>,
     /// Input content types accepted by the model.
@@ -52,6 +54,7 @@ pub async fn fetch_model_catalog(creds: &crate::config::Credentials) -> ModelCat
                 ModelMetadata {
                     context: m.context_limit(),
                     cost: m.cost(),
+                    long_context: m.long_context_cost(),
                     reasoning_efforts: m.reasoning_efforts.clone(),
                     input_modalities: m.input_modalities.clone(),
                     app_subscription_only: m.app_subscription_only(),
