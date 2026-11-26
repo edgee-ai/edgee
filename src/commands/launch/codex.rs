@@ -119,7 +119,8 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
     let base_url = format!("{gateway_url}/v1");
     let codex_bin = util::resolve_binary("codex");
     // Gateway auth is `x-edgee-api-key`; no ChatGPT login needed.
-    let requires_openai_auth = !super::skip_agent_login_with_org(org.as_ref());
+    let requires_openai_auth =
+        !super::skip_agent_login_with_org(org.as_ref(), super::LoginAgent::Codex);
     let mut cmd = std::process::Command::new(&codex_bin);
     cmd.env("EDGEE_SESSION_ID", &session_id);
     cmd.env("EDGEE_ORG_SLUG", creds.org_slug.as_deref().unwrap_or_default());
