@@ -350,6 +350,18 @@ fn build_provider(
                         "cacheRead": cost.cache_read,
                         "cacheWrite": cost.cache_write,
                     });
+                    // Not in OMP's `models.yml` schema, but kept and applied by
+                    // its cost calculation (checked against v19.2.0): over the
+                    // threshold, the whole request uses these rates.
+                    if let Some(long) = metadata.and_then(|m| m.long_context) {
+                        entry["cost"]["longContext"] = serde_json::json!({
+                            "inputThreshold": long.input_threshold,
+                            "input": long.cost.input,
+                            "output": long.cost.output,
+                            "cacheRead": long.cost.cache_read,
+                            "cacheWrite": long.cost.cache_write,
+                        });
+                    }
                 }
                 if let Some(efforts) = metadata
                     .map(|m| m.reasoning_efforts.as_slice())
@@ -707,10 +719,8 @@ mod tests {
             id.to_string(),
             util::ModelMetadata {
                 context,
-                cost: None,
                 reasoning_efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
-                input_modalities: Vec::new(),
-                app_subscription_only: false,
+                ..Default::default()
             },
         );
         catalog
@@ -741,6 +751,55 @@ mod tests {
             provider["models"][0]["input"],
             serde_json::json!(["text", "image"])
         );
+    }
+
+    #[test]
+    fn declares_long_context_rates_with_the_base_cost() {
+        let rates = |input, output, cache_read, cache_write| crate::api::GatewayModelCost {
+            input,
+            output,
+            cache_read,
+            cache_write,
+        };
+        let models = vec![
+            "anthropic/claude-haiku-5-5".to_string(),
+            "anthropic/claude-opus-5-5".to_string(),
+        ];
+        let catalog: util::ModelCatalog = [
+            (
+                "anthropic/claude-haiku-5-5".to_string(),
+                util::ModelMetadata {
+                    cost: Some(rates(0.1, 0.5, 0.01, 0.125)),
+                    long_context: Some(crate::api::GatewayLongContextCost {
+                        input_threshold: 100_000,
+                        cost: rates(0.5, 2.5, 0.05, 0.625),
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                "anthropic/claude-opus-5-5".to_string(),
+                util::ModelMetadata {
+                    cost: Some(rates(4.0, 20.0, 0.2, 5.0)),
+                    ..Default::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let provider = build_edgee_provider("https://api.edgee.ai", &models, &catalog, None);
+        assert_eq!(
+            provider["models"][0]["cost"],
+            serde_json::json!({
+                "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125,
+                "longContext": {
+                    "inputThreshold": 100_000,
+                    "input": 0.5, "output": 2.5, "cacheRead": 0.05, "cacheWrite": 0.625,
+                },
+            })
+        );
+        assert!(provider["models"][1]["cost"].get("longContext").is_none());
     }
 
     #[test]

@@ -318,6 +318,34 @@ pub struct GatewayModelProvider {
     pub cached_input_token_cost_per_million: f64,
     #[serde(default)]
     pub cache_creation_input_token_cost_per_million: f64,
+    /// Long-context premiums, e.g. Claude Haiku 5.5 above 100K prompt tokens.
+    #[serde(default)]
+    pub pricing_tiers: Vec<GatewayPricingTier>,
+}
+
+/// A premium tier billing the whole request once its prompt (input, cache reads
+/// and cache writes) exceeds `threshold_tokens`. A zero rate means the
+/// provider's base rate applies, as in the gateway's own billing.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GatewayPricingTier {
+    #[serde(default)]
+    pub threshold_tokens: u64,
+    #[serde(default)]
+    pub input_token_cost_per_million: f64,
+    #[serde(default)]
+    pub output_token_cost_per_million: f64,
+    #[serde(default)]
+    pub cached_input_token_cost_per_million: f64,
+    #[serde(default)]
+    pub cache_creation_input_token_cost_per_million: f64,
+}
+
+/// Rates that replace the base rates for a request whose prompt exceeds
+/// `input_threshold` tokens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GatewayLongContextCost {
+    pub input_threshold: u64,
+    pub cost: GatewayModelCost,
 }
 
 /// Per-million-token rates for a model, in US dollars.
@@ -463,6 +491,33 @@ impl GatewayModel {
             output: p.output_token_cost_per_million,
             cache_read: p.cached_input_token_cost_per_million,
             cache_write: p.cache_creation_input_token_cost_per_million,
+        })
+    }
+
+    /// The long-context rates to advertise next to [`Self::cost`], from the same
+    /// provider. Agents model a single tier, so with several the lowest
+    /// threshold wins: it is exact up to the next threshold, where the gateway
+    /// switches again.
+    pub fn long_context_cost(&self) -> Option<GatewayLongContextCost> {
+        let provider = self.preferred_provider()?;
+        let base = self.cost()?;
+        let tier = provider
+            .pricing_tiers
+            .iter()
+            .filter(|t| t.threshold_tokens > 0)
+            .min_by_key(|t| t.threshold_tokens)?;
+        let or_base = |rate: f64, base: f64| if rate > 0.0 { rate } else { base };
+        Some(GatewayLongContextCost {
+            input_threshold: tier.threshold_tokens,
+            cost: GatewayModelCost {
+                input: or_base(tier.input_token_cost_per_million, base.input),
+                output: or_base(tier.output_token_cost_per_million, base.output),
+                cache_read: or_base(tier.cached_input_token_cost_per_million, base.cache_read),
+                cache_write: or_base(
+                    tier.cache_creation_input_token_cost_per_million,
+                    base.cache_write,
+                ),
+            },
         })
     }
 }
@@ -1738,6 +1793,40 @@ mod tests {
                  "vertex":{"context_max_size":0}}}"#,
         );
         assert_eq!(m.context_limit(), Some(8192));
+    }
+
+    #[test]
+    fn long_context_cost_takes_the_lowest_tier_and_fills_zero_rates_from_base() {
+        let m = catalog_model(
+            r#"{"model_id":"claude-haiku-5-5","author_id":"anthropic","providers":{
+                 "anthropic":{"context_max_size":1000000,
+                   "input_token_cost_per_million":0.1,"output_token_cost_per_million":0.5,
+                   "cached_input_token_cost_per_million":0.01,
+                   "cache_creation_input_token_cost_per_million":0.125,
+                   "pricing_tiers":[
+                     {"threshold_tokens":500000,"input_token_cost_per_million":9},
+                     {"threshold_tokens":100000,"input_token_cost":500,
+                      "input_token_cost_per_million":0.5,"output_token_cost_per_million":2.5,
+                      "cached_input_token_cost_per_million":0.05}]}}}"#,
+        );
+        assert_eq!(
+            m.long_context_cost(),
+            Some(GatewayLongContextCost {
+                input_threshold: 100_000,
+                cost: GatewayModelCost {
+                    input: 0.5,
+                    output: 2.5,
+                    cache_read: 0.05,
+                    cache_write: 0.125,
+                },
+            })
+        );
+
+        let flat = catalog_model(
+            r#"{"model_id":"claude-opus-5-5","author_id":"anthropic","providers":{
+                 "anthropic":{"input_token_cost_per_million":4}}}"#,
+        );
+        assert_eq!(flat.long_context_cost(), None);
     }
 
     #[test]
