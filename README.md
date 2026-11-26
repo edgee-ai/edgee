@@ -105,6 +105,10 @@ present; native-only traffic routes by its native ID. Every injected Edgee MCP
 transport preserves user-token authentication and sends `X-Edgee-Launch-Id` with
 the actual launch ID, allowing resumed-session controls to target the current run.
 
+The injected MCP prompt asks agents to update the session name as the task becomes
+clearer or changes, but skip the call if the proposed name matches the last name
+successfully set for that conversation.
+
 ---
 
 ## Quickstart
