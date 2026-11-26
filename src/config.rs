@@ -430,14 +430,15 @@ pub fn mods_disabled_env_override() -> Option<bool> {
     parse_bool_flag(&std::env::var("EDGEE_MODS_DISABLED").ok()?)
 }
 
-/// Opt-in for running coding agents on the Edgee key alone
-/// (`EDGEE_SKIP_AGENT_LOGIN=1`): Claude Code and Codex never ask for their own
-/// login, and the user's own subscription is not used. Off by default.
-pub fn skip_agent_login_env() -> bool {
-    std::env::var("EDGEE_SKIP_AGENT_LOGIN")
-        .ok()
-        .and_then(|raw| parse_bool_flag(&raw))
-        .unwrap_or(false)
+/// The `EDGEE_SKIP_AGENT_LOGIN` env-var override, if set and parseable.
+///
+/// `1`/`true`/`yes`/`on` runs Claude Code and Codex on the Edgee key alone: they
+/// never ask for their own login, and the user's own subscription is not used.
+/// `0`/`false`/`no`/`off` forces the normal login flow even when an org admin
+/// marked the member "Edgee only" for that agent in the console. See
+/// `commands::launch::skip_agent_login_with_org`.
+pub fn skip_agent_login_env_override() -> Option<bool> {
+    parse_bool_flag(&std::env::var("EDGEE_SKIP_AGENT_LOGIN").ok()?)
 }
 
 /// Edgee's home-anchored directory (`~/.edgee`), already the home of the

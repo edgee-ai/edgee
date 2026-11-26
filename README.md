@@ -400,6 +400,10 @@ to disable the mod, or `EDGEE_NO_UPDATE_CHECK=1` to skip CLI update checks.
 
 Set `EDGEE_SKIP_AGENT_LOGIN=1` to run Claude Code and Codex on your Edgee key
 alone, with no Claude or ChatGPT login. Your own subscription is then not used.
+An org admin can do the same per member and per agent from the console (Team →
+Members → **Claude: Edgee only** / **Codex: Edgee only**). When set, the env var
+wins either way for both agents: `EDGEE_SKIP_AGENT_LOGIN=0` restores the normal
+login for a flagged member.
 
 ---
 

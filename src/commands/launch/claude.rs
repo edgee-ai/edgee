@@ -101,9 +101,10 @@ pub async fn run(opts: Options, reroute: &super::reroute::Reroute) -> Result<()>
             ),
         );
 
-    // Opt-in: the Edgee key as bearer skips Claude's login and key prompt, but outranks
-    // the user's subscription. A user `ANTHROPIC_API_KEY` would outrank it, so drop it.
-    let skip_login = crate::config::skip_agent_login_env();
+    // Opt-in (env var or the member's console flag): the Edgee key as bearer skips Claude's
+    // login and key prompt, but outranks the user's subscription. A user `ANTHROPIC_API_KEY`
+    // would outrank it, so drop it.
+    let skip_login = super::skip_agent_login_with_org(org.as_ref(), super::LoginAgent::Claude);
     if skip_login {
         cmd.env("ANTHROPIC_AUTH_TOKEN", api_key)
             .env_remove("ANTHROPIC_API_KEY");

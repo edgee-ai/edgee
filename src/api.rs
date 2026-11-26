@@ -204,6 +204,13 @@ pub struct Organization {
     /// allowed.
     #[serde(default)]
     pub mcp_injection_disabled: bool,
+    /// The caller's own per-agent "Edgee only" flags, set per member by an org admin in the
+    /// console: that agent (Claude Code, Codex) runs on the Edgee key without its own login.
+    /// Absent (older API) deserializes to `false`.
+    #[serde(default)]
+    pub skip_claude_login: bool,
+    #[serde(default)]
+    pub skip_codex_login: bool,
 }
 
 #[derive(Deserialize)]
