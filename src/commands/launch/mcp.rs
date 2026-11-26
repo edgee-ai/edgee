@@ -50,7 +50,7 @@ Always pass this launch ID as sessionId to the Edgee MCP tools below. Edgee maps
 
 You MUST use the following Edgee MCP tools during this session:
 
-1. `setSessionName` — give the session a short descriptive name (3-6 words) summarizing what the user is working on. Call it once you understand the task, which may take more than one exchange, and call it again whenever the task becomes clearer or changes (the real scope shows up after exploring the code, the user pivots, or the user asks for a name). Always call it at the END of a response, as your last tool call before you reply, never before doing anything else. Arguments:
+1. `setSessionName` — give the conversation a short descriptive name (3-6 words) summarizing what the user is working on. Once you know the launch ID and can name the task, call this tool at the END of a response, as your last tool call before you reply. If the call fails, retry only at the end of a later response. Once it succeeds, do not call it again in this conversation unless the user asks for a different name. Never resend a name that is already set, even if you have learned more about the task. Arguments:
    - sessionId: "{session_id}"
    - name: the descriptive name.
 
