@@ -50,7 +50,7 @@ Always pass this launch ID as sessionId to the Edgee MCP tools below. Edgee maps
 
 You MUST use the following Edgee MCP tools during this session:
 
-1. `setSessionName` — give the conversation a short descriptive name (3-6 words) summarizing what the user is working on. Once you know the launch ID and can name the task, call this tool at the END of a response, as your last tool call before you reply. If the call fails, retry only at the end of a later response. Once it succeeds, do not call it again in this conversation unless the user asks for a different name. Never resend a name that is already set, even if you have learned more about the task. Arguments:
+1. `setSessionName` — give the session a short descriptive name (3-6 words) summarizing what the user is working on. Call it once you understand the task, which may take more than one exchange, and call it again whenever the task becomes clearer or changes (the real scope shows up after exploring the code, the user pivots, or the user asks for a name). Never send the same name twice: if the proposed name matches the last name you successfully set in this conversation, skip the call. If no earlier successful call is visible, call it once. When a call is needed, make it once, as your last tool call before your final reply — not at the end of every reply. Arguments:
    - sessionId: "{session_id}"
    - name: the descriptive name.
 
@@ -79,7 +79,9 @@ mod tests {
         // lands a few seconds after each request; naming first would hit the
         // previous conversation after /clear or /new.
         let prompt = session_instructions("launch-1", Some("owner/repo"), "https://console/s");
-        assert!(prompt.contains("at the END of a response"));
+        assert!(prompt.contains("Never send the same name twice"));
+        assert!(prompt.contains("If no earlier successful call is visible, call it once."));
+        assert!(prompt.contains("not at the end of every reply"));
         assert!(!prompt.contains("Prefer calling it once"));
         assert!(!prompt.contains("immediately after the user's first message"));
         assert!(!prompt.contains("substitutes"));
