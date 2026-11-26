@@ -243,6 +243,23 @@ pub fn mcp_injection_disabled_with_org(org: Option<&crate::api::Organization>) -
     org.is_some_and(|o| o.mcp_injection_disabled)
 }
 
+/// Whether Claude Code and Codex run on the Edgee key alone for this launch,
+/// without asking for their own Claude or ChatGPT login, with the org already
+/// fetched (or `None`).
+///
+/// Precedence (highest first):
+/// 1. `EDGEE_SKIP_AGENT_LOGIN` env var — either way, so a member flagged in the
+///    console can still use their own subscription for one launch.
+/// 2. The caller's own `skip_agent_login` flag, set per member by an org admin.
+/// 3. Off.
+pub fn skip_agent_login_with_org(org: Option<&crate::api::Organization>) -> bool {
+    if let Some(env_skip) = crate::config::skip_agent_login_env_override() {
+        return env_skip;
+    }
+
+    org.is_some_and(|o| o.skip_agent_login)
+}
+
 /// Gateway base URL precedence, with the org already fetched (or `None`).
 ///
 /// Split out of [`resolve_gateway_base_url`] so a caller that needs other
