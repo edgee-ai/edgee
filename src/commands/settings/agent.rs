@@ -135,7 +135,9 @@ fn run_settings_wizard(
         output_brevity: comp_selected.contains(&2),
     };
 
-    Ok(Some(KeySettings { compression }))
+    Ok(Some(KeySettings {
+        compression: compression.into(),
+    }))
 }
 
 fn print_summary(agent: &str, settings: &KeySettings) {
@@ -148,15 +150,15 @@ fn print_summary(agent: &str, settings: &KeySettings) {
     );
     println!(
         "      tool results compression   {}",
-        on(settings.compression.tool_result_trimming)
+        on(settings.compression.tool_result_trimming.unwrap_or(false))
     );
     println!(
         "      tool surface reduction      {}",
-        on(settings.compression.tool_surface_reduction)
+        on(settings.compression.tool_surface_reduction.unwrap_or(false))
     );
     println!(
         "      output brevity              {}",
-        on(settings.compression.output_brevity)
+        on(settings.compression.output_brevity.unwrap_or(false))
     );
     println!();
 }

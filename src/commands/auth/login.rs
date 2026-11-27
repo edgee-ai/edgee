@@ -379,7 +379,7 @@ pub fn agent_label(provider: &str) -> &'static str {
 
 /// Whether a key's expiry has passed. The server's zero-value sentinel for
 /// "no expiry" (year 1, `0001-01-01T00:00:00Z`) is not a real expiration.
-fn key_is_expired(expires_at: time::OffsetDateTime) -> bool {
+pub(crate) fn key_is_expired(expires_at: time::OffsetDateTime) -> bool {
     expires_at.year() > 1 && expires_at <= time::OffsetDateTime::now_utc()
 }
 
@@ -610,7 +610,7 @@ pub async fn fetch_provider_key(provider: &str) -> Result<crate::api::ApiKeyItem
     Ok(key_item)
 }
 
-fn coding_assistant_name(provider: &str) -> Result<&'static str> {
+pub(crate) fn coding_assistant_name(provider: &str) -> Result<&'static str> {
     match provider {
         "claude" => Ok("claude_code"),
         "claude_desktop" => Ok("claude_desktop"),

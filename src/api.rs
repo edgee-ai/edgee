@@ -529,11 +529,50 @@ impl GatewayModel {
     }
 }
 
+/// A key's own compression flags as the server stores them. `None` means
+/// "inherit from the org/squad scope", which [`Compression`] flattens to `false`.
+///
+/// Serialized with explicit `null`s: the update endpoint replaces the whole
+/// struct, so omitting a field would not be the same as leaving it untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct KeyCompression {
+    pub tool_result_trimming: Option<bool>,
+    pub tool_surface_reduction: Option<bool>,
+    pub output_brevity: Option<bool>,
+}
+
+impl From<Compression> for KeyCompression {
+    fn from(c: Compression) -> Self {
+        Self {
+            tool_result_trimming: Some(c.tool_result_trimming),
+            tool_surface_reduction: Some(c.tool_surface_reduction),
+            output_brevity: Some(c.output_brevity),
+        }
+    }
+}
+
 /// Compression settings sent to the key-update endpoint. Routing fields are
 /// omitted so edits leave the key's server-side routing configuration untouched.
 #[derive(Debug, Clone, Serialize)]
 pub struct KeySettings {
-    pub compression: Compression,
+    pub compression: KeyCompression,
+}
+
+/// One row of the key list endpoint. Unlike the by-id endpoint, `compression`
+/// here is the key's raw value (nulls intact), not the org/squad-resolved one.
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeyListItem {
+    pub id: String,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub coding_assistant: Option<String>,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<time::OffsetDateTime>,
+    #[serde(default)]
+    pub compression: Option<KeyCompression>,
 }
 
 /// A skill: markdown instructions the assistant loads when the task matches.
@@ -943,6 +982,21 @@ impl ApiClient {
         check_status(&response, "fetch request keys")?;
         let keys: Vec<OwnedRequestKey> = response.json().await.context("Invalid request keys")?;
         Ok(owned_request_key_ids(keys, user_id))
+    }
+
+    /// The org's API keys the caller may see, with each key's raw compression flags.
+    pub async fn list_keys(&self, org_id: &str) -> Result<Vec<KeyListItem>> {
+        let response = self
+            .http
+            .get(format!(
+                "{}/v1/organizations/{org_id}/api_keys",
+                self.base_url
+            ))
+            .send()
+            .await
+            .context("Failed to list API keys")?;
+        check_status(&response, "list API keys")?;
+        response.json().await.context("Invalid API keys response")
     }
 
     /// Latest request across `key_ids` in the selected usage window.
@@ -1923,7 +1977,8 @@ mod tests {
                 tool_result_trimming: true,
                 tool_surface_reduction: false,
                 output_brevity: true,
-            },
+            }
+            .into(),
         };
         // Sending null or false for routing fields would overwrite saved routes.
         assert_eq!(
@@ -1936,6 +1991,49 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn key_compression_sends_inherited_fields_as_explicit_null() {
+        let settings = KeySettings {
+            compression: KeyCompression {
+                tool_result_trimming: None,
+                tool_surface_reduction: Some(false),
+                output_brevity: Some(true),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(settings).unwrap(),
+            serde_json::json!({
+                "compression": {
+                    "tool_result_trimming": null,
+                    "tool_surface_reduction": false,
+                    "output_brevity": true
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn key_list_item_keeps_null_compression_fields_as_none() {
+        let item: KeyListItem = serde_json::from_str(
+            r#"{"id":"k1","user_id":"u1","coding_assistant":"claude_code","active":true,
+                "expires_at":"0001-01-01T00:00:00Z",
+                "compression":{"tool_result_trimming":null,"tool_surface_reduction":true}}"#,
+        )
+        .unwrap();
+        let c = item.compression.unwrap();
+        assert_eq!(c.tool_result_trimming, None);
+        assert_eq!(c.tool_surface_reduction, Some(true));
+        assert_eq!(c.output_brevity, None);
+    }
+
+    #[test]
+    fn key_list_item_tolerates_missing_optional_fields() {
+        let item: KeyListItem = serde_json::from_str(r#"{"id":"k1"}"#).unwrap();
+        assert!(item.compression.is_none());
+        assert!(item.expires_at.is_none());
+        assert!(!item.active);
     }
 
     #[test]

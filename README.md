@@ -360,6 +360,20 @@ edgee settings           # pick an agent
 edgee settings claude    # go straight to one agent's key
 ```
 
+Scripts, CI and coding agents can skip the wizard. Without a terminal, or with `--json` or `--set`,
+`edgee settings` never prompts:
+
+```bash
+edgee settings claude --json                                  # print the current state
+edgee settings claude --set output-brevity=on --set tool-result-trimming=off
+```
+
+The techniques are `tool-result-trimming`, `tool-surface-reduction` and `output-brevity`. `--set`
+changes only the techniques it names, in one API call, and re-running it is a no-op. The JSON has
+an `inherited` flag per technique: `true` means the key stores no value of its own and follows the
+organization or squad. Exit codes: `0` success (including a no-op), `2` usage error, `1` runtime
+error.
+
 ### Usage tracking
 
 Real-time visibility into token consumption and compression savings per session, via `edgee stats`
