@@ -21,7 +21,7 @@ function Write-Header {
     Write-Host "  " -NoNewline; Write-Host "" -ForegroundColor White
     Write-Host "  " -NoNewline; Write-Host "◢████████◤" -ForegroundColor White
     Write-Host ""
-    Write-Host "  Token compression gateway for Claude Code, Codex & Opencode" -ForegroundColor DarkGray
+    Write-Host "  Coding Agent Gateway for Claude Code, Codex & OpenCode" -ForegroundColor DarkGray
     Write-Host "  https://www.edgee.ai" -ForegroundColor DarkGray
     Write-Host ""
 }
