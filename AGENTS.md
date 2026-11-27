@@ -88,7 +88,9 @@ Entry point: `src/main.rs`. Subcommands declared in `src/commands/mod.rs`:
   `src/api.rs` and `src/commands/auth/`.
 - `edgee settings [claude|claude_desktop|codebuddy|codex|codex_desktop|opencode|crush|cursor|copilot]`
   — configures compression settings for a coding-agent key against the
-  console API. The
+  console API. On a TTY it opens the wizard; without one, or with `--json` / `--set
+  <technique>=<on|off>`, it takes the prompt-free path in `settings/headless.rs` (the show form is
+  read-only and never creates a key). The
   provider list uses bare `copilot`, deliberately distinct from launch's `copilot-vscode`, and
   underscored `claude_desktop`/`codex_desktop` for surfaces metered as their own backend agent.
 - `edgee stats` (visible alias `report`) — session token counts and compression savings.
