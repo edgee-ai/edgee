@@ -20,7 +20,10 @@
 ---
 
 Coding agents are the fastest-growing line item in most engineering budgets — and the least visible
-one. **Edgee is an Agent Gateway**: it sits between your agents and the LLM providers, and
+one. **Edgee is the Coding Agent Gateway for engineering teams.** Developers keep the tools they love.
+Platform teams choose the models, set the rules, and control the bill.
+
+Edgee sits between your agents and the LLM providers, and
 intercepts, routes, compresses, meters, and secures every request. No code change in your projects,
 no change to how your agents work.
 
@@ -42,10 +45,11 @@ and is **not** built from this repo. Self-hosting is not supported here.
 - **Token compression.** Tool outputs (file listings, build logs, test results, …) are trimmed
   gateway-side before they reach the model. Same answers, leaner context, smaller bill.
 - **Drop-in for coding agents.** `edgee launch claude` (or `edgee alias`) points your agent at
-  Edgee. Works with every provider plan, including consumer subscriptions — not just API credits.
+  Edgee. Works with the provider plans you already have, including Claude Team and Enterprise
+  subscriptions — not just API credits.
 - **Rust-native CLI.** Fast install, small footprint, macOS, Linux, and Windows.
 
-Together that's up to **70% off your token bill**, with the control and reporting engineering
+Together that's up to **50% off your token bill**, with the control and reporting engineering
 leaders need to keep agent adoption growing without the spend growing with it.
 
 ---

@@ -4,19 +4,24 @@ Context for coding agents working in this repository. `CLAUDE.md` is a symlink t
 
 ## What Edgee is
 
-Edgee is an **Agent Gateway**, built in Rust by Edgee Cloud SAS (Paris) with a US subsidiary,
+> **Positioning statement (use verbatim):** Edgee is the Coding Agent Gateway for engineering teams.
+> Developers keep the tools they love. Platform teams choose the models, set the rules, and control
+> the bill.
+
+Edgee is a **Coding Agent Gateway**, built in Rust by Edgee Cloud SAS (Paris) with a US subsidiary,
 Edgee Corporation (Delaware).
 
-Edgee sits between AI agents and LLM providers as a transparent gateway. It **intercepts, routes,
+Edgee sits between coding agents and LLM providers as a transparent gateway. It **intercepts, routes,
 compresses, meters, and secures** every LLM request, with no code change on the agent side. It works
 with all major coding agents (Claude Code, Codex, Cursor, GitHub Copilot, OpenCode, CodeBuddy,
-Crush) and all provider plans, including consumer subscriptions — not just API credits.
+Crush) and the provider plans a company already has, including Claude Team and Enterprise subscriptions — not
+just API credits.
 
 **Who it's for:** engineering organisations (typically 150+ developers) whose coding-agent bills are
 growing fast and whose leadership lacks visibility and control over token spend. Buyers are VPs of
 Engineering, CTOs, and platform teams.
 
-**Core value:** cut token costs by up to 70% while giving engineering leaders full control and
+**Core value:** cut token costs by up to 50% while giving engineering leaders full control and
 visibility over agent usage.
 
 ### Product pillars, in order of strategic importance
@@ -32,7 +37,8 @@ visibility over agent usage.
 
 ### Positioning guardrails (apply to all user-facing copy)
 
-- The category is **Agent Gateway**. Keep it. Lead with **token cost reduction through routing and
+- The category is **Coding Agent Gateway** (narrowed from "Agent Gateway" in November 2026). Keep it,
+  and never write the bare "Agent Gateway" as the category. Lead with **token cost reduction through routing and
   control** — that's what converts and what wins POCs. Compression is a supporting feature,
   **never the headline**.
 - **Never write "Agent Engineering Platform"** (or equivalents) in product copy. It reads as a
@@ -46,8 +52,8 @@ visibility over agent usage.
   docs, or any copy you write here.
 - Roadmap items may be named as roadmap items (see README) without implying a category change.
 - Against **OpenRouter** and **LiteLLM** (the competitors seen in POCs): OpenRouter is a gateway for
-  *apps that consume LLMs*; Edgee is specialised for *agents*, wrapping the agent itself with zero
-  code change. Differentiators: agent-specialised, token compression, observability per
+  *apps that consume LLMs*; Edgee is specialised for *coding agents*, wrapping the agent itself with zero
+  code change. Differentiators: coding-agent-specialised, token compression, observability per
   developer/repo/PR rather than per API key, native 500-developer onboarding (seats, budgets,
   per-squad policies), and budget-driven Strategies with mid-task rerouting.
 - Compliance facts that may be stated: SOC 2 and GDPR compliant, on-premise deployment available,

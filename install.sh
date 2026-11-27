@@ -30,7 +30,7 @@ _header() {
   ${_bold}◢████████◤${_normal}
   ${_bold} ${_normal}
 
-  ${_dim}Token compression gateway for Claude Code, Codex & Opencode${_normal}
+  ${_dim}Coding Agent Gateway for Claude Code, Codex & OpenCode${_normal}
   ${_dim}https://www.edgee.ai${_normal}
 
 EOF
